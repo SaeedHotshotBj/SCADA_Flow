@@ -9,3 +9,6 @@ jdatetime>=4.1.0,<7.0.0
 
 # Modbus TCP (PLC read/write) — v2.x required for pymodbus.client.sync imports
 pymodbus>=2.5.3,<3.0.0
+
+
+pip install paramiko

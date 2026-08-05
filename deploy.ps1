@@ -21,3 +21,4 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host ""
 Write-Host "Deploy finished: https://scada.khze.org" -ForegroundColor Green
+Write-Host "Note: only /var/www/scada + scada.service + scada.khze.org nginx vhost are changed." -ForegroundColor DarkGray

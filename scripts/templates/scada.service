@@ -9,7 +9,7 @@ Group=www-data
 WorkingDirectory=/var/www/scada
 Environment=PYTHONUNBUFFERED=1
 Environment=SCADA_HOST=127.0.0.1
-Environment=SCADA_PORT=5000
+Environment=SCADA_PORT=5050
 ExecStart=/var/www/scada/.venv/bin/python app.py
 Restart=on-failure
 RestartSec=5
