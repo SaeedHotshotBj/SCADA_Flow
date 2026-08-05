@@ -1,2 +1,11 @@
 /PLC1
 /PLC2
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+data/
+*.db
+.env
+/tmp/
+deploy.bundle

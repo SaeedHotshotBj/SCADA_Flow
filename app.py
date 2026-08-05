@@ -1308,8 +1308,10 @@ if __name__ == "__main__":
 
         app,
 
-        host="0.0.0.0",
+        host=os.environ.get("SCADA_HOST", "0.0.0.0"),
 
-        port=5000
+        port=int(os.environ.get("SCADA_PORT", "5000")),
+
+        allow_unsafe_werkzeug=True,
 
     )
