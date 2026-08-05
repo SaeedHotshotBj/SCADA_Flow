@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<title>SCADA Live Dashboard</title>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+
+<style>
+
+
+*{
+    box-sizing:border-box;
+}
+
+
+body{
+
+    margin:0;
+
+    background:#111;
+
+    color:white;
+
+    font-family:Arial,sans-serif;
+
+}
+
+
+
+.header{
+
+    height:70px;
+
+    background:#1b1b1b;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    padding:0 25px;
+
+    font-size:26px;
+
+}
+
+
+
+.status{
+
+    font-size:16px;
+
+    padding:8px 15px;
+
+    border-radius:20px;
+
+    background:#333;
+
+}
+
+
+.online{
+
+    background:green;
+
+}
+
+
+
+.offline{
+
+    background:red;
+
+}
+
+
+
+#dashboard{
+
+
+    position:relative;
+
+    width:100%;
+
+    height:calc(100vh - 70px);
+
+    overflow:auto;
+
+
+}
+
+
+
+.widget{
+
+
+    position:absolute;
+
+    width:240px;
+
+    height:150px;
+
+    background:#222;
+
+    border-radius:12px;
+
+    padding:15px;
+
+    box-shadow:0 0 15px black;
+
+    overflow:hidden;
+
+
+}
+
+
+
+.widget-title{
+
+
+    font-size:20px;
+
+    color:#ddd;
+
+    text-align:center;
+
+
+}
+
+
+
+.widget-value{
+
+
+    margin-top:25px;
+
+    font-size:45px;
+
+    text-align:center;
+
+    color:#00ff88;
+
+    font-weight:bold;
+
+
+}
+
+
+
+.unit{
+
+
+    text-align:center;
+
+    color:#aaa;
+
+    margin-top:5px;
+
+
+}
+
+
+
+.no-data{
+
+
+    text-align:center;
+
+    margin-top:100px;
+
+    color:#888;
+
+    font-size:22px;
+
+}
+
+
+</style>
+
+
+</head>
+
+
+
+<body>
+
+
+
+<div class="header">
+
+
+<div>
+
+SCADA LIVE DASHBOARD
+
+</div>
+
+
+
+<div id="connection"
+
+class="status offline">
+
+OFFLINE
+
+</div>
+
+
+</div>
+
+
+
+
+
+<div id="dashboard">
+
+
+
+{% for widget in widgets %}
+
+
+<div class="widget"
+
+id="widget_{{widget.tag}}"
+
+style="
+
+left:{{loop.index0 % 4 * 260 + 20}}px;
+
+top:{{(loop.index0 // 4) * 180 + 20}}px;
+
+"
+
+
+
+>
+
+
+<div class="widget-title">
+
+
+{{widget.title if widget.title else widget.tag}}
+
+
+</div>
+
+
+
+
+<div class="widget-value"
+
+id="value_{{widget.tag}}">
+
+
+0
+
+
+</div>
+
+
+
+
+<div class="unit">
+
+
+{{widget.unit if widget.unit else ""}}
+
+
+</div>
+
+
+
+</div>
+
+
+
+{% endfor %}
+
+
+{% if not widgets %}
+
+<div class="no-data">
+
+No dashboard widgets configured in flow.
+
+</div>
+
+
+{% endif %}
+
+
+
+</div>
+
+
+
+
+
+
+
+
+
+<script>
+
+
+
+const socket = io();
+
+
+function applyTagValues(data){
+
+
+let status=document.getElementById(
+"connection"
+);
+
+
+if(data.Online){
+
+
+    status.innerHTML="PLC ONLINE";
+
+
+    status.className="status online";
+
+
+}
+
+else{
+
+
+    status.innerHTML="HISTORICAL DATA";
+
+
+    status.className="status offline";
+
+
+}
+
+
+
+
+let tags=data.Tags || {};
+
+
+
+for(let tag in tags){
+
+
+
+let element=document.getElementById(
+
+"value_"+tag
+
+);
+
+
+
+
+if(element){
+
+
+element.innerHTML=Number(tags[tag]).toFixed(2);
+
+
+}
+
+
+
+}
+
+
+}
+
+
+
+async function loadLatestDashboard(){
+
+
+try{
+
+
+let response = await fetch("/dashboard/latest");
+
+let data = await response.json();
+
+
+applyTagValues(data);
+
+
+}
+
+
+catch(error){
+
+
+console.error("DASHBOARD LOAD ERROR:", error);
+
+
+}
+
+
+}
+
+
+
+loadLatestDashboard();
+
+setInterval(loadLatestDashboard, 30000);
+
+
+
+
+
+socket.on("connect",function(){
+
+
+let status=document.getElementById(
+"connection"
+);
+
+
+status.innerHTML="ONLINE";
+
+
+status.className="status online";
+
+
+});
+
+
+
+
+
+
+socket.on("disconnect",function(){
+
+
+let status=document.getElementById(
+"connection"
+);
+
+
+status.innerHTML="OFFLINE";
+
+
+status.className="status offline";
+
+
+});
+
+
+
+
+socket.on("tag_update",function(data){
+
+
+console.log(
+
+"LIVE TAG DATA:",
+
+data
+
+);
+
+
+applyTagValues(data);
+
+
+});
+
+
+
+
+
+</script>
+
+
+
+</body>
+
+
+</html>

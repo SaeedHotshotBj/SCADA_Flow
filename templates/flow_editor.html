@@ -1,0 +1,2554 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<title>SCADA FLOW Editor</title>
+
+
+<link rel="stylesheet"
+href="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.css">
+
+
+<script src="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.js"></script>
+
+
+
+<style>
+
+
+body{
+
+    margin:0;
+
+    font-family:Arial;
+
+    overflow:hidden;
+
+}
+
+
+
+/* ==============================
+   TOOLBAR
+============================== */
+
+
+#toolbar{
+
+    height:60px;
+
+    background:#222;
+
+    color:white;
+
+    display:flex;
+
+    align-items:center;
+
+    gap:8px;
+
+    padding:10px;
+
+}
+
+
+
+
+#node_buttons{
+
+    display:flex;
+
+    gap:5px;
+
+    flex-wrap:wrap;
+
+}
+
+
+
+
+
+button{
+
+    padding:8px 12px;
+
+    cursor:pointer;
+
+}
+
+
+
+
+
+
+
+/* ==============================
+   MAIN AREA
+============================== */
+
+
+#main{
+
+    display:flex;
+
+    height:calc(100vh - 60px);
+
+}
+
+
+
+
+
+#drawflow{
+
+    flex:1;
+
+    background:#111;
+
+}
+
+
+
+
+
+
+
+/* ==============================
+   RESIZABLE PROPERTIES PANEL
+============================== */
+
+
+#resize-bar{
+
+
+    width:6px;
+
+
+    background:#888;
+
+
+    cursor:col-resize;
+
+
+}
+
+
+
+
+
+#properties{
+
+
+    width:400px;
+
+
+    min-width:250px;
+
+
+    max-width:900px;
+
+
+    background:#eeeeee;
+
+
+    padding:15px;
+
+
+    overflow:auto;
+
+
+}
+
+
+
+
+
+
+
+/* ==============================
+   SMALL DRAWFLOW BLOCKS
+============================== */
+
+
+.drawflow .drawflow-node {
+
+
+    width:120px !important;
+
+    min-width:120px !important;
+
+    min-height:50px !important;
+
+
+}
+
+
+
+
+
+.drawflow .drawflow-node .drawflow_content_node {
+
+
+    padding:5px !important;
+
+
+    font-size:12px !important;
+
+
+}
+
+
+
+
+.drawflow .drawflow-node .input,
+.drawflow .drawflow-node .output {
+
+
+    width:12px !important;
+
+
+    height:12px !important;
+
+
+}
+
+
+
+
+
+/* ==============================
+   PROPERTY ELEMENTS
+============================== */
+
+
+input,
+select,
+textarea{
+
+
+    width:95%;
+
+
+    padding:7px;
+
+
+    margin:5px 0;
+
+
+    box-sizing:border-box;
+
+
+}
+
+
+
+
+
+.checkbox-list{
+
+
+    background:white;
+
+
+    border:1px solid #aaa;
+
+
+    padding:10px;
+
+
+    max-height:200px;
+
+
+    overflow:auto;
+
+
+}
+
+
+
+
+
+.checkbox-item{
+
+
+    display:flex;
+
+
+    align-items:center;
+
+
+    margin:5px 0;
+
+
+}
+
+
+
+
+
+.checkbox-item input{
+
+
+    width:auto;
+
+
+    margin-right:8px;
+
+
+}
+
+
+
+
+
+table{
+
+
+    width:100%;
+
+
+    border-collapse:collapse;
+
+
+    display:block;
+
+
+    overflow-x:auto;
+
+
+    white-space:nowrap;
+
+
+}
+
+
+
+
+
+th,
+td{
+
+
+    border:1px solid #aaa;
+
+
+    padding:4px;
+
+
+    text-align:center;
+
+
+}
+
+
+
+
+
+.card{
+
+
+    background:white;
+
+
+    padding:10px;
+
+
+    margin-bottom:10px;
+
+
+    border-radius:5px;
+
+
+}
+
+
+
+
+
+.title{
+
+
+    font-size:20px;
+
+
+    font-weight:bold;
+
+
+    margin-bottom:15px;
+
+
+}
+
+
+
+
+
+.save{
+
+
+    background:green;
+
+
+    color:white;
+
+
+}
+
+
+
+
+
+.delete{
+
+
+    background:red;
+
+
+    color:white;
+
+
+}
+
+
+
+
+
+.add{
+
+
+    background:#0066ff;
+
+
+    color:white;
+
+
+}
+
+
+
+</style>
+
+
+</head>
+
+
+<body>
+
+
+
+<div id="toolbar">
+
+
+<div id="node_buttons"></div>
+
+
+
+<button onclick="loadFlow()">
+
+LOAD FLOW
+
+</button>
+
+
+
+<button onclick="saveFlow()">
+
+SAVE FLOW
+
+</button>
+
+
+
+</div>
+
+
+
+
+
+
+<div id="main">
+
+
+<div id="drawflow"></div>
+
+
+<div id="resize-bar"></div>
+
+
+<div id="properties">
+
+
+<div class="title">
+
+Properties
+
+</div>
+
+
+Select Node
+
+
+</div>
+
+
+</div>
+
+
+
+<script>
+
+
+    let editor = new Drawflow(
+        document.getElementById("drawflow")
+    );
+    
+    
+    editor.start();
+    
+    
+    editor.reroute = true;
+    
+    
+    
+    let selectedNode = null;
+    
+    
+    let NODE_REGISTRY = {};
+    
+    
+    let availableTags = [];
+    
+    
+    
+    
+    
+    // ==============================
+    // LOAD REGISTRY
+    // ==============================
+    
+    
+    async function loadRegistry(){
+    
+    
+        try{
+    
+    
+            let response = await fetch("/node_registry");
+    
+    
+            let data = await response.json();
+    
+    
+    
+            console.log(
+                "REGISTRY:",
+                data
+            );
+    
+    
+    
+            NODE_REGISTRY = data;
+    
+    
+            createNodeButtons();
+    
+    
+    
+        }
+    
+    
+        catch(error){
+    
+    
+            console.error(
+                "REGISTRY LOAD ERROR",
+                error
+            );
+    
+    
+        }
+    
+    
+    }
+    
+    
+    
+    loadRegistry();
+    
+    
+    
+    
+    
+    
+    
+    
+    // ==============================
+    // CREATE BUTTONS
+    // ==============================
+    
+    
+    function createNodeButtons(){
+    
+    
+        let area =
+        document.getElementById(
+            "node_buttons"
+        );
+    
+    
+    
+        area.innerHTML="";
+    
+    
+    
+        Object.keys(
+            NODE_REGISTRY
+        )
+        .forEach(name=>{
+    
+    
+            let button =
+            document.createElement(
+                "button"
+            );
+    
+    
+            button.innerHTML=name;
+    
+    
+    
+            button.onclick=function(){
+    
+    
+                addNode(name);
+    
+    
+            };
+    
+    
+    
+            area.appendChild(button);
+    
+    
+    
+        });
+    
+    
+    
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    // ==============================
+    // ADD NODE
+    // ==============================
+    
+    
+    function addNode(name){
+    
+    
+    
+        let config =
+        NODE_REGISTRY[name];
+    
+    
+    
+        if(!config){
+    
+            console.error(
+                "NODE CONFIG NOT FOUND",
+                name
+            );
+    
+            return;
+    
+        }
+    
+    
+    
+    
+        let data={};
+    
+    
+    
+        config.config.forEach(item=>{
+    
+    
+            if(
+                item.type=="table"
+                ||
+                item.type=="multiselect"
+            ){
+    
+    
+                data[item.name]=[];
+    
+    
+            }
+    
+            else{
+    
+    
+                data[item.name]=
+                item.default ?? "";
+    
+    
+            }
+    
+    
+        });
+    
+    
+    
+    
+    
+    
+    
+        editor.addNode(
+    
+    
+            name,
+    
+    
+            1,
+    
+    
+            1,
+    
+    
+            150,
+    
+    
+            100,
+    
+    
+            name,
+    
+    
+            data,
+    
+    
+            name
+    
+    
+        );
+    
+    
+    
+        updateAvailableTags();
+    
+    
+    
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    // ==============================
+    // UPDATE AVAILABLE TAGS
+    // ==============================
+    
+    
+    function updateAvailableTags(){
+    
+    
+    availableTags=[];
+    
+    
+    
+    let flow =
+    editor.export();
+    
+    
+    
+    
+    if(
+        !flow.drawflow.Home
+        ||
+        !flow.drawflow.Home.data
+    ){
+    
+        return;
+    
+    }
+    
+    
+    
+    
+    
+    Object.values(
+        flow.drawflow.Home.data
+    )
+    
+    .forEach(node=>{
+    
+    
+    
+        if(node.name=="TagMapper"){
+    
+    
+    
+            (node.data.mappings || [])
+    
+            .forEach(row=>{
+    
+    
+                if(
+                    row.name
+                    &&
+                    !availableTags.includes(row.name)
+                ){
+    
+    
+                    availableTags.push(
+                        row.name
+                    );
+    
+    
+                }
+    
+    
+            });
+    
+    
+        }
+    
+    
+    
+    
+    
+        if(node.name=="ExpressionNode"){
+    
+    
+    
+            (node.data.expressions || [])
+    
+            .forEach(row=>{
+    
+    
+                if(
+                    row.name
+                    &&
+                    !availableTags.includes(row.name)
+                ){
+    
+    
+                    availableTags.push(
+                        row.name
+                    );
+    
+    
+                }
+    
+    
+            });
+    
+    
+        }
+    
+    
+    
+    });
+    
+    
+    
+    
+    console.log(
+    
+    "AVAILABLE TAGS:",
+    
+    availableTags
+    
+    );
+    
+    
+    
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    // ==============================
+    // NODE SELECT
+    // ==============================
+    
+    
+    editor.on(
+    
+    "nodeSelected",
+    
+    function(id){
+    
+    
+        selectedNode=id;
+    
+    
+        loadProperties(id);
+    
+    
+    }
+    
+    );
+    
+
+
+
+    
+// ==============================
+// LOAD PROPERTIES
+// ==============================
+
+
+function loadProperties(id){
+
+
+
+updateAvailableTags();
+
+
+
+let node =
+editor.getNodeFromId(id);
+
+
+
+if(!node){
+
+    return;
+
+}
+
+
+
+let config =
+NODE_REGISTRY[node.name];
+
+
+
+if(!config){
+
+    return;
+
+}
+
+
+
+
+
+let html=`
+
+
+<div class="title">
+
+${node.name}
+
+</div>
+
+
+`;
+
+
+
+
+
+config.config.forEach(item=>{
+
+
+    html += createProperty(
+
+        item,
+
+        node.data[item.name]
+
+    );
+
+
+});
+
+
+
+
+
+
+html += `
+
+
+<br>
+
+
+<button
+
+class="save"
+
+onclick="saveProperties()"
+
+>
+
+SAVE PROPERTIES
+
+</button>
+
+
+`;
+
+
+
+
+
+document.getElementById(
+    "properties"
+).innerHTML=html;
+
+
+
+}
+
+
+
+
+
+
+
+
+
+// ==============================
+// CREATE PROPERTY
+// ==============================
+
+
+function createProperty(item,value){
+
+
+
+let html=`
+
+
+<div class="card">
+
+
+<b>
+
+${item.label || item.name}
+
+</b>
+
+
+<br>
+
+
+`;
+
+
+
+
+
+
+
+if(
+
+item.type=="text"
+
+||
+
+item.type=="number"
+
+){
+
+
+
+html+=`
+
+
+<input
+
+
+id="prop_${item.name}"
+
+
+${item.type=="number" ?
+
+'type="number"' : ''}
+
+
+value="${value ?? ""}"
+
+
+>
+
+
+`;
+
+
+
+}
+
+
+
+
+
+
+
+
+else if(item.type=="select"){
+
+
+
+html+=`
+
+
+<select
+
+id="prop_${item.name}"
+
+>
+
+
+`;
+
+
+
+
+(item.options || [])
+
+.forEach(option=>{
+
+
+html+=`
+
+
+<option
+
+
+value="${option}"
+
+
+${value==option ?
+
+"selected":""}
+
+
+>
+
+
+${option}
+
+
+</option>
+
+
+`;
+
+
+
+});
+
+
+
+html+=`
+
+
+</select>
+
+
+`;
+
+
+
+}
+
+
+
+
+
+
+
+
+
+
+else if(item.type=="multiselect"){
+
+
+
+html+=`
+
+
+<div
+
+
+class="checkbox-list"
+
+
+id="prop_${item.name}"
+
+
+>
+
+
+`;
+
+
+
+
+
+availableTags.forEach(tag=>{
+
+
+
+let checked =
+
+(value || []).includes(tag)
+
+?
+
+"checked"
+
+:
+
+"";
+
+
+
+
+
+html+=`
+
+
+<div class="checkbox-item">
+
+
+<input
+
+
+type="checkbox"
+
+
+value="${tag}"
+
+
+${checked}
+
+
+>
+
+
+${tag}
+
+
+</div>
+
+
+`;
+
+
+
+});
+
+
+
+
+html+=`
+
+
+</div>
+
+
+`;
+
+
+
+}
+
+
+
+
+
+
+
+
+
+else if(item.type=="table"){
+
+
+
+html+=createTable(item);
+
+
+
+setTimeout(()=>{
+
+
+renderTable(
+
+item.name,
+
+value
+
+);
+
+
+
+},50);
+
+
+
+}
+
+
+
+
+
+
+html+=`
+
+</div>
+
+`;
+
+
+
+return html;
+
+
+
+}
+
+
+
+
+
+
+
+
+
+
+
+// ==============================
+// CREATE TABLE
+// ==============================
+
+
+function createTable(item){
+
+
+
+let name=item.name;
+
+
+
+let html=`
+
+
+<table>
+
+
+<thead>
+
+
+<tr>
+
+
+<th>#</th>
+
+
+`;
+
+
+
+
+(item.columns || [])
+
+.forEach(col=>{
+
+
+html+=`
+
+<th>
+
+${col.label}
+
+</th>
+
+`;
+
+
+
+});
+
+
+
+html+=`
+
+<th>X</th>
+
+
+</tr>
+
+
+</thead>
+
+
+<tbody
+
+
+id="table_${name}"
+
+
+>
+
+
+</tbody>
+
+
+</table>
+
+
+
+<br>
+
+
+<button
+
+
+class="add"
+
+
+onclick="addRow('${name}')"
+
+
+>
+
+
++ ADD ROW
+
+
+</button>
+
+
+`;
+
+
+
+return html;
+
+
+
+}
+
+
+
+
+
+
+
+
+
+
+
+// ==============================
+// RENDER TABLE
+// ==============================
+
+
+function renderTable(name,data){
+
+
+
+let body =
+
+document.getElementById(
+
+"table_"+name
+
+);
+
+
+
+if(!body)
+
+return;
+
+
+
+body.innerHTML="";
+
+
+
+
+(data || [])
+
+.forEach((row,index)=>{
+
+
+body.appendChild(
+
+createRow(
+
+name,
+
+row,
+
+index
+
+)
+
+);
+
+
+
+});
+
+
+
+}
+
+
+
+
+
+
+
+
+
+// ==============================
+// CREATE ROW
+// ==============================
+
+
+function createRow(name,row,index){
+
+
+let tr =
+
+document.createElement(
+
+"tr"
+
+);
+
+
+
+let html=`
+
+
+<td>
+
+${index+1}
+
+</td>
+
+
+`;
+
+
+
+let nodeConfig=null;
+
+
+
+
+Object.values(NODE_REGISTRY)
+
+.forEach(node=>{
+
+
+node.config.forEach(item=>{
+
+
+if(item.name==name)
+
+nodeConfig=item;
+
+
+
+});
+
+
+});
+
+
+
+
+
+
+(nodeConfig.columns || [])
+
+.forEach(col=>{
+
+
+
+let value =
+
+row[col.name] ?? "";
+
+
+
+html+=`<td>`;
+
+
+
+
+
+if(col.type=="select"){
+
+
+
+html+=`
+
+<select class="${col.name}">
+
+`;
+
+
+
+(col.options || [])
+
+.forEach(option=>{
+
+
+html+=`
+
+
+<option
+
+
+value="${option}"
+
+
+${value==option ?
+
+"selected":""}
+
+
+>
+
+
+${option}
+
+
+</option>
+
+
+`;
+
+
+
+});
+
+
+
+html+=`
+
+</select>
+
+`;
+
+
+
+}
+
+
+
+
+
+else{
+
+
+
+html+=`
+
+
+<input
+
+
+class="${col.name}"
+
+
+type="${col.type=="number"
+
+?
+
+"number"
+
+:
+
+"text"}"
+
+
+value="${value}"
+
+
+>
+
+
+`;
+
+
+
+}
+
+
+
+html+=`</td>`;
+
+
+
+});
+
+
+
+
+
+
+
+html+=`
+
+
+<td>
+
+
+<button
+
+
+class="delete"
+
+
+onclick="this.closest('tr').remove()"
+
+
+>
+
+
+X
+
+
+</button>
+
+
+</td>
+
+
+`;
+
+
+
+
+
+tr.innerHTML=html;
+
+
+
+return tr;
+
+
+
+}
+
+
+
+
+
+
+
+
+// ==============================
+// ADD ROW
+// ==============================
+
+
+function addRow(name){
+
+
+
+let body =
+
+document.getElementById(
+
+"table_"+name
+
+);
+
+
+
+body.appendChild(
+
+createRow(
+
+name,
+
+{},
+
+body.children.length
+
+)
+
+);
+
+
+
+}
+
+
+
+// ==============================
+// SAVE PROPERTIES
+// ==============================
+
+
+function saveProperties(){
+
+
+
+if(selectedNode==null){
+
+
+    alert("Select node");
+
+    return;
+
+
+}
+
+
+
+
+
+let node =
+
+editor.getNodeFromId(
+
+    selectedNode
+
+);
+
+
+
+
+let config =
+
+NODE_REGISTRY[node.name];
+
+
+
+
+
+config.config.forEach(item=>{
+
+
+
+
+
+
+
+if(
+
+item.type=="text"
+
+||
+
+item.type=="number"
+
+||
+
+item.type=="select"
+
+){
+
+
+
+let el =
+
+document.getElementById(
+
+"prop_"+item.name
+
+);
+
+
+
+
+if(el){
+
+
+
+if(item.type=="number"){
+
+
+node.data[item.name]=
+
+Number(el.value);
+
+
+
+}
+
+else{
+
+
+node.data[item.name]=
+
+el.value;
+
+
+
+}
+
+
+
+}
+
+
+
+}
+
+
+
+
+
+
+
+
+
+else if(item.type=="multiselect"){
+
+
+
+let box =
+
+document.getElementById(
+
+"prop_"+item.name
+
+);
+
+
+
+let values=[];
+
+
+
+
+box.querySelectorAll(
+
+"input[type=checkbox]"
+
+)
+
+.forEach(check=>{
+
+
+
+if(check.checked){
+
+
+values.push(
+
+check.value
+
+);
+
+
+}
+
+
+
+});
+
+
+
+
+node.data[item.name]=values;
+
+
+
+}
+
+
+
+
+
+
+
+
+
+
+else if(item.type=="table"){
+
+
+
+let rows=[];
+
+
+
+
+document.querySelectorAll(
+
+
+"#table_"+item.name+" tr"
+
+
+)
+
+.forEach(tr=>{
+
+
+
+let obj={};
+
+
+
+item.columns.forEach(col=>{
+
+
+
+let input =
+
+tr.querySelector(
+
+"."+col.name
+
+);
+
+
+
+if(input){
+
+
+
+if(col.type=="number"){
+
+
+
+obj[col.name]=
+
+Number(input.value);
+
+
+
+}
+
+else{
+
+
+
+obj[col.name]=
+
+input.value;
+
+
+
+}
+
+
+
+}
+
+
+
+});
+
+
+
+
+
+
+if(
+
+Object.keys(obj).length>0
+
+){
+
+
+rows.push(obj);
+
+
+}
+
+
+
+});
+
+
+
+
+
+node.data[item.name]=rows;
+
+
+
+}
+
+
+
+
+
+});
+
+
+
+
+
+
+
+
+
+let internal =
+
+editor.drawflow.drawflow.Home.data[selectedNode];
+
+
+
+if(internal){
+
+
+
+internal.data =
+
+JSON.parse(
+
+JSON.stringify(node.data)
+
+);
+
+
+
+}
+
+
+
+
+
+updateAvailableTags();
+
+
+
+alert(
+
+"PROPERTIES SAVED"
+
+);
+
+
+
+}
+
+
+
+
+
+
+
+
+
+
+
+// ==============================
+// SAVE FLOW
+// ==============================
+
+
+function saveFlow(){
+
+
+
+let data =
+
+editor.export();
+
+
+
+
+fetch(
+
+"/save_flow",
+
+{
+
+
+method:"POST",
+
+
+headers:{
+
+
+"Content-Type":
+
+"application/json"
+
+
+},
+
+
+body:
+
+JSON.stringify(data)
+
+
+
+}
+
+)
+
+.then(r=>r.json())
+
+.then(result=>{
+
+
+console.log(
+
+"SAVE RESULT:",
+
+result
+
+);
+
+
+alert(
+
+"FLOW SAVED"
+
+);
+
+
+})
+
+.catch(error=>{
+
+
+console.error(error);
+
+
+alert(
+
+"SAVE ERROR"
+
+);
+
+
+});
+
+
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+// ==============================
+// LOAD FLOW
+// ==============================
+
+
+function loadFlow(){
+
+
+
+fetch("/flow.json")
+
+.then(r=>r.json())
+
+.then(flow=>{
+
+
+
+editor.clear();
+
+
+
+editor.import(flow);
+
+
+
+
+setTimeout(()=>{
+
+
+
+Object.keys(
+
+editor.drawflow.drawflow.Home.data
+
+)
+
+.forEach(id=>{
+
+
+
+let node =
+
+editor.getNodeFromId(id);
+
+
+
+if(node){
+
+
+
+editor.updateNodeDataFromId(
+
+id,
+
+node.data
+
+);
+
+
+
+}
+
+
+
+});
+
+
+
+editor.zoom_refresh();
+
+
+
+updateAvailableTags();
+
+
+
+},1000);
+
+
+
+
+
+alert(
+
+"FLOW LOADED"
+
+);
+
+
+
+})
+
+.catch(error=>{
+
+
+console.error(error);
+
+
+alert(
+
+"LOAD ERROR"
+
+);
+
+
+
+});
+
+
+
+}
+
+
+
+
+
+
+
+
+
+// ==============================
+// DRAWFLOW EVENTS
+// ==============================
+
+
+editor.on(
+
+"nodeCreated",
+
+function(){
+
+
+updateAvailableTags();
+
+
+}
+
+);
+
+
+
+
+editor.on(
+
+"nodeRemoved",
+
+function(){
+
+
+updateAvailableTags();
+
+
+}
+
+);
+
+
+
+
+
+
+
+
+
+// ==============================
+// RESIZABLE PROPERTY PANEL
+// ==============================
+
+
+let resizeBar =
+
+document.getElementById(
+
+"resize-bar"
+
+);
+
+
+
+let properties =
+
+document.getElementById(
+
+"properties"
+
+);
+
+
+
+let resizing=false;
+
+
+
+
+
+resizeBar.onmousedown=function(){
+
+
+resizing=true;
+
+
+document.body.style.cursor=
+
+"col-resize";
+
+
+};
+
+
+
+
+
+
+document.onmousemove=function(e){
+
+
+
+if(!resizing)
+
+return;
+
+
+
+
+
+let width =
+
+window.innerWidth - e.clientX;
+
+
+
+
+
+if(
+
+width > 250
+
+&&
+
+width < 900
+
+){
+
+
+
+properties.style.width =
+
+width+"px";
+
+
+
+}
+
+
+
+};
+
+
+
+
+
+
+
+document.onmouseup=function(){
+
+
+
+resizing=false;
+
+
+document.body.style.cursor=
+
+"default";
+
+
+
+};
+
+
+
+
+
+</script>
+
+
+</body>
+
+
+</html>

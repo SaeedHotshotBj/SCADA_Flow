@@ -1,0 +1,1492 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+
+<head>
+
+<meta charset="UTF-8">
+
+<title>SCADA Trend</title>
+
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+
+
+<link rel="stylesheet"
+href="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/css/persian-datepicker.min.css">
+
+
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/persian-date@1.1.0/dist/persian-date.min.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/js/persian-datepicker.min.js"></script>
+
+
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+
+
+
+<style>
+
+*{
+box-sizing:border-box;
+}
+
+
+body{
+
+margin:0;
+
+background:#eef3f8;
+
+font-family:'Vazirmatn';
+
+color:#1e293b;
+
+}
+
+
+
+.header{
+
+background:
+linear-gradient(
+135deg,
+#0f172a,
+#2563eb
+);
+
+padding:35px;
+
+text-align:center;
+
+color:white;
+
+}
+
+
+
+.title{
+
+font-size:34px;
+
+font-weight:800;
+
+}
+
+
+
+.subtitle{
+
+margin-top:10px;
+
+font-size:17px;
+
+}
+
+
+
+.container{
+
+width:95%;
+
+max-width:1500px;
+
+margin:30px auto;
+
+}
+
+
+
+.card{
+
+background:white;
+
+border-radius:18px;
+
+padding:25px;
+
+margin-bottom:25px;
+
+box-shadow:
+0 8px 25px rgba(0,0,0,.08);
+
+}
+
+
+
+.parameter-card{
+
+text-align:center;
+
+border-right:8px solid #2563eb;
+
+}
+
+
+
+.parameter-label{
+
+font-size:18px;
+
+color:#64748b;
+
+}
+
+
+
+.parameter-name{
+
+margin-top:10px;
+
+font-size:36px;
+
+font-weight:800;
+
+color:#2563eb;
+
+}
+
+
+
+.filter-container{
+
+display:flex;
+
+gap:20px;
+
+justify-content:center;
+
+align-items:center;
+
+flex-wrap:wrap;
+
+}
+
+
+
+.filter-item{
+
+background:#f8fafc;
+
+padding:20px;
+
+border-radius:15px;
+
+}
+
+
+
+label{
+
+display:block;
+
+margin-bottom:10px;
+
+font-weight:bold;
+
+}
+
+
+
+input,
+select{
+
+padding:12px;
+
+border-radius:10px;
+
+border:1px solid #cbd5e1;
+
+font-family:'Vazirmatn';
+
+text-align:center;
+
+direction:ltr;
+
+}
+
+
+
+button{
+
+background:#2563eb;
+
+color:white;
+
+border:none;
+
+padding:14px 35px;
+
+border-radius:12px;
+
+font-size:17px;
+
+cursor:pointer;
+
+font-family:'Vazirmatn';
+
+}
+
+
+
+.stats{
+
+display:grid;
+
+grid-template-columns:
+repeat(4,1fr);
+
+gap:20px;
+
+}
+
+
+
+.stat{
+
+background:#f8fafc;
+
+padding:20px;
+
+border-radius:15px;
+
+text-align:center;
+
+}
+
+
+
+.stat-title{
+
+color:#64748b;
+
+}
+
+
+
+.stat-value{
+
+font-size:28px;
+
+font-weight:800;
+
+color:#2563eb;
+
+margin-top:10px;
+
+}
+
+
+
+.chart-card{
+
+height:600px;
+
+}
+
+
+
+canvas{
+
+width:100%!important;
+
+height:100%!important;
+
+}
+
+
+</style>
+
+</head>
+
+
+<body>
+
+
+<div class="header">
+
+<div class="title">
+
+سامانه مانیتورینگ صنعتی SCADA
+
+</div>
+
+
+<div class="subtitle">
+
+نمایش و تحلیل روند پارامترها
+
+</div>
+
+</div>
+
+
+
+<div class="container">
+
+
+<div class="card parameter-card">
+
+
+<div class="parameter-label">
+
+پارامتر انتخاب شده
+
+</div>
+
+
+<div class="parameter-name" id="parameterName">
+
+-
+
+</div>
+
+
+</div>
+
+
+
+
+
+<div class="card">
+
+
+<h3>
+
+انتخاب بازه زمانی
+
+</h3>
+
+
+<div class="filter-container">
+
+
+<div class="filter-item">
+
+
+<label>
+پارامتر
+</label>
+
+
+<select id="tag">
+
+</select>
+
+
+</div>
+
+
+
+<div class="filter-item">
+
+<label>
+از تاریخ و ساعت
+</label>
+
+<input
+id="start_time"
+type="text"
+placeholder="1405/01/01 00:00">
+
+</div>
+
+
+
+<div class="filter-item">
+
+<label>
+تا تاریخ و ساعت
+</label>
+
+<input
+id="end_time"
+type="text"
+placeholder="1405/01/01 01:00">
+
+</div>
+
+
+
+<button onclick="loadGraph()">
+
+📈 نمایش نمودار
+
+</button>
+
+
+<button onclick="resetZoom()">
+
+🔄 بازگشت زوم
+
+</button>
+
+
+<button onclick="saveGraph()">
+
+💾 ذخیره نمودار
+
+</button>
+
+
+</div>
+
+</div>
+
+
+
+<!-- Part 2/3 -->
+
+<div class="card">
+
+    <div class="stats">
+    
+    
+    <div class="stat">
+    
+    <div class="stat-title">
+    
+    مقدار فعلی
+    
+    </div>
+    
+    <div class="stat-value" id="current">
+    
+    -
+    
+    </div>
+    
+    </div>
+    
+    
+    
+    <div class="stat">
+    
+    <div class="stat-title">
+    
+    کمترین مقدار
+    
+    </div>
+    
+    <div class="stat-value" id="min">
+    
+    -
+    
+    </div>
+    
+    </div>
+    
+    
+    
+    
+    <div class="stat">
+    
+    <div class="stat-title">
+    
+    بیشترین مقدار
+    
+    </div>
+    
+    <div class="stat-value" id="max">
+    
+    -
+    
+    </div>
+    
+    </div>
+    
+    
+    
+    
+    <div class="stat">
+    
+    <div class="stat-title">
+    
+    میانگین
+    
+    </div>
+    
+    <div class="stat-value" id="avg">
+    
+    -
+    
+    </div>
+    
+    </div>
+    
+    
+    
+    </div>
+    
+    </div>
+    
+    
+    
+    
+    <div class="card chart-card">
+    
+    <canvas id="trendChart"></canvas>
+    
+    </div>
+    
+    
+    
+    </div>
+    
+    
+    
+    
+    
+    <script>
+    
+    
+    let chart = null;
+    
+    let trendConfig = {};
+    
+    let calendarMode = "Gregorian";
+    
+    
+    
+    
+    
+    // ======================================
+    // LOAD FLOW CONFIG
+    // ======================================
+    
+    
+    async function loadFlow(){
+    
+    
+    try{
+    
+    
+    let response =
+    await fetch("/trend_config");
+    
+    
+    
+    trendConfig =
+    await response.json();
+    
+    
+    
+    console.log(
+    "TREND CONFIG",
+    trendConfig
+    );
+    
+    
+    
+    
+    let tagResponse =
+    await fetch("/trend_tags");
+    
+    
+    
+    let tags =
+    await tagResponse.json();
+    
+    
+    
+    trendConfig.tags = tags;
+    
+    
+    
+    if(
+    trendConfig.date_picker === "JalaliPicker"
+    ){
+    
+    
+    calendarMode="Jalali";
+    
+    
+    }
+    
+    else{
+    
+    
+    calendarMode="Gregorian";
+    
+    
+    }
+    
+    
+    
+    setupTags();
+    
+    
+    
+    }
+    
+    catch(e){
+    
+    
+    console.error(
+    "FLOW ERROR",
+    e
+    );
+    
+    
+    }
+    
+    
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    // ======================================
+    // TAG LIST
+    // ======================================
+    
+    
+    function setupTags(){
+    
+    
+    let select =
+    document.getElementById("tag");
+    
+    
+    
+    select.innerHTML="";
+    
+    
+    
+    (trendConfig.tags || [])
+    .forEach(t=>{
+    
+    
+    let option =
+    document.createElement("option");
+    
+    
+    
+    option.value=t.tag;
+    
+    
+    option.textContent=
+    t.title || t.tag;
+    
+    
+    
+    select.appendChild(option);
+    
+    
+    
+    });
+    
+    
+    
+    if(select.options.length){
+    
+    
+    document.getElementById(
+    "parameterName"
+    ).innerHTML =
+    select.value;
+    
+    
+    }
+    
+    
+    
+    setupPicker();
+
+
+    setDefaultDateRange();
+
+
+    loadGraph();
+
+
+
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    // ======================================
+    // DATE PICKER
+    // ======================================
+    
+    
+    function setupPicker(){
+    
+    
+    if(calendarMode==="Jalali"){
+    
+    
+    
+    $("#start_time").persianDatepicker({
+    
+    format:
+    "YYYY/MM/DD HH:mm",
+    
+    
+    timePicker:{
+    
+    enabled:true
+    
+    }
+    
+    
+    });
+    
+    
+    
+    
+    $("#end_time").persianDatepicker({
+    
+    format:
+    "YYYY/MM/DD HH:mm",
+    
+    
+    timePicker:{
+    
+    enabled:true
+    
+    }
+    
+    
+    });
+    
+    
+    
+    }
+    
+    else{
+    
+    
+    document.getElementById(
+    "start_time"
+    ).type =
+    "datetime-local";
+    
+    
+    
+    document.getElementById(
+    "end_time"
+    ).type =
+    "datetime-local";
+    
+    
+    
+    }
+    
+    
+    
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    // ======================================
+    // DEFAULT DATE RANGE (LAST 10 DAYS)
+    // ======================================
+
+
+    function formatLocalDateTime(date){
+
+
+    const pad = n => String(n).padStart(2, "0");
+
+
+    return (
+    date.getFullYear() + "-" +
+    pad(date.getMonth() + 1) + "-" +
+    pad(date.getDate()) + "T" +
+    pad(date.getHours()) + ":" +
+    pad(date.getMinutes())
+    );
+
+
+    }
+
+
+
+    function setDefaultDateRange(){
+
+
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 10);
+
+
+    if(calendarMode === "Jalali"){
+
+
+    $("#start_time").val(
+    new persianDate(start).format("YYYY/MM/DD HH:mm")
+    );
+
+
+    $("#end_time").val(
+    new persianDate(end).format("YYYY/MM/DD HH:mm")
+    );
+
+
+    }
+
+
+    else{
+
+
+    document.getElementById("start_time").value =
+    formatLocalDateTime(start);
+
+
+    document.getElementById("end_time").value =
+    formatLocalDateTime(end);
+
+
+    }
+
+
+    }
+
+
+
+
+
+    // ======================================
+    // REQUEST DATA
+    // ======================================
+    
+    
+    async function loadGraph(){
+    
+    
+    let tag =
+    document.getElementById(
+    "tag"
+    ).value;
+    
+    
+    
+    let payload={
+    
+    
+    tag:tag,
+    
+    
+    start:
+    document.getElementById(
+    "start_time"
+    ).value,
+    
+    
+    end:
+    document.getElementById(
+    "end_time"
+    ).value,
+    
+    
+    calendar:
+    calendarMode
+    
+    
+    };
+    
+    
+    
+    console.log(
+    "TREND REQUEST",
+    payload
+    );
+    
+    
+    
+    let response =
+    await fetch(
+    "/trend_request",
+    {
+    
+    method:"POST",
+    
+    headers:{
+    
+    "Content-Type":
+    "application/json"
+    
+    },
+    
+    body:
+    JSON.stringify(payload)
+    
+    
+    }
+    );
+    
+    
+    
+    let data =
+    await response.json();
+    
+    
+    
+    drawChart(data);
+    
+    updateStats(data);
+    
+    
+    
+    }
+    
+    
+    
+    
+    
+    
+    
+    // ======================================
+    // JALALI DATE CONVERTER
+    // ======================================
+    
+    
+    function formatAxisDate(value){
+    
+    
+    
+    let date =
+    new Date(value);
+    
+    
+    
+    if(calendarMode==="Jalali"){
+    
+    
+    
+    let p =
+    new persianDate(date);
+    
+    
+    
+    return p.format(
+    "YYYY/MM/DD HH:mm:ss"
+    );
+    
+    
+    
+    }
+    
+    
+    
+    return luxon.DateTime
+    .fromJSDate(date)
+    .toFormat(
+    "yyyy/MM/dd HH:mm:ss"
+    );
+    
+    
+    
+    }
+    
+    
+    
+    
+    
+    
+    
+    // ======================================
+    // DRAW CHART
+    // ======================================
+    
+    
+    function drawChart(data){
+    
+    
+    
+    if(chart){
+    
+    
+    chart.destroy();
+    
+    
+    }
+    
+    
+    
+    
+    let datasets=[];
+    
+    
+    
+    (data.datasets || [])
+    .forEach(ds=>{
+    
+    
+    let points=[];
+    
+    
+    
+    ds.data.forEach(row=>{
+    
+    
+    points.push({
+    
+    x:new Date(row.x),
+    
+    y:Number(row.y)
+    
+    });
+    
+    
+    });
+    
+    
+    
+    datasets.push({
+    
+    label:
+    ds.title || ds.tag,
+    
+    
+    data:points,
+    
+    
+    borderWidth:2,
+    
+    
+    pointRadius:0,
+    
+    
+    tension:0,
+    
+    
+    fill:false
+    
+    
+    });
+    
+    
+    
+    });
+    
+    
+    
+    
+    chart =
+    new Chart(
+    
+    document.getElementById(
+    "trendChart"
+    ),
+    
+    {
+    
+    
+    type:"line",
+    
+    
+    data:{
+    
+    
+    datasets:datasets
+    
+    
+    },
+    
+    
+    options:{
+    
+    
+    responsive:true,
+    
+    
+    maintainAspectRatio:false,
+    
+    
+    parsing:false,
+    
+    
+    scales:{
+    
+    
+    x:{
+    
+    
+    type:"time",
+    
+    
+    
+    time:{
+    
+    
+    tooltipFormat:
+    "yyyy/MM/dd HH:mm:ss"
+    
+    
+    },
+    
+    
+    
+    ticks:{
+    
+    
+    autoSkip:true,
+    
+    
+    maxTicksLimit:12,
+    
+    
+    maxRotation:45,
+    
+    
+    minRotation:45,
+    
+    
+    
+    callback:function(value){
+    
+    
+    
+    return formatAxisDate(
+    this.getLabelForValue(value)
+    );
+    
+    
+    
+    }
+    
+    
+    
+    }
+    
+    
+    
+    },
+    
+    
+    
+    y:{
+    
+    
+    beginAtZero:false
+    
+    
+    }
+    
+    
+    
+    },
+    
+    
+    
+    plugins:{
+    
+    
+    tooltip:{
+    
+    
+    
+    callbacks:{
+    
+    
+    
+    title:function(items){
+    
+    
+    return formatAxisDate(
+    items[0].parsed.x
+    );
+    
+    
+    }
+    
+    
+    
+    }
+    
+    
+    
+    },
+    
+    
+    
+    zoom:{
+    
+    
+    pan:{
+    
+    
+    enabled:true,
+    
+    mode:"x"
+    
+    
+    },
+    
+    
+    zoom:{
+    
+    
+    wheel:{
+    
+    
+    enabled:true
+    
+    
+    },
+    
+    
+    pinch:{
+    
+    
+    enabled:true
+    
+    
+    },
+    
+    
+    mode:"x"
+    
+    
+    }
+    
+    
+    
+    }
+    
+    
+    
+    }
+    
+    
+    
+    }
+    
+    
+    
+    }
+    
+    );
+    
+    
+    
+    chart.resetZoom();
+    
+    
+    }
+    
+
+// ======================================
+// UPDATE STATISTICS
+// ======================================
+
+
+function updateStats(data){
+
+
+if(
+!data.datasets ||
+!data.datasets.length
+)
+
+return;
+
+
+
+let values =
+data.datasets[0].data.map(
+x=>Number(x.y)
+);
+
+
+
+if(!values.length)
+
+return;
+
+
+
+document.getElementById(
+"current"
+).innerHTML =
+values[
+values.length-1
+];
+
+
+
+document.getElementById(
+"min"
+).innerHTML =
+Math.min(...values);
+
+
+
+document.getElementById(
+"max"
+).innerHTML =
+Math.max(...values);
+
+
+
+document.getElementById(
+"avg"
+).innerHTML =
+(
+values.reduce(
+(a,b)=>a+b,
+0
+)
+/
+values.length
+).toFixed(2);
+
+
+
+}
+
+
+
+
+
+
+
+// ======================================
+// RESET ZOOM
+// ======================================
+
+
+function resetZoom(){
+
+
+if(
+chart &&
+chart.resetZoom
+){
+
+
+chart.resetZoom();
+
+
+}
+
+
+}
+
+
+
+
+
+
+
+
+// ======================================
+// SAVE IMAGE
+// ======================================
+
+
+function saveGraph(){
+
+
+
+if(!chart)
+
+return;
+
+
+
+let link =
+document.createElement(
+"a"
+);
+
+
+
+link.href =
+chart.toBase64Image();
+
+
+
+link.download =
+"SCADA_TREND.png";
+
+
+
+link.click();
+
+
+
+}
+
+
+
+
+
+
+
+
+// ======================================
+// TAG CHANGE
+// ======================================
+
+
+document
+.getElementById("tag")
+.addEventListener(
+"change",
+function(){
+
+
+document.getElementById(
+"parameterName"
+).innerHTML =
+this.value;
+
+
+
+});
+
+
+
+
+
+
+
+
+// ======================================
+// START
+// ======================================
+
+
+window.addEventListener(
+"load",
+function(){
+
+
+loadFlow();
+
+
+});
+
+
+</script>
+
+
+</body>
+
+</html>
