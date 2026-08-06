@@ -3,23 +3,22 @@
         "Home": {
             "data": {
                 "1": {
-                    "id": 1,
-                    "name": "PLCReader",
+                    "class": "PLCReader",
                     "data": {
+                        "count": 100,
                         "ip": "192.168.1.100",
                         "port": 502,
-                        "slave": 1,
                         "register": 100,
-                        "count": 100
+                        "slave": 1
                     },
-                    "class": "PLCReader",
                     "html": "PLCReader",
-                    "typenode": false,
+                    "id": 1,
                     "inputs": {
                         "input_1": {
                             "connections": []
                         }
                     },
+                    "name": "PLCReader",
                     "outputs": {
                         "output_1": {
                             "connections": [
@@ -31,11 +30,11 @@
                         }
                     },
                     "pos_x": 150,
-                    "pos_y": 100
+                    "pos_y": 100,
+                    "typenode": false
                 },
                 "2": {
-                    "id": 2,
-                    "name": "TagMapper",
+                    "class": "TagMapper",
                     "data": {
                         "mappings": [
                             {
@@ -47,22 +46,32 @@
                                 "interval": 1,
                                 "trigger_register": 0,
                                 "trigger_value": 0
+                            },
+                            {
+                                "register": 141,
+                                "name": "current",
+                                "datatype": "INT",
+                                "scale": 1,
+                                "storage": "TIME",
+                                "interval": 1,
+                                "trigger_register": 0,
+                                "trigger_value": 0
                             }
                         ]
                     },
-                    "class": "TagMapper",
                     "html": "TagMapper",
-                    "typenode": false,
+                    "id": 2,
                     "inputs": {
                         "input_1": {
                             "connections": [
                                 {
-                                    "node": "1",
-                                    "input": "output_1"
+                                    "input": "output_1",
+                                    "node": "1"
                                 }
                             ]
                         }
                     },
+                    "name": "TagMapper",
                     "outputs": {
                         "output_1": {
                             "connections": [
@@ -77,28 +86,28 @@
                             ]
                         }
                     },
-                    "pos_x": 336,
-                    "pos_y": 98
+                    "pos_x": 338,
+                    "pos_y": 98,
+                    "typenode": false
                 },
                 "3": {
-                    "id": 3,
-                    "name": "TrendReader",
+                    "class": "TrendReader",
                     "data": {
                         "company_id": 1
                     },
-                    "class": "TrendReader",
                     "html": "TrendReader",
-                    "typenode": false,
+                    "id": 3,
                     "inputs": {
                         "input_1": {
                             "connections": [
                                 {
-                                    "node": "2",
-                                    "input": "output_1"
+                                    "input": "output_1",
+                                    "node": "2"
                                 }
                             ]
                         }
                     },
+                    "name": "TrendReader",
                     "outputs": {
                         "output_1": {
                             "connections": [
@@ -110,27 +119,27 @@
                         }
                     },
                     "pos_x": 523,
-                    "pos_y": 96
+                    "pos_y": 96,
+                    "typenode": false
                 },
                 "4": {
-                    "id": 4,
-                    "name": "TrendDatabaseReader",
+                    "class": "TrendDatabaseReader",
                     "data": {
                         "company_id": 1
                     },
-                    "class": "TrendDatabaseReader",
                     "html": "TrendDatabaseReader",
-                    "typenode": false,
+                    "id": 4,
                     "inputs": {
                         "input_1": {
                             "connections": [
                                 {
-                                    "node": "3",
-                                    "input": "output_1"
+                                    "input": "output_1",
+                                    "node": "3"
                                 }
                             ]
                         }
                     },
+                    "name": "TrendDatabaseReader",
                     "outputs": {
                         "output_1": {
                             "connections": [
@@ -142,54 +151,54 @@
                         }
                     },
                     "pos_x": 724,
-                    "pos_y": 94
+                    "pos_y": 94,
+                    "typenode": false
                 },
                 "5": {
-                    "id": 5,
-                    "name": "TrendOutput",
+                    "class": "TrendOutput",
                     "data": {
                         "DatePicker": "JalaliPicker"
                     },
-                    "class": "TrendOutput",
                     "html": "TrendOutput",
-                    "typenode": false,
+                    "id": 5,
                     "inputs": {
                         "input_1": {
                             "connections": [
                                 {
-                                    "node": "4",
-                                    "input": "output_1"
+                                    "input": "output_1",
+                                    "node": "4"
                                 }
                             ]
                         }
                     },
+                    "name": "TrendOutput",
                     "outputs": {
                         "output_1": {
                             "connections": []
                         }
                     },
                     "pos_x": 919,
-                    "pos_y": 93
+                    "pos_y": 93,
+                    "typenode": false
                 },
                 "6": {
-                    "id": 6,
-                    "name": "SQLWriter",
+                    "class": "SQLWriter",
                     "data": {
                         "company_id": 1
                     },
-                    "class": "SQLWriter",
                     "html": "SQLWriter",
-                    "typenode": false,
+                    "id": 6,
                     "inputs": {
                         "input_1": {
                             "connections": [
                                 {
-                                    "node": "2",
-                                    "input": "output_1"
+                                    "input": "output_1",
+                                    "node": "2"
                                 }
                             ]
                         }
                     },
+                    "name": "SQLWriter",
                     "outputs": {
                         "output_1": {
                             "connections": [
@@ -201,11 +210,11 @@
                         }
                     },
                     "pos_x": 537,
-                    "pos_y": 225
+                    "pos_y": 225,
+                    "typenode": false
                 },
                 "7": {
-                    "id": 7,
-                    "name": "DashboardOutput",
+                    "class": "DashboardOutput",
                     "data": {
                         "widgets": [
                             {
@@ -215,26 +224,27 @@
                             }
                         ]
                     },
-                    "class": "DashboardOutput",
                     "html": "DashboardOutput",
-                    "typenode": false,
+                    "id": 7,
                     "inputs": {
                         "input_1": {
                             "connections": [
                                 {
-                                    "node": "6",
-                                    "input": "output_1"
+                                    "input": "output_1",
+                                    "node": "6"
                                 }
                             ]
                         }
                     },
+                    "name": "DashboardOutput",
                     "outputs": {
                         "output_1": {
                             "connections": []
                         }
                     },
                     "pos_x": 721,
-                    "pos_y": 225
+                    "pos_y": 225,
+                    "typenode": false
                 }
             }
         }

@@ -1,182 +1,82 @@
-# =====================================================
-# SCADA_FLOW CONFIGURATION
-# =====================================================
-
-
-# =====================================================
-# DATABASE CONFIGURATION (SQLite)
-# =====================================================
-
-
-DB_CONFIG = {
-
-    # SQLite database file path (relative to project root)
-
-    "path":
-
-        "data/scada_flow.db",
-
-}
-
-
-# =====================================================
-# FLASK CONFIGURATION
-# =====================================================
+# ======================================
+# SCADA FLOW SERVER CONFIGURATION
+# ======================================
 
 
 FLASK_CONFIG = {
 
-
-    "SECRET_KEY":
-
-        "SCADA_FLOW_SECRET_KEY",
-
-
-
-    "DEBUG":
-
-        False
+    "SECRET_KEY": "SCADA_FLOW_SECRET_KEY"
 
 }
 
-
-
-
-
-
-
-# =====================================================
-# SOCKETIO CONFIGURATION
-# =====================================================
 
 
 SOCKETIO_CONFIG = {
 
-
-    "cors_allowed_origins":
-
-        "*"
+    "cors_allowed_origins": "*"
 
 }
 
-
-
-
-
-
-
-# =====================================================
-# FLOW ENGINE CONFIGURATION
-# =====================================================
 
 
 FLOW_CONFIG = {
 
-
-    # Main flow definition file
-
-    "flow_file":
-
-        "flow.json",
-
-
-
-    # Automatically start engine
-
-    "auto_start":
-
-        True,
-
-
-
-    # Scan cycle milliseconds
-
-    "cycle_time":
-
-        1000
+    "flow_file": "flow.json"
 
 }
 
 
 
+DB_CONFIG = {
 
+    "path": "data/scada_flow.db"
 
+}
 
-
-# =====================================================
-# DEFAULT PLC CONFIGURATION
-# =====================================================
 
 
 PLC_CONFIG = {
 
+    "PLC_MODEL": "Kinco K608",
 
-    "default_port":
+    "PLC_IP": "192.168.1.100",
 
-        502,
+    "PLC_PORT": 502,
 
-
-
-    "default_slave":
-
-        1,
-
-
-
-    "timeout":
-
-        3
+    "SLAVE_ID": 1
 
 }
 
 
 
+PLC_ID = 1
 
 
 
+REGISTERS = {
 
-# =====================================================
-# SYSTEM PATHS
-# =====================================================
+    125: "Motor_Hour",
 
+    128: "Mixer_Hour",
 
-PATH_CONFIG = {
+    131: "Press_Hour",
 
+    135: "Voltage_12",
 
-    "templates":
+    136: "Voltage_13",
 
-        "templates",
+    137: "Voltage_23",
 
+    138: "Voltage_L1",
 
+    139: "Voltage_L2",
 
-    "static":
+    140: "Voltage_L3",
 
-        "static"
+    141: "Current_L1",
 
-}
+    142: "Current_L2",
 
-
-
-
-
-
-
-# =====================================================
-# APPLICATION INFORMATION
-# =====================================================
-
-
-APP_INFO = {
-
-
-    "name":
-
-        "SCADA_FLOW",
-
-
-
-    "version":
-
-        "1.0.0"
+    143: "Current_L3"
 
 }

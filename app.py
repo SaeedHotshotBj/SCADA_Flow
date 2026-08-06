@@ -793,7 +793,203 @@ def dashboard():
 
 
 
+# =====================================================
+# EDGE DATA RECEIVER
+# =====================================================
 
+
+@app.route("/api/data", methods=["POST"])
+def receive_edge_data():
+
+    try:
+
+        data = request.get_json()
+
+        print("\n========== EDGE DATA ==========")
+        print(data)
+        print("===============================\n")
+
+
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "No data"
+            }), 400
+
+
+
+        company_id = data.get(
+            "CompanyID",
+            1
+        )
+
+
+        plc_id = data.get(
+            "PLC_ID",
+            1
+        )
+
+
+        tag = data.get(
+            "TagName"
+        )
+
+
+        value = data.get(
+            "Value"
+        )
+
+
+        timestamp = data.get(
+            "Timestamp"
+        )
+
+
+
+        if not tag:
+
+            return jsonify({
+
+                "status":"error",
+
+                "message":"TagName missing"
+
+            }),400
+
+
+
+
+        conn = get_connection()
+
+        cursor = conn.cursor()
+
+
+
+        # Save realtime data
+
+        cursor.execute(
+
+            """
+            INSERT INTO PLC_Data
+            (
+                CompanyID,
+                TagName,
+                Value,
+                StorageType,
+                Timestamp
+            )
+
+            VALUES
+            (
+                ?,
+                ?,
+                ?,
+                ?,
+                COALESCE(?, datetime('now','localtime'))
+            )
+
+            """,
+
+            (
+
+                company_id,
+
+                tag,
+
+                value,
+
+                "EDGE",
+
+                timestamp
+
+            )
+
+        )
+
+
+
+
+
+        # Save history
+
+        cursor.execute(
+
+            """
+            INSERT INTO TagHistory
+            (
+                CompanyID,
+                PLC_ID,
+                TagName,
+                Value,
+                Timestamp
+            )
+
+            VALUES
+            (
+                ?,
+                ?,
+                ?,
+                ?,
+                COALESCE(?, datetime('now','localtime'))
+            )
+
+            """,
+
+            (
+
+                company_id,
+
+                plc_id,
+
+                tag,
+
+                value,
+
+                timestamp
+
+            )
+
+        )
+
+
+
+
+        conn.commit()
+
+        cursor.close()
+
+        conn.close()
+
+
+
+        return jsonify({
+
+            "status":"ok",
+
+            "tag":tag,
+
+            "value":value
+
+        })
+
+
+
+
+    except Exception as e:
+
+
+        import traceback
+
+        traceback.print_exc()
+
+
+        return jsonify({
+
+            "status":"error",
+
+            "message":str(e)
+
+        }),500
 
 
 
