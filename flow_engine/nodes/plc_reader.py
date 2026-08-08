@@ -1,4 +1,4 @@
-```python
+
 # =====================================================
 # SCADA_FLOW PLC COMMUNICATION
 # MODBUS TCP REGISTER READER
