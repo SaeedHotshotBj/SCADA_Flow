@@ -1,82 +1,91 @@
-
+```python
 # =====================================================
-# SCADA_FLOW PLC COMMUNICATION
-# MODBUS TCP REGISTER READER
-#
-# IMPORTANT:
-# PLC configuration comes from flow.json / PLCReader.
-# This file contains NO hard-coded PLC configuration.
+# SCADA_FLOW PLC READER NODE
+# MODBUS REGISTER READER
 # =====================================================
 
-from pymodbus.client.sync import ModbusTcpClient
+from plc import read_registers
 
 
-# =====================================================
-# MODBUS TCP READ
-# =====================================================
+class PLCReader:
 
-def read_registers(
-    ip,
-    port=502,
-    slave=1,
-    start=0,
-    count=1,
-    timeout=3
-):
+    def __init__(self, config):
 
-    client = ModbusTcpClient(
-        host=ip,
-        port=port,
-        timeout=timeout
-    )
+        self.config = config or {}
 
-    try:
+        # ALL PLC CONFIGURATION COMES FROM flow.json
 
-        if not client.connect():
+        self.ip = self.config.get("ip")
+        self.port = self.config.get("port")
+        self.slave = self.config.get("slave")
+        self.register = self.config.get("register")
+        self.count = self.config.get("count")
 
-            print(
-                "PLC CONNECTION FAILED:",
-                ip
+    # =================================================
+    # EXECUTE
+    # =================================================
+
+    def execute(self, data=None):
+
+        if data is None:
+            data = {}
+
+        # PLC configuration must come from flow.json
+
+        if (
+            self.ip is None
+            or self.port is None
+            or self.slave is None
+            or self.register is None
+            or self.count is None
+        ):
+
+            print("PLC READER: Missing PLC configuration")
+
+            data["Registers"] = {}
+            data["PLC_Online"] = False
+
+            return data
+
+        try:
+
+            values = read_registers(
+                self.ip,
+                self.port,
+                self.slave,
+                self.register,
+                self.count
             )
 
-            return None
+            if values is None:
 
+                data["Registers"] = {}
+                data["PLC_Online"] = False
 
-        result = client.read_holding_registers(
-            address=start,
-            count=count,
-            unit=slave
-        )
+                return data
 
+            registers = {}
 
-        if result.isError():
+            for index, value in enumerate(values):
+
+                address = self.register + index
+
+                registers[str(address)] = value
+
+            data["Registers"] = registers
+            data["PLC_Online"] = True
+
+            return data
+
+        except Exception as e:
 
             print(
-                "MODBUS READ ERROR:",
-                ip,
-                "START:",
-                start,
-                "COUNT:",
-                count
+                "PLC READ ERROR:",
+                e
             )
 
-            return None
+            data["Registers"] = {}
+            data["PLC_Online"] = False
 
-
-        return result.registers
-
-
-    except Exception as e:
-
-        print(
-            "PLC ERROR:",
-            e
-        )
-
-        return None
-
-
-    finally:
-
-        client.close()
+            return data
 ```
