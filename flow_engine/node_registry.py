@@ -15,52 +15,39 @@ NODE_REGISTRY = {
 
 "PLCReader": {
 
-
-    "config":[
-
+    "config": [
 
         {
-            "name":"ip",
-            "label":"PLC IP",
-            "type":"text",
-            "default":"127.0.0.1"
+            "name": "ip",
+            "label": "PLC IP",
+            "type": "text"
         },
 
-
         {
-            "name":"port",
-            "label":"PLC Port",
-            "type":"number",
-            "default":502
+            "name": "port",
+            "label": "PLC Port",
+            "type": "number"
         },
 
-
         {
-            "name":"slave",
-            "label":"Slave ID",
-            "type":"number",
-            "default":1
+            "name": "slave",
+            "label": "Slave ID",
+            "type": "number"
         },
 
-
         {
-            "name":"register",
-            "label":"Start Register",
-            "type":"number",
-            "default":0
+            "name": "register",
+            "label": "Start Register",
+            "type": "number"
         },
 
-
         {
-            "name":"count",
-            "label":"Register Count",
-            "type":"number",
-            "default":20
+            "name": "count",
+            "label": "Register Count",
+            "type": "number"
         }
 
-
     ]
-
 },
 
 

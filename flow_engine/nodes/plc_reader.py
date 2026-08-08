@@ -1,4 +1,3 @@
-```python
 # =====================================================
 # SCADA_FLOW PLC READER NODE
 # MODBUS REGISTER READER
@@ -13,14 +12,6 @@ class PLCReader:
 
         self.config = config or {}
 
-        # ALL PLC CONFIGURATION COMES FROM flow.json
-
-        self.ip = self.config.get("ip")
-        self.port = self.config.get("port")
-        self.slave = self.config.get("slave")
-        self.register = self.config.get("register")
-        self.count = self.config.get("count")
-
     # =================================================
     # EXECUTE
     # =================================================
@@ -30,31 +21,20 @@ class PLCReader:
         if data is None:
             data = {}
 
-        # PLC configuration must come from flow.json
-
-        if (
-            self.ip is None
-            or self.port is None
-            or self.slave is None
-            or self.register is None
-            or self.count is None
-        ):
-
-            print("PLC READER: Missing PLC configuration")
-
-            data["Registers"] = {}
-            data["PLC_Online"] = False
-
-            return data
-
         try:
 
+            ip = self.config["ip"]
+            port = self.config["port"]
+            slave = self.config["slave"]
+            register = self.config["register"]
+            count = self.config["count"]
+
             values = read_registers(
-                self.ip,
-                self.port,
-                self.slave,
-                self.register,
-                self.count
+                ip,
+                port,
+                slave,
+                register,
+                count
             )
 
             if values is None:
@@ -68,12 +48,24 @@ class PLCReader:
 
             for index, value in enumerate(values):
 
-                address = self.register + index
+                address = register + index
 
                 registers[str(address)] = value
 
             data["Registers"] = registers
             data["PLC_Online"] = True
+
+            return data
+
+        except KeyError as e:
+
+            print(
+                "PLC READER CONFIG ERROR:",
+                e
+            )
+
+            data["Registers"] = {}
+            data["PLC_Online"] = False
 
             return data
 
@@ -88,4 +80,3 @@ class PLCReader:
             data["PLC_Online"] = False
 
             return data
-```
