@@ -1,184 +1,82 @@
+```python
 # =====================================================
-# SCADA_FLOW PLC READER NODE
-# MODBUS REGISTER READER
+# SCADA_FLOW PLC COMMUNICATION
+# MODBUS TCP REGISTER READER
+#
+# IMPORTANT:
+# PLC configuration comes from flow.json / PLCReader.
+# This file contains NO hard-coded PLC configuration.
 # =====================================================
 
-
-from plc import read_registers
-
-
-
-
-
-
-class PLCReader:
-
-
-
-    def __init__(self, config):
-
-
-        self.config = config or {}
-
-
-
-        self.ip = self.config.get(
-
-            "ip",
-
-            "127.0.0.1"
-
-        )
-
-
-        self.port = self.config.get(
-
-            "port",
-
-            502
-
-        )
-
-
-        self.slave = self.config.get(
-
-            "slave",
-
-            1
-
-        )
-
-
-        self.register = self.config.get(
-
-            "register",
-
-            0
-
-        )
-
-
-        self.count = self.config.get(
-
-            "count",
-
-            20
-
-        )
-
-
-
-
-
-
-    # =====================================================
-    # EXECUTE
-    # =====================================================
-
-
-    def execute(self, data=None):
-
-
-        if data is None:
-
-
-            data = {}
-
-
-
-
-
-
-        try:
-
-
-
-            values = read_registers(
-
-                self.ip,
-
-                self.port,
-
-                self.slave,
-
-                self.register,
-
-                self.count
-
-            )
-
-
-
-
-
-            registers = {}
-
-
-
-
-
-            for index, value in enumerate(values):
-
-
-
-                address = self.register + index
-
-
-
-                registers[str(address)] = value
-
-
-
-
-
-
-            data["Registers"] = registers
-
-
-
-            data["PLC_Online"] = True
-
-
-
-
-
-
-            print()
+from pymodbus.client.sync import ModbusTcpClient
+
+
+# =====================================================
+# MODBUS TCP READ
+# =====================================================
+
+def read_registers(
+    ip,
+    port=502,
+    slave=1,
+    start=0,
+    count=1,
+    timeout=3
+):
+
+    client = ModbusTcpClient(
+        host=ip,
+        port=port,
+        timeout=timeout
+    )
+
+    try:
+
+        if not client.connect():
 
             print(
-                "PLC READER:"
+                "PLC CONNECTION FAILED:",
+                ip
             )
+
+            return None
+
+
+        result = client.read_holding_registers(
+            address=start,
+            count=count,
+            unit=slave
+        )
+
+
+        if result.isError():
 
             print(
-                registers
+                "MODBUS READ ERROR:",
+                ip,
+                "START:",
+                start,
+                "COUNT:",
+                count
             )
 
-            print()
+            return None
 
 
-
-        except Exception as e:
-
+        return result.registers
 
 
-            print(
+    except Exception as e:
 
-                "PLC READ ERROR:",
+        print(
+            "PLC ERROR:",
+            e
+        )
 
-                e
-
-            )
-
-
-
-            data["Registers"] = {}
+        return None
 
 
-            data["PLC_Online"] = False
+    finally:
 
-
-
-
-
-
-        return data
+        client.close()
+```

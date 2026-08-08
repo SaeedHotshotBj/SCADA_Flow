@@ -1123,7 +1123,37 @@ def node_registry():
 
 
 
+@app.route("/api/edge/config", methods=["GET"])
+def edge_config():
 
+    try:
+
+        with open(
+            FLOW_CONFIG["flow_file"],
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            flow = json.load(f)
+
+
+        return jsonify(flow)
+
+
+    except Exception as e:
+
+        print(
+            "EDGE CONFIG ERROR:",
+            e
+        )
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(e)
+
+        }), 500
 
 
 
