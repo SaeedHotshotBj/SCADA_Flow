@@ -3,6 +3,7 @@
 # ROLES ENGAGED NODE
 # =====================================================
 
+
 class RolesEngaged:
 
     def __init__(self, config=None):
@@ -13,10 +14,32 @@ class RolesEngaged:
             "company_id"
         )
 
-        self.roles = self.config.get(
-            "roles",
-            []
+        # These are the roles explicitly selected by the
+        # Flow Designer.  They must not be replaced at
+        # runtime by every role defined in the Roles node.
+        self._selected_roles = list(
+            self.config.get(
+                "roles",
+                []
+            )
+            if isinstance(
+                self.config.get("roles", []),
+                list
+            )
+            else []
         )
+
+    @property
+    def roles(self):
+        return self._selected_roles
+
+    @roles.setter
+    def roles(self, value):
+        # FlowRunner historically assigned all Roles-node
+        # definitions here.  Keep the RolesEngaged selection
+        # made in Drawflow instead of replacing it.
+        if not hasattr(self, "_selected_roles"):
+            self._selected_roles = []
 
     # =================================================
     # EXECUTE
@@ -25,16 +48,9 @@ class RolesEngaged:
     def execute(self, data=None):
 
         return {
-
-            "company_id":
-                self.company_id,
-
-            "allowed_roles":
-                self.get_allowed_roles(),
-
-            "data":
-                data
-
+            "company_id": self.company_id,
+            "allowed_roles": self.get_allowed_roles(),
+            "data": data,
         }
 
     # =================================================
@@ -45,7 +61,7 @@ class RolesEngaged:
 
         result = []
 
-        for item in self.roles:
+        for item in self._selected_roles:
 
             if isinstance(item, str):
 
@@ -85,7 +101,6 @@ class RolesEngaged:
 
         return any(
             str(item).strip().lower()
-            ==
-            str(role).strip().lower()
+            == str(role).strip().lower()
             for item in allowed
         )
