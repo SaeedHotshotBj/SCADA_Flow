@@ -1,187 +1,354 @@
-
 <!DOCTYPE html>
+
 <html lang="en">
 
 <head>
 
-    <meta charset="UTF-8">
 
-    <title>SCADA LIVE DASHBOARD</title>
+<meta charset="UTF-8">
 
-    <!-- Socket.IO -->
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<title>SCADA LIVE DASHBOARD</title>
 
-    <style>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
-        body {
-            margin: 0;
-            background: #111827;
-            color: white;
-            font-family: Arial, sans-serif;
-        }
+<style>
 
-        .header {
-            height: 70px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 25px;
-            background: #1f2937;
-            box-sizing: border-box;
-        }
+    * {
+        box-sizing: border-box;
+    }
 
-        .title {
-            font-size: 24px;
-            font-weight: bold;
-        }
+    html,
+    body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        min-height: 100%;
+    }
 
-        .status {
-            padding: 8px 18px;
-            border-radius: 20px;
-            font-weight: bold;
-        }
+    body {
+        background: #111827;
+        color: white;
+        font-family: Arial, sans-serif;
+    }
 
-        .online {
-            background: #166534;
-            color: #bbf7d0;
-        }
 
-        .offline {
-            background: #7f1d1d;
-            color: #fecaca;
-        }
+    /* =====================================================
+       HEADER
+       ===================================================== */
 
-        #dashboard {
-            position: relative;
-            min-height: calc(100vh - 70px);
-        }
+    .header {
+        height: 70px;
 
-        .widget {
-            position: absolute;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
 
-            width: 220px;
-            height: 140px;
+        padding: 0 25px;
 
-            background: #1f2937;
+        background: #1f2937;
+    }
 
-            border-radius: 12px;
+    .title {
+        font-size: 24px;
+        font-weight: bold;
+    }
 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    .status {
+        padding: 8px 18px;
+        border-radius: 20px;
+        font-weight: bold;
+    }
 
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
+    .online {
+        background: #166534;
+        color: #bbf7d0;
+    }
 
-            box-sizing: border-box;
-        }
+    .offline {
+        background: #7f1d1d;
+        color: #fecaca;
+    }
 
-        .widget-title {
-            font-size: 17px;
-            color: #d1d5db;
-            margin-bottom: 15px;
-        }
 
-        .widget-value {
-            font-size: 34px;
-            font-weight: bold;
-        }
+    /* =====================================================
+       DASHBOARD
+       ===================================================== */
 
-        .widget-unit {
-            margin-top: 8px;
-            color: #9ca3af;
-            font-size: 14px;
-        }
+    #dashboard {
+        position: relative;
+        min-height: calc(100vh - 70px);
+    }
 
-    </style>
+
+    /* =====================================================
+       CARD
+       ===================================================== */
+
+    .widget {
+        position: absolute;
+
+        width: 220px;
+        height: 140px;
+
+        background: #1f2937;
+
+        border-radius: 12px;
+
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+
+        /*
+         * ABSOLUTELY NO ANIMATION
+         */
+
+        transition: none !important;
+        animation: none !important;
+        transform: none !important;
+    }
+
+
+    /* =====================================================
+       TITLE
+       ===================================================== */
+
+    .widget-title {
+        font-size: 17px;
+
+        color: #d1d5db;
+
+        margin-bottom: 15px;
+
+        transition: none !important;
+        animation: none !important;
+        transform: none !important;
+    }
+
+
+    /* =====================================================
+       VALUE
+       ===================================================== */
+
+    .widget-value {
+        font-size: 34px;
+
+        font-weight: bold;
+
+        color: white;
+
+        width: 120px;
+        height: 42px;
+
+        line-height: 42px;
+
+        text-align: center;
+
+        white-space: nowrap;
+
+        overflow: hidden;
+
+        transition: none !important;
+        animation: none !important;
+        transform: none !important;
+    }
+
+
+    /* =====================================================
+       UNIT
+       ===================================================== */
+
+    .widget-unit {
+        margin-top: 8px;
+
+        color: #9ca3af;
+
+        font-size: 14px;
+
+        transition: none !important;
+        animation: none !important;
+        transform: none !important;
+    }
+
+
+    /*
+     * Disable every possible animation inside dashboard.
+     */
+
+    #dashboard,
+    #dashboard *,
+    #dashboard *::before,
+    #dashboard *::after {
+
+        transition: none !important;
+        animation: none !important;
+        transform: none !important;
+
+    }
+
+</style>
+
 
 </head>
 
-
 <body>
-    {% include "nav.html" %}
 
-    <div class="header">
+{% include "nav.html" %}
 
-        <div class="title">
-            SCADA LIVE DASHBOARD
-        </div>
+<!-- =====================================================
+     HEADER
+     ===================================================== -->
 
-        <div
-            id="status"
-            class="status offline"
-        >
-            OFFLINE
-        </div>
-
-    </div>
+<div class="header">
 
 
-    <div id="dashboard">
+<div class="title">
+    SCADA LIVE DASHBOARD
+</div>
 
-        {% for widget in widgets %}
-
-        <div
-            class="widget"
-            id="widget_{{ widget.tag }}"
-
-            style="
-                left: {{ loop.index0 % 4 * 260 + 20 }}px;
-                top: {{ (loop.index0 // 4) * 180 + 20 }}px;
-            "
-        >
-
-            <div class="widget-title">
-
-                {{ widget.title if widget.title else widget.tag }}
-
-            </div>
+<div
+    id="status"
+    class="status offline"
+>
+    OFFLINE
+</div>
 
 
-            <div
-                class="widget-value"
-                id="value_{{ widget.tag }}"
-            >
-                0
-            </div>
+</div>
+
+<!-- =====================================================
+     DASHBOARD
+     ===================================================== -->
+
+<div id="dashboard">
 
 
-            <div class="widget-unit">
+{% for widget in widgets %}
 
-                {{ widget.unit if widget.unit else "" }}
+<div
+    class="widget"
+    id="widget_{{ widget.tag }}"
 
-            </div>
+    style="
+        left: {{ loop.index0 % 4 * 260 + 20 }}px;
+        top: {{ (loop.index0 // 4) * 180 + 20 }}px;
+    "
+>
 
-        </div>
+    <div class="widget-title">
 
-        {% endfor %}
-
-
-        {% if not widgets %}
-
-        <div style="padding: 30px;">
-
-            No dashboard widgets configured in flow.
-
-        </div>
-
-        {% endif %}
+        {{ widget.title if widget.title else widget.tag }}
 
     </div>
 
+
+    <div
+        class="widget-value"
+        id="value_{{ widget.tag }}"
+    >
+        0
+    </div>
+
+
+    <div class="widget-unit">
+
+        {{ widget.unit if widget.unit else "" }}
+
+    </div>
+
+</div>
+
+{% endfor %}
+
+
+{% if not widgets %}
+
+<div style="padding: 30px;">
+
+    No dashboard widgets configured in flow.
+
+</div>
+
+{% endif %}
+
+
+</div>
 
 <script>
 
 
 // =====================================================
-// SOCKET.IO CONNECTION
+// SOCKET.IO
 // =====================================================
 
-const socket = io();
+const socket = io({
+    transports: ["websocket", "polling"],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000
+});
 
 
 // =====================================================
-// CONNECTION
+// UPDATE ONE CARD
+// =====================================================
+
+function updateCard(tag, value) {
+
+    if (!tag) {
+        return;
+    }
+
+
+    const element =
+        document.getElementById(
+            "value_" + tag
+        );
+
+
+    if (!element) {
+
+        console.warn(
+            "Dashboard widget not found:",
+            tag
+        );
+
+        return;
+
+    }
+
+
+    const newValue =
+        String(
+            value === null ||
+            value === undefined
+                ? ""
+                : value
+        );
+
+
+    /*
+     * Change ONLY the text.
+     *
+     * The card itself is never touched.
+     */
+
+    if (
+        element.textContent !== newValue
+    ) {
+
+        element.textContent = newValue;
+
+    }
+
+}
+
+
+// =====================================================
+// SOCKET CONNECT
 // =====================================================
 
 socket.on("connect", function () {
@@ -190,11 +357,13 @@ socket.on("connect", function () {
         "Dashboard Socket.IO connected"
     );
 
+    setOnline();
+
 });
 
 
 // =====================================================
-// DISCONNECTION
+// SOCKET DISCONNECT
 // =====================================================
 
 socket.on("disconnect", function () {
@@ -203,13 +372,11 @@ socket.on("disconnect", function () {
         "Dashboard Socket.IO disconnected"
     );
 
-    setOffline();
-
 });
 
 
 // =====================================================
-// SERVER SENDS NEW TAG VALUE
+// SOCKET TAG UPDATE
 // =====================================================
 
 socket.on("tag_update", function (data) {
@@ -225,71 +392,44 @@ socket.on("tag_update", function (data) {
     }
 
 
-    const tag = data.Tag;
-
-    const value = data.Value;
-
-
-    if (!tag) {
-        return;
-    }
-
-
-    // ---------------------------------------------
-    // FIND VALUE ELEMENT
-    // ---------------------------------------------
-
-    const element = document.getElementById(
-        "value_" + tag
+    updateCard(
+        data.Tag,
+        data.Value
     );
 
 
-    if (!element) {
-
-        console.warn(
-            "Dashboard widget not found:",
-            tag
-        );
-
-        return;
-    }
-
-
-    // ---------------------------------------------
-    // UPDATE VALUE IMMEDIATELY
-    // ---------------------------------------------
-
-    element.textContent = value;
-
-
-    // ---------------------------------------------
-    // ONLINE
-    // ---------------------------------------------
-
     setOnline();
 
+});
 
-    // ---------------------------------------------
-    // OPTIONAL DEBUG
-    // ---------------------------------------------
 
-    console.log(
-        "DASHBOARD UPDATED:",
-        tag,
-        value
+// =====================================================
+// SOCKET ERROR
+// =====================================================
+
+socket.on("connect_error", function (error) {
+
+    console.error(
+        "Socket.IO connection error:",
+        error
     );
 
 });
 
 
 // =====================================================
-// ONLINE STATUS
+// ONLINE
 // =====================================================
 
 function setOnline() {
 
     const status =
         document.getElementById("status");
+
+
+    if (!status) {
+        return;
+    }
 
 
     status.textContent = "ONLINE";
@@ -308,13 +448,18 @@ function setOnline() {
 
 
 // =====================================================
-// OFFLINE STATUS
+// OFFLINE
 // =====================================================
 
 function setOffline() {
 
     const status =
         document.getElementById("status");
+
+
+    if (!status) {
+        return;
+    }
 
 
     status.textContent = "OFFLINE";
@@ -333,13 +478,7 @@ function setOffline() {
 
 
 // =====================================================
-// INITIAL LATEST VALUES
-// =====================================================
-//
-// This is only for loading the current values
-// when the dashboard is opened.
-//
-// After that, Socket.IO handles live updates.
+// LOAD LATEST VALUES
 // =====================================================
 
 async function loadLatestValues() {
@@ -348,14 +487,25 @@ async function loadLatestValues() {
 
         const response =
             await fetch(
-                "/dashboard/latest"
+                "/dashboard/latest?t="
+                + Date.now(),
+                {
+                    method: "GET",
+
+                    cache: "no-store",
+
+                    headers: {
+                        "Cache-Control": "no-cache",
+                        "Pragma": "no-cache"
+                    }
+                }
             );
 
 
         if (!response.ok) {
 
             throw new Error(
-                "Latest values request failed"
+                "HTTP " + response.status
             );
 
         }
@@ -366,53 +516,52 @@ async function loadLatestValues() {
 
 
         console.log(
-            "INITIAL DASHBOARD DATA:",
+            "LATEST DASHBOARD DATA:",
             data
         );
 
 
         if (
-            data &&
-            data.Tags
+            !data ||
+            !data.Tags
         ) {
 
-            for (
-                const tag in data.Tags
-            ) {
-
-                const element =
-                    document.getElementById(
-                        "value_" + tag
-                    );
-
-
-                if (!element) {
-                    continue;
-                }
-
-
-                element.textContent =
-                    data.Tags[tag];
-
-            }
-
-
-            if (
-                Object.keys(data.Tags).length > 0
-            ) {
-
-                setOnline();
-
-            }
+            return;
 
         }
 
+
+        /*
+         * Update every dashboard card.
+         *
+         * Only the value text changes.
+         */
+
+        for (
+            const tag in data.Tags
+        ) {
+
+            updateCard(
+                tag,
+                data.Tags[tag]
+            );
+
+        }
+
+
+        if (
+            Object.keys(data.Tags).length > 0
+        ) {
+
+            setOnline();
+
+        }
 
     }
     catch (error) {
 
         console.error(
-            "DASHBOARD INITIAL DATA ERROR:",
+            "DASHBOARD DATA ERROR:",
             error
         );
 
@@ -422,16 +571,36 @@ async function loadLatestValues() {
 
 
 // =====================================================
-// LOAD INITIAL VALUES
+// INITIAL LOAD
 // =====================================================
 
 loadLatestValues();
 
 
-</script>
+// =====================================================
+// AUTOMATIC LIVE REFRESH
+// =====================================================
+//
+// This is the important part.
+//
+// The browser asks the server for the latest values
+// every 1 second.
+//
+// Therefore the dashboard does NOT require a manual
+// page refresh.
+//
+// Socket.IO can update the values immediately when
+// available, while this provides a reliable fallback.
+//
 
+setInterval(
+    loadLatestValues,
+    1000
+);
+
+
+</script>
 
 </body>
 
 </html>
-
