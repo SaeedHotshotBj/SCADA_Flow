@@ -8,18 +8,20 @@
 <style>
 *{box-sizing:border-box}
 body{margin:0;font-family:Arial,sans-serif;background:#111;color:#eee;overflow:hidden}
-#toolbar{height:105px;background:#1b1b1b;border-bottom:1px solid #333;padding:7px;overflow:auto}
+#toolbar{height:145px;background:#1b1b1b;border-bottom:1px solid #333;padding:7px;overflow:auto}
 .row{display:flex;align-items:center;gap:7px;margin-bottom:7px;flex-wrap:wrap}
 button,select,input{font:inherit}
 button{padding:7px 11px;border:1px solid #555;background:#292929;color:#fff;border-radius:4px;cursor:pointer}
 button:hover{background:#444}
+button.primary{background:#075e8a;border-color:#149bd0;font-weight:bold}
+button.primary:hover{background:#0874a8}
 input,select{padding:7px;background:#111;color:#fff;border:1px solid #555;border-radius:4px}
 #company_select{min-width:220px}.company-name{width:220px}.info{color:#aaa;padding-left:6px}
 #node_buttons{display:flex;gap:6px;flex-wrap:wrap}
-#drawflow-container{position:absolute;left:0;top:105px;right:360px;bottom:0;background:#181818}
+#drawflow-container{position:absolute;left:0;top:145px;right:360px;bottom:0;background:#181818}
 #drawflow{width:100%;height:100%}
 #status{position:absolute;left:10px;bottom:10px;padding:8px 12px;background:rgba(0,0,0,.75);border:1px solid #444;border-radius:4px;z-index:20}
-#properties{position:absolute;top:105px;right:0;bottom:0;width:360px;overflow-y:auto;background:#202020;border-left:1px solid #444;padding:12px}
+#properties{position:absolute;top:145px;right:0;bottom:0;width:360px;overflow-y:auto;background:#202020;border-left:1px solid #444;padding:12px}
 #properties .title{font-size:20px;font-weight:bold;margin-bottom:15px}
 .property-title{font-size:18px;font-weight:bold;margin-bottom:15px;padding-bottom:8px;border-bottom:1px solid #444}
 .property-field{margin-bottom:15px}.property-field label{display:block;margin-bottom:6px;color:#ccc}
@@ -38,9 +40,9 @@ input,select{padding:7px;background:#111;color:#fff;border:1px solid #555;border
         <input id="new_company_name" class="company-name" placeholder="New company name">
         <button onclick="createCompany()">NEW COMPANY</button>
         <button onclick="switchCompany()">OPEN COMPANY</button>
-        <button onclick="newFactory()">NEW FACTORY</button>
-        <button onclick="loadFactory()">LOAD FACTORY</button>
-        <button onclick="saveFactory()">SAVE FACTORY</button>
+        <button onclick="newCompanyFlow()">NEW EMPTY FLOW</button>
+        <button class="primary" onclick="saveCompanyFlow()">SAVE COMPANY FLOW</button>
+        <button onclick="loadCompanyFlow()">LOAD COMPANY FLOW</button>
         <span id="company_info" class="info">Company: {{ company_id }}</span>
     </div>
     <div id="node_buttons"></div>
@@ -59,13 +61,14 @@ input,select{padding:7px;background:#111;color:#fff;border:1px solid #555;border
 <script src="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.js"></script>
 <script>
 const currentCompanyId={{ company_id|tojson }};
+const isNewCompany={{ (request.args.get('new') == '1')|tojson }};
 let editor=null;
 let nodeRegistry={};
 let selectedNodeId=null;
 let flowRoles=[];
 
 function status(text){document.getElementById('status').textContent=text}
-function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
+function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#039;')}
 
 async function init(){
     editor=new Drawflow(document.getElementById('drawflow'));
@@ -76,8 +79,14 @@ async function init(){
     editor.on('nodeCreated',()=>refreshRoles());
     await loadCompanies();
     await loadRegistry();
-    await loadFactory();
-    status('SCADA FLOW EDITOR READY');
+    if(isNewCompany){
+        editor.clear();
+        await refreshRoles();
+        status('NEW COMPANY READY - DESIGN THEN SAVE COMPANY FLOW');
+    }else{
+        await loadCompanyFlow();
+        status('SCADA FLOW EDITOR READY');
+    }
 }
 
 document.addEventListener('DOMContentLoaded',init);
@@ -105,7 +114,7 @@ async function createCompany(){
         document.getElementById('new_company_name').value='';
         await loadCompanies();
         document.getElementById('company_select').value=String(id);
-        window.location.href='/flow?company_id='+encodeURIComponent(id);
+        window.location.href='/flow?company_id='+encodeURIComponent(id)+'&new=1';
     }catch(e){alert(e.message||'Company creation failed')}
 }
 
@@ -172,7 +181,7 @@ async function refreshRoles(){
     }
 }
 
-async function loadFactory(){
+async function loadCompanyFlow(){
     try{
         const r=await fetch('/flow.json?company_id='+encodeURIComponent(currentCompanyId));
         if(!r.ok) throw new Error('Flow load failed');
@@ -180,28 +189,29 @@ async function loadFactory(){
         editor.clear();
         if(flow && flow.drawflow) editor.import(flow);
         await refreshRoles();
-        status('FACTORY LOADED');
-    }catch(e){console.error(e);status('LOAD ERROR');alert('Could not load factory.')}
+        status('COMPANY FLOW LOADED: '+currentCompanyId);
+    }catch(e){console.error(e);status('LOAD ERROR');alert('Could not load company flow.')}
 }
 
-async function saveFactory(){
+async function saveCompanyFlow(){
     try{
         const flow=editor.export();
         const r=await fetch('/save_flow?company_id='+encodeURIComponent(currentCompanyId),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(flow)});
         const data=await r.json();
         if(!r.ok) throw new Error(data.message||'Save failed');
-        status('FACTORY SAVED');
+        status('COMPANY FLOW SAVED: COMPANY '+currentCompanyId);
         await refreshRoles();
-    }catch(e){console.error(e);status('SAVE ERROR');alert(e.message||'Could not save factory.')}
+        history.replaceState({},'', '/flow?company_id='+encodeURIComponent(currentCompanyId));
+    }catch(e){console.error(e);status('SAVE ERROR');alert(e.message||'Could not save company flow.')}
 }
 
-function newFactory(){
-    if(!confirm('Create a new empty factory flow?')) return;
+function newCompanyFlow(){
+    if(!confirm('Clear the current flow and start a new empty company flow?')) return;
     editor.clear();
     selectedNodeId=null;
     flowRoles=[];
     document.getElementById('property-content').textContent='Select Node';
-    status('NEW FACTORY');
+    status('NEW EMPTY COMPANY FLOW - CLICK SAVE COMPANY FLOW TO STORE IT');
 }
 
 function selectNode(id){
