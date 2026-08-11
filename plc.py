@@ -1,64 +1,89 @@
-```python
-from pymodbus.client.sync import ModbusTcpClient
+# ============================================================
+# SCADA_FLOW
+# PLC / MODBUS TCP COMMUNICATION
+#
+# No PLC configuration is stored here.
+#
+# IP, port, slave, register and count are supplied by
+# PLCReader.
+# ============================================================
 
+try:
 
-# =====================================================
-# MODBUS TCP READ
-# =====================================================
+    from pymodbus.client import ModbusTcpClient
+
+except ImportError:
+
+    from pymodbus.client.sync import ModbusTcpClient
+
 
 def read_registers(
     ip,
     port,
     slave,
-    start,
+    register,
     count,
     timeout=3
 ):
 
+    """
+    Read holding registers from PLC.
+
+    All PLC configuration comes from the Flow Editor.
+    """
+
     client = ModbusTcpClient(
-        host=ip,
-        port=port,
-        timeout=timeout
+        str(ip),
+        port=int(port),
+        timeout=float(timeout)
     )
 
     try:
 
         if not client.connect():
 
-            print(
-                "PLC Connection Failed:",
-                ip
+            raise ConnectionError(
+                f"Unable to connect to PLC {ip}:{port}"
             )
 
-            return None
+        # ----------------------------------------------------
+        # New PyModbus
+        # ----------------------------------------------------
 
-        result = client.read_holding_registers(
-            address=start,
-            count=count,
-            unit=slave
-        )
+        try:
+
+            result = client.read_holding_registers(
+                address=int(register),
+                count=int(count),
+                slave=int(slave)
+            )
+
+        # ----------------------------------------------------
+        # Old PyModbus
+        # ----------------------------------------------------
+
+        except TypeError:
+
+            result = client.read_holding_registers(
+                address=int(register),
+                count=int(count),
+                unit=int(slave)
+            )
+
+        # ----------------------------------------------------
+        # Check Modbus response
+        # ----------------------------------------------------
 
         if result.isError():
 
-            print(
-                "Modbus Read Error:",
-                ip
+            raise RuntimeError(
+                f"Modbus read error: {result}"
             )
 
-            return None
-
-        return result.registers
-
-    except Exception as e:
-
-        print(
-            "PLC Error:",
-            e
+        return list(
+            result.registers
         )
-
-        return None
 
     finally:
 
         client.close()
-```

@@ -1,0 +1,662 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>SCADA FLOW - Master</title>
+
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+
+        body {
+
+            margin: 0;
+
+            min-height: 100vh;
+
+            background: #20252b;
+
+            color: #ffffff;
+
+            font-family: Arial, sans-serif;
+        }
+
+
+        /* =====================================================
+           HEADER
+           ===================================================== */
+
+        .topbar {
+
+            height: 70px;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: space-between;
+
+            padding: 0 28px;
+
+            background: #171b20;
+
+            border-bottom:
+                1px solid #3d464f;
+        }
+
+
+        .brand {
+
+            display: flex;
+
+            align-items: center;
+
+            gap: 12px;
+        }
+
+
+        .brand-icon {
+
+            width: 38px;
+
+            height: 38px;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: center;
+
+            border-radius: 8px;
+
+            background: #1677ff;
+
+            font-weight: bold;
+
+            font-size: 18px;
+        }
+
+
+        .brand-text {
+
+            font-size: 20px;
+
+            font-weight: bold;
+
+            letter-spacing: 1px;
+        }
+
+
+        .master-label {
+
+            color: #9da7b0;
+
+            font-size: 13px;
+        }
+
+
+        .logout {
+
+            color: #c3c9ce;
+
+            text-decoration: none;
+
+            padding: 9px 14px;
+
+            border-radius: 6px;
+
+            border:
+                1px solid #48525c;
+        }
+
+
+        .logout:hover {
+
+            background: #343c44;
+
+            color: white;
+        }
+
+
+        /* =====================================================
+           MAIN
+           ===================================================== */
+
+        .main {
+
+            padding: 28px;
+        }
+
+
+        .page-title {
+
+            margin-bottom: 25px;
+        }
+
+
+        .page-title h1 {
+
+            margin: 0;
+
+            font-size: 25px;
+        }
+
+
+        .page-title p {
+
+            margin:
+                7px 0 0;
+
+            color: #8f9aa4;
+
+            font-size: 14px;
+        }
+
+
+        /* =====================================================
+           COMPANY CONTROL PANEL
+           ===================================================== */
+
+        .control-panel {
+
+            width: 520px;
+
+            max-width: 100%;
+
+            background: #2b3239;
+
+            border:
+                1px solid #46515b;
+
+            border-radius: 10px;
+
+            padding: 22px;
+
+            box-shadow:
+                0 8px 25px
+                rgba(0, 0, 0, 0.25);
+        }
+
+
+        .panel-title {
+
+            margin-bottom: 18px;
+
+            font-size: 16px;
+
+            font-weight: bold;
+        }
+
+
+        .select-row {
+
+            display: flex;
+
+            gap: 10px;
+
+            align-items: center;
+        }
+
+
+        select {
+
+            flex: 1;
+
+            min-width: 0;
+
+            padding: 11px 13px;
+
+            background: #20252b;
+
+            color: white;
+
+            border:
+                1px solid #59636d;
+
+            border-radius: 7px;
+
+            font-size: 14px;
+
+            outline: none;
+
+            cursor: pointer;
+        }
+
+
+        select:focus {
+
+            border-color: #1677ff;
+        }
+
+
+        .company-info {
+
+            margin-top: 10px;
+
+            color: #7f8a94;
+
+            font-size: 12px;
+        }
+
+
+        /* =====================================================
+           BUTTONS
+           ===================================================== */
+
+        .buttons {
+
+            display: flex;
+
+            gap: 10px;
+
+            margin-top: 18px;
+        }
+
+
+        button {
+
+            padding: 10px 17px;
+
+            border-radius: 7px;
+
+            border: none;
+
+            font-size: 13px;
+
+            font-weight: bold;
+
+            cursor: pointer;
+        }
+
+
+        .enter {
+
+            background: #1677ff;
+
+            color: white;
+        }
+
+
+        .enter:hover {
+
+            background: #0866df;
+        }
+
+
+        .flow {
+
+            background: #3a444e;
+
+            color: white;
+
+            border:
+                1px solid #596570;
+        }
+
+
+        .flow:hover {
+
+            background: #48545f;
+        }
+
+
+        /* =====================================================
+           FUTURE CONTENT AREA
+           ===================================================== */
+
+        .content-area {
+
+            margin-top: 30px;
+
+            min-height: 400px;
+
+            background: #252b31;
+
+            border:
+                1px solid #353e46;
+
+            border-radius: 10px;
+
+            padding: 25px;
+        }
+
+
+        .content-title {
+
+            color: #8f9aa4;
+
+            font-size: 13px;
+
+            margin-bottom: 20px;
+        }
+
+
+        /* =====================================================
+           MOBILE
+           ===================================================== */
+
+        @media (
+            max-width: 650px
+        ) {
+
+            .topbar {
+
+                padding: 0 15px;
+            }
+
+
+            .main {
+
+                padding: 18px;
+            }
+
+
+            .select-row {
+
+                flex-direction: column;
+
+                align-items: stretch;
+            }
+
+
+            .buttons {
+
+                flex-direction: column;
+            }
+
+
+            button {
+
+                width: 100%;
+            }
+
+        }
+
+    </style>
+
+</head>
+
+
+<body>
+
+
+<!-- =====================================================
+     TOP BAR
+     ===================================================== -->
+
+<header class="topbar">
+
+
+    <div class="brand">
+
+        <div class="brand-icon">
+            S
+        </div>
+
+        <div>
+
+            <div class="brand-text">
+                SCADA FLOW
+            </div>
+
+            <div class="master-label">
+                Master Control
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <a
+        class="logout"
+        href="{{ url_for('logout') }}"
+    >
+        Logout
+    </a>
+
+
+</header>
+
+
+<!-- =====================================================
+     MAIN
+     ===================================================== -->
+
+<main class="main">
+
+
+    <div class="page-title">
+
+        <h1>
+            Master Panel
+        </h1>
+
+        <p>
+            Select a company or open the Flow Designer.
+        </p>
+
+    </div>
+
+
+    <!-- =================================================
+         COMPANY CONTROL
+         ================================================= -->
+
+    <div class="control-panel">
+
+
+        <div class="panel-title">
+            Company
+        </div>
+
+
+        <div class="select-row">
+
+
+            <select id="company">
+
+                <option value="">
+                    Select Company
+                </option>
+
+
+                {% for company in companies %}
+
+                <option
+                    value="{{ company.CompanyID }}"
+                >
+
+                    {{ company.CompanyName }}
+
+                </option>
+
+                {% endfor %}
+
+            </select>
+
+
+        </div>
+
+
+        <div
+            id="companyInfo"
+            class="company-info"
+        >
+            No company selected
+        </div>
+
+
+        <div class="buttons">
+
+
+            <button
+                type="button"
+                class="enter"
+                onclick="enterCompany()"
+            >
+                ENTER COMPANY
+            </button>
+
+
+            <button
+                type="button"
+                class="flow"
+                onclick="openFlow()"
+            >
+                FLOW DESIGNER
+            </button>
+
+
+        </div>
+
+
+    </div>
+
+
+    <!-- =================================================
+         FUTURE MASTER CONTENT
+         ================================================= -->
+
+    <div class="content-area">
+
+        <div class="content-title">
+            Master workspace
+        </div>
+
+        <!--
+            Future Master controls can be added here.
+        -->
+
+    </div>
+
+
+</main>
+
+
+<script>
+
+
+    const companySelect =
+        document.getElementById(
+            "company"
+        );
+
+
+    const companyInfo =
+        document.getElementById(
+            "companyInfo"
+        );
+
+
+    companySelect.addEventListener(
+        "change",
+        function () {
+
+            if (!this.value) {
+
+                companyInfo.textContent =
+                    "No company selected";
+
+                return;
+            }
+
+
+            const selected =
+                this.options[
+                    this.selectedIndex
+                ];
+
+
+            companyInfo.textContent =
+                selected.text.trim()
+                +
+                "  •  Company ID: "
+                +
+                this.value;
+
+        }
+    );
+
+
+    function getCompanyId() {
+
+        const companyId =
+            companySelect.value;
+
+
+        if (!companyId) {
+
+            alert(
+                "Please select a company."
+            );
+
+            return null;
+        }
+
+
+        return companyId;
+    }
+
+
+    function enterCompany() {
+
+        const companyId =
+            getCompanyId();
+
+
+        if (!companyId) {
+            return;
+        }
+
+
+        window.location.href =
+            "/dashboard?company_id="
+            +
+            encodeURIComponent(
+                companyId
+            );
+
+    }
+
+
+    function openFlow() {
+
+        const companyId =
+            getCompanyId();
+
+
+        if (!companyId) {
+            return;
+        }
+
+
+        window.location.href =
+            "/flow?company_id="
+            +
+            encodeURIComponent(
+                companyId
+            );
+
+    }
+
+</script>
+
+
+</body>
+
+</html>
+

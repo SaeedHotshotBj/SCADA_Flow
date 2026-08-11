@@ -39,7 +39,7 @@
                         "mappings": [
                             {
                                 "register": 135,
-                                "name": "voltage12",
+                                "name": "voltage1",
                                 "datatype": "INT",
                                 "scale": 1,
                                 "storage": "TIME",
@@ -49,11 +49,11 @@
                             },
                             {
                                 "register": 141,
-                                "name": "current",
+                                "name": "current1",
                                 "datatype": "INT",
                                 "scale": 1,
                                 "storage": "TIME",
-                                "interval": 1,
+                                "interval": 10,
                                 "trigger_register": 0,
                                 "trigger_value": 0
                             }
@@ -218,9 +218,14 @@
                     "data": {
                         "widgets": [
                             {
-                                "tag": "voltage12",
-                                "title": "voltage12",
+                                "tag": "voltage1",
+                                "title": "voltage1",
                                 "unit": "volt"
+                            },
+                            {
+                                "tag": "current1",
+                                "title": "current1",
+                                "unit": "amper"
                             }
                         ]
                     },

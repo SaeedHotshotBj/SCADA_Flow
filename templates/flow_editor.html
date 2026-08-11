@@ -1,2554 +1,1174 @@
 <!DOCTYPE html>
-
-<html>
+<html lang="en">
 
 <head>
 
-<title>SCADA FLOW Editor</title>
-
-
-<link rel="stylesheet"
-href="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.css">
-
-
-<script src="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.js"></script>
-
-
-
-<style>
-
-
-body{
-
-    margin:0;
-
-    font-family:Arial;
-
-    overflow:hidden;
-
-}
-
-
-
-/* ==============================
-   TOOLBAR
-============================== */
-
-
-#toolbar{
-
-    height:60px;
-
-    background:#222;
-
-    color:white;
-
-    display:flex;
-
-    align-items:center;
-
-    gap:8px;
-
-    padding:10px;
-
-}
-
-
-
-
-#node_buttons{
-
-    display:flex;
-
-    gap:5px;
-
-    flex-wrap:wrap;
-
-}
-
-
-
-
-
-button{
-
-    padding:8px 12px;
-
-    cursor:pointer;
-
-}
-
-
-
-
-
-
-
-/* ==============================
-   MAIN AREA
-============================== */
-
-
-#main{
-
-    display:flex;
-
-    height:calc(100vh - 60px);
-
-}
-
-
-
-
-
-#drawflow{
-
-    flex:1;
-
-    background:#111;
-
-}
-
-
-
-
-
-
-
-/* ==============================
-   RESIZABLE PROPERTIES PANEL
-============================== */
-
-
-#resize-bar{
-
-
-    width:6px;
-
-
-    background:#888;
-
-
-    cursor:col-resize;
-
-
-}
-
-
-
-
-
-#properties{
-
-
-    width:400px;
-
-
-    min-width:250px;
-
-
-    max-width:900px;
-
-
-    background:#eeeeee;
-
-
-    padding:15px;
-
-
-    overflow:auto;
-
-
-}
-
-
-
-
-
-
-
-/* ==============================
-   SMALL DRAWFLOW BLOCKS
-============================== */
-
-
-.drawflow .drawflow-node {
-
-
-    width:120px !important;
-
-    min-width:120px !important;
-
-    min-height:50px !important;
-
-
-}
-
-
-
-
-
-.drawflow .drawflow-node .drawflow_content_node {
-
-
-    padding:5px !important;
-
-
-    font-size:12px !important;
-
-
-}
-
-
-
-
-.drawflow .drawflow-node .input,
-.drawflow .drawflow-node .output {
-
-
-    width:12px !important;
-
-
-    height:12px !important;
-
-
-}
-
-
-
-
-
-/* ==============================
-   PROPERTY ELEMENTS
-============================== */
-
-
-input,
-select,
-textarea{
-
-
-    width:95%;
-
-
-    padding:7px;
-
-
-    margin:5px 0;
-
-
-    box-sizing:border-box;
-
-
-}
-
-
-
-
-
-.checkbox-list{
-
-
-    background:white;
-
-
-    border:1px solid #aaa;
-
-
-    padding:10px;
-
-
-    max-height:200px;
-
-
-    overflow:auto;
-
-
-}
-
-
-
-
-
-.checkbox-item{
-
-
-    display:flex;
-
-
-    align-items:center;
-
-
-    margin:5px 0;
-
-
-}
-
-
-
-
-
-.checkbox-item input{
-
-
-    width:auto;
-
-
-    margin-right:8px;
-
-
-}
-
-
-
-
-
-table{
-
-
-    width:100%;
-
-
-    border-collapse:collapse;
-
-
-    display:block;
-
-
-    overflow-x:auto;
-
-
-    white-space:nowrap;
-
-
-}
-
-
-
-
-
-th,
-td{
-
-
-    border:1px solid #aaa;
-
-
-    padding:4px;
-
-
-    text-align:center;
-
-
-}
-
-
-
-
-
-.card{
-
-
-    background:white;
-
-
-    padding:10px;
-
-
-    margin-bottom:10px;
-
-
-    border-radius:5px;
-
-
-}
-
-
-
-
-
-.title{
-
-
-    font-size:20px;
-
-
-    font-weight:bold;
-
-
-    margin-bottom:15px;
-
-
-}
-
-
-
-
-
-.save{
-
-
-    background:green;
-
-
-    color:white;
-
-
-}
-
-
-
-
-
-.delete{
-
-
-    background:red;
-
-
-    color:white;
-
-
-}
-
-
-
-
-
-.add{
-
-
-    background:#0066ff;
-
-
-    color:white;
-
-
-}
-
-
-
-</style>
-
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>SCADA FLOW EDITOR</title>
+
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.css"
+    >
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #111;
+            color: #eee;
+            overflow: hidden;
+        }
+
+        #node_buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 8px;
+            background: #1b1b1b;
+            border-bottom: 1px solid #333;
+        }
+
+        #node_buttons button,
+        .new-factory,
+        .load-factory,
+        .save-factory,
+        .table-actions button,
+        .delete-row {
+            padding: 7px 12px;
+            border: 1px solid #555;
+            background: #292929;
+            color: white;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+
+        #node_buttons button:hover,
+        .new-factory:hover,
+        .load-factory:hover,
+        .save-factory:hover,
+        .table-actions button:hover,
+        .delete-row:hover {
+            background: #444;
+        }
+
+        .new-factory,
+        .load-factory,
+        .save-factory {
+            margin: 8px 4px;
+        }
+
+        .factory-info {
+            display: inline-block;
+            margin-left: 10px;
+            padding: 8px;
+            color: #bbb;
+        }
+
+        #drawflow-container {
+            position: absolute;
+            left: 0;
+            top: 105px;
+            right: 360px;
+            bottom: 0;
+            background: #181818;
+        }
+
+        #drawflow {
+            width: 100%;
+            height: 100%;
+        }
+
+        #status {
+            position: absolute;
+            left: 10px;
+            bottom: 10px;
+            padding: 8px 12px;
+            background: rgba(0,0,0,.75);
+            border: 1px solid #444;
+            border-radius: 4px;
+            z-index: 20;
+        }
+
+        #resize-bar {
+            position: absolute;
+            top: 105px;
+            right: 360px;
+            bottom: 0;
+            width: 4px;
+            background: #444;
+        }
+
+        #properties {
+            position: absolute;
+            top: 105px;
+            right: 0;
+            bottom: 0;
+            width: 360px;
+            overflow-y: auto;
+            background: #202020;
+            border-left: 1px solid #444;
+            padding: 12px;
+        }
+
+        #properties .title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+
+        .property-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #444;
+        }
+
+        .property-field {
+            margin-bottom: 15px;
+        }
+
+        .property-field label {
+            display: block;
+            margin-bottom: 6px;
+            color: #ccc;
+        }
+
+        .property-field input,
+        .property-field select {
+            width: 100%;
+            padding: 7px;
+            background: #111;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+
+        .config-table-wrapper {
+            overflow-x: auto;
+        }
+
+        .config-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .config-table th,
+        .config-table td {
+            border: 1px solid #444;
+            padding: 5px;
+        }
+
+        .config-table th {
+            background: #292929;
+        }
+
+        .config-table input,
+        .config-table select {
+            width: 100%;
+            min-width: 80px;
+            padding: 5px;
+            background: #111;
+            color: white;
+            border: 1px solid #555;
+        }
+
+        .table-actions {
+            margin-top: 8px;
+        }
+
+        .delete-row {
+            padding: 5px 8px;
+        }
+
+        .drawflow .drawflow-node {
+            background: #252525;
+            border: 1px solid #777;
+            color: white;
+        }
+
+        .drawflow .drawflow-node.selected {
+            border: 2px solid #00aaff;
+        }
+
+        .drawflow .drawflow-node .title-box {
+            padding: 10px;
+            font-weight: bold;
+        }
+
+    </style>
 
 </head>
 
-
 <body>
 
+    <div id="node_buttons"></div>
 
+    <button
+        class="new-factory"
+        onclick="newFactory()">
+        NEW FACTORY
+    </button>
 
-<div id="toolbar">
+    <button
+        class="load-factory"
+        onclick="loadFactory()">
+        LOAD FACTORY
+    </button>
 
+    <button
+        class="save-factory"
+        onclick="saveFactory()">
+        SAVE FACTORY
+    </button>
 
-<div id="node_buttons"></div>
+    <div
+        id="factory-info"
+        class="factory-info">
+        No Factory Selected
+    </div>
 
+    <div id="drawflow-container">
 
+        <div id="drawflow"></div>
 
-<button onclick="loadFlow()">
+        <div id="status">
+            SCADA FLOW EDITOR
+        </div>
 
-LOAD FLOW
+    </div>
 
-</button>
+    <div id="resize-bar"></div>
 
+    <div id="properties">
 
+        <div class="title">
+            Properties
+        </div>
 
-<button onclick="saveFlow()">
+        <div id="property-content">
+            Select Node
+        </div>
 
-SAVE FLOW
+    </div>
 
-</button>
+    <script src="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.js"></script>
 
+    <script>
 
+        let editor = null;
+        let nodeRegistry = {};
+        let selectedNodeId = null;
+        let flowRoles = [];
 
-</div>
+        document.addEventListener(
+            "DOMContentLoaded",
+            async function () {
 
+                editor = new Drawflow(
+                    document.getElementById("drawflow")
+                );
 
+                editor.reroute = true;
+                editor.start();
 
+                registerEvents();
 
+                await loadNodeRegistry();
+                await loadFlowRoles();
 
-
-<div id="main">
-
-
-<div id="drawflow"></div>
-
-
-<div id="resize-bar"></div>
-
-
-<div id="properties">
-
-
-<div class="title">
-
-Properties
-
-</div>
-
-
-Select Node
-
-
-</div>
-
-
-</div>
-
-
-
-<script>
-
-
-    let editor = new Drawflow(
-        document.getElementById("drawflow")
-    );
-    
-    
-    editor.start();
-    
-    
-    editor.reroute = true;
-    
-    
-    
-    let selectedNode = null;
-    
-    
-    let NODE_REGISTRY = {};
-    
-    
-    let availableTags = [];
-    
-    
-    
-    
-    
-    // ==============================
-    // LOAD REGISTRY
-    // ==============================
-    
-    
-    async function loadRegistry(){
-    
-    
-        try{
-    
-    
-            let response = await fetch("/node_registry");
-    
-    
-            let data = await response.json();
-    
-    
-    
-            console.log(
-                "REGISTRY:",
-                data
-            );
-    
-    
-    
-            NODE_REGISTRY = data;
-    
-    
-            createNodeButtons();
-    
-    
-    
-        }
-    
-    
-        catch(error){
-    
-    
-            console.error(
-                "REGISTRY LOAD ERROR",
-                error
-            );
-    
-    
-        }
-    
-    
-    }
-    
-    
-    
-    loadRegistry();
-    
-    
-    
-    
-    
-    
-    
-    
-    // ==============================
-    // CREATE BUTTONS
-    // ==============================
-    
-    
-    function createNodeButtons(){
-    
-    
-        let area =
-        document.getElementById(
-            "node_buttons"
-        );
-    
-    
-    
-        area.innerHTML="";
-    
-    
-    
-        Object.keys(
-            NODE_REGISTRY
-        )
-        .forEach(name=>{
-    
-    
-            let button =
-            document.createElement(
-                "button"
-            );
-    
-    
-            button.innerHTML=name;
-    
-    
-    
-            button.onclick=function(){
-    
-    
-                addNode(name);
-    
-    
-            };
-    
-    
-    
-            area.appendChild(button);
-    
-    
-    
-        });
-    
-    
-    
-    }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    // ==============================
-    // ADD NODE
-    // ==============================
-    
-    
-    function addNode(name){
-    
-    
-    
-        let config =
-        NODE_REGISTRY[name];
-    
-    
-    
-        if(!config){
-    
-            console.error(
-                "NODE CONFIG NOT FOUND",
-                name
-            );
-    
-            return;
-    
-        }
-    
-    
-    
-    
-        let data={};
-    
-    
-    
-        config.config.forEach(item=>{
-    
-    
-            if(
-                item.type=="table"
-                ||
-                item.type=="multiselect"
-            ){
-    
-    
-                data[item.name]=[];
-    
-    
+                updateStatus(
+                    "SCADA FLOW EDITOR READY"
+                );
             }
-    
-            else{
-    
-    
-                data[item.name]=
-                item.default ?? "";
-    
-    
-            }
-    
-    
-        });
-    
-    
-    
-    
-    
-    
-    
-        editor.addNode(
-    
-    
-            name,
-    
-    
-            1,
-    
-    
-            1,
-    
-    
-            150,
-    
-    
-            100,
-    
-    
-            name,
-    
-    
-            data,
-    
-    
-            name
-    
-    
         );
-    
-    
-    
-        updateAvailableTags();
-    
-    
-    
-    }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    // ==============================
-    // UPDATE AVAILABLE TAGS
-    // ==============================
-    
-    
-    function updateAvailableTags(){
-    
-    
-    availableTags=[];
-    
-    
-    
-    let flow =
-    editor.export();
-    
-    
-    
-    
-    if(
-        !flow.drawflow.Home
-        ||
-        !flow.drawflow.Home.data
-    ){
-    
-        return;
-    
-    }
-    
-    
-    
-    
-    
-    Object.values(
-        flow.drawflow.Home.data
-    )
-    
-    .forEach(node=>{
-    
-    
-    
-        if(node.name=="TagMapper"){
-    
-    
-    
-            (node.data.mappings || [])
-    
-            .forEach(row=>{
-    
-    
-                if(
-                    row.name
-                    &&
-                    !availableTags.includes(row.name)
-                ){
-    
-    
-                    availableTags.push(
-                        row.name
-                    );
-    
-    
-                }
-    
-    
-            });
-    
-    
+
+        function updateStatus(message) {
+
+            document.getElementById(
+                "status"
+            ).textContent = message;
+
         }
-    
-    
-    
-    
-    
-        if(node.name=="ExpressionNode"){
-    
-    
-    
-            (node.data.expressions || [])
-    
-            .forEach(row=>{
-    
-    
-                if(
-                    row.name
-                    &&
-                    !availableTags.includes(row.name)
-                ){
-    
-    
-                    availableTags.push(
-                        row.name
+
+        async function loadNodeRegistry() {
+
+            try {
+
+                const response =
+                    await fetch("/node_registry");
+
+                if (!response.ok) {
+                    throw new Error(
+                        "Node registry request failed"
                     );
-    
-    
                 }
-    
-    
-            });
-    
-    
+
+                nodeRegistry =
+                    await response.json();
+
+                createNodeButtons();
+
+            }
+            catch (error) {
+
+                console.error(error);
+
+                updateStatus(
+                    "NODE REGISTRY ERROR"
+                );
+
+            }
         }
-    
-    
-    
-    });
-    
-    
-    
-    
-    console.log(
-    
-    "AVAILABLE TAGS:",
-    
-    availableTags
-    
-    );
-    
-    
-    
-    }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    // ==============================
-    // NODE SELECT
-    // ==============================
-    
-    
-    editor.on(
-    
-    "nodeSelected",
-    
-    function(id){
-    
-    
-        selectedNode=id;
-    
-    
-        loadProperties(id);
-    
-    
-    }
-    
-    );
-    
 
+        async function loadFlowRoles() {
 
+            try {
 
-    
-// ==============================
-// LOAD PROPERTIES
-// ==============================
+                const response =
+                    await fetch(
+                        "/flow_roles?company_id={{ company_id }}"
+                    );
 
+                if (!response.ok) {
+                    return;
+                }
 
-function loadProperties(id){
+                const roles =
+                    await response.json();
 
+                flowRoles =
+                    roles
+                        .map(
+                            item => item.role
+                        )
+                        .filter(
+                            role => role
+                        );
 
+            }
+            catch (error) {
 
-updateAvailableTags();
+                console.error(
+                    "FLOW ROLES ERROR:",
+                    error
+                );
 
+                flowRoles = [];
 
+            }
+        }
 
-let node =
-editor.getNodeFromId(id);
+        function createNodeButtons() {
 
+            const container =
+                document.getElementById(
+                    "node_buttons"
+                );
 
+            container.innerHTML = "";
 
-if(!node){
+            Object.keys(nodeRegistry).forEach(
+                function (nodeName) {
 
-    return;
+                    const button =
+                        document.createElement(
+                            "button"
+                        );
 
-}
+                    button.textContent =
+                        nodeName;
 
+                    button.onclick =
+                        function () {
 
+                            addNode(
+                                nodeName
+                            );
 
-let config =
-NODE_REGISTRY[node.name];
+                        };
 
+                    container.appendChild(
+                        button
+                    );
 
+                }
+            );
+        }
 
-if(!config){
+        function addNode(nodeName) {
 
-    return;
+            if (!editor) {
+                return;
+            }
 
-}
+            let nodeData = {};
 
+            if (nodeName === "RolesEngaged") {
 
+                nodeData = {
+                    roles: []
+                };
 
+            }
 
+            const id =
+                editor.addNode(
+                    nodeName,
+                    1,
+                    1,
+                    150 + Math.random() * 250,
+                    100 + Math.random() * 250,
+                    nodeName,
+                    nodeData,
+                    createNodeHTML(nodeName),
+                    false
+                );
 
-let html=`
+            selectNode(id);
 
+            updateStatus(
+                "NODE ADDED: " + nodeName
+            );
+        }
 
-<div class="title">
+        function createNodeHTML(nodeName) {
 
-${node.name}
+            return `
+                <div class="title-box">
+                    ${escapeHtml(nodeName)}
+                </div>
+            `;
+        }
 
-</div>
+        function escapeHtml(value) {
 
+            return String(value)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
 
-`;
+        }
 
+        function registerEvents() {
 
+            editor.on(
+                "nodeSelected",
+                function (id) {
 
+                    selectNode(id);
 
+                }
+            );
 
-config.config.forEach(item=>{
+            editor.on(
+                "nodeUnselected",
+                function () {
 
+                    selectedNodeId = null;
 
-    html += createProperty(
+                }
+            );
 
-        item,
+            editor.on(
+                "nodeCreated",
+                function (id) {
 
-        node.data[item.name]
+                    updateStatus(
+                        "NODE CREATED: " + id
+                    );
 
-    );
+                }
+            );
+        }
 
+        function selectNode(id) {
 
-});
+            selectedNodeId =
+                String(id);
 
+            const node =
+                editor.getNodeFromId(id);
 
+            if (!node) {
+                return;
+            }
 
+            renderProperties(node);
+        }
 
+        function renderProperties(node) {
 
+            const container =
+                document.getElementById(
+                    "property-content"
+                );
 
-html += `
+            container.innerHTML = "";
 
+            const title =
+                document.createElement(
+                    "div"
+                );
 
-<br>
+            title.className =
+                "property-title";
 
+            title.textContent =
+                node.name ||
+                node.class;
 
-<button
+            container.appendChild(
+                title
+            );
 
-class="save"
+            const definitions =
+                nodeRegistry[
+                    node.name
+                ];
 
-onclick="saveProperties()"
+            if (!definitions) {
 
->
+                container.innerHTML +=
+                    "<div>No properties.</div>";
 
-SAVE PROPERTIES
+                return;
+            }
 
-</button>
+            const configs =
+                definitions.config || [];
 
+            configs.forEach(
+                function (definition) {
 
-`;
+                    renderProperty(
+                        container,
+                        node,
+                        definition
+                    );
 
+                }
+            );
+        }
 
+        function renderProperty(
+            container,
+            node,
+            definition
+        ) {
 
+            const wrapper =
+                document.createElement(
+                    "div"
+                );
 
+            wrapper.className =
+                "property-field";
 
-document.getElementById(
-    "properties"
-).innerHTML=html;
+            const label =
+                document.createElement(
+                    "label"
+                );
 
+            label.textContent =
+                definition.label ||
+                definition.name;
 
+            wrapper.appendChild(
+                label
+            );
 
-}
+            const currentValue =
+                node.data[
+                    definition.name
+                ];
 
+            if (
+                definition.type ===
+                "table"
+            ) {
 
+                renderTableProperty(
+                    wrapper,
+                    node,
+                    definition,
+                    currentValue
+                );
 
+            }
+            else {
 
+                const input =
+                    createInput(
+                        definition,
+                        currentValue
+                    );
 
+                input.addEventListener(
+                    "change",
+                    function () {
 
+                        updateNodeValue(
+                            node,
+                            definition.name,
+                            getInputValue(
+                                input,
+                                definition
+                            )
+                        );
 
+                    }
+                );
 
+                wrapper.appendChild(
+                    input
+                );
+            }
 
-// ==============================
-// CREATE PROPERTY
-// ==============================
+            container.appendChild(
+                wrapper
+            );
+        }
 
+        function createInput(
+            definition,
+            value
+        ) {
 
-function createProperty(item,value){
+            let input;
 
+            if (
+                definition.type ===
+                "select"
+            ) {
 
+                input =
+                    document.createElement(
+                        "select"
+                    );
 
-let html=`
+                let options =
+                    definition.options || [];
 
+                if (
+                    definition.name ===
+                    "role"
+                ) {
 
-<div class="card">
+                    options =
+                        flowRoles;
 
+                }
+
+                options.forEach(
+                    function (option) {
 
-<b>
+                        const item =
+                            document.createElement(
+                                "option"
+                            );
+
+                        item.value =
+                            option;
 
-${item.label || item.name}
+                        item.textContent =
+                            option;
 
-</b>
+                        input.appendChild(
+                            item
+                        );
 
+                    }
+                );
+
+                input.value =
+                    value ??
+                    definition.default ??
+                    "";
+
+            }
+            else {
+
+                input =
+                    document.createElement(
+                        "input"
+                    );
+
+                input.type =
+                    definition.type ===
+                    "number"
+                        ? "number"
+                        : "text";
+
+                input.value =
+                    value ??
+                    definition.default ??
+                    "";
+
+            }
 
-<br>
+            return input;
+        }
+
+        function getInputValue(
+            input,
+            definition
+        ) {
 
+            if (
+                definition.type ===
+                "number"
+            ) {
+
+                return Number(
+                    input.value
+                );
+
+            }
 
-`;
+            return input.value;
+        }
+
+        function updateNodeValue(
+            node,
+            name,
+            value
+        ) {
 
+            node.data[name] =
+                value;
+
+            editor.updateNodeDataFromId(
+                node.id,
+                node.data
+            );
+        }
+
+        function renderTableProperty(
+            wrapper,
+            node,
+            definition,
+            value
+        ) {
+
+            let rows =
+                Array.isArray(value)
+                    ? value
+                    : [];
+
+            node.data[
+                definition.name
+            ] = rows;
+
+            const tableWrapper =
+                document.createElement(
+                    "div"
+                );
+
+            tableWrapper.className =
+                "config-table-wrapper";
+
+            const table =
+                document.createElement(
+                    "table"
+                );
+
+            table.className =
+                "config-table";
+
+            const thead =
+                document.createElement(
+                    "thead"
+                );
 
+            const headerRow =
+                document.createElement(
+                    "tr"
+                );
 
+            definition.columns.forEach(
+                function (column) {
 
+                    const th =
+                        document.createElement(
+                            "th"
+                        );
 
+                    th.textContent =
+                        column.label ||
+                        column.name;
 
+                    headerRow.appendChild(
+                        th
+                    );
 
-if(
+                }
+            );
 
-item.type=="text"
+            const actionHeader =
+                document.createElement(
+                    "th"
+                );
 
-||
+            actionHeader.textContent =
+                "Action";
 
-item.type=="number"
+            headerRow.appendChild(
+                actionHeader
+            );
 
-){
+            thead.appendChild(
+                headerRow
+            );
+
+            table.appendChild(
+                thead
+            );
+
+            const tbody =
+                document.createElement(
+                    "tbody"
+                );
 
+            rows.forEach(
+                function (row, index) {
+
+                    addTableRow(
+                        tbody,
+                        node,
+                        definition,
+                        row,
+                        index
+                    );
+
+                }
+            );
+
+            table.appendChild(
+                tbody
+            );
+
+            tableWrapper.appendChild(
+                table
+            );
+
+            wrapper.appendChild(
+                tableWrapper
+            );
+
+            const actions =
+                document.createElement(
+                    "div"
+                );
+
+            actions.className =
+                "table-actions";
+
+            const addButton =
+                document.createElement(
+                    "button"
+                );
+
+            addButton.textContent =
+                "ADD ROW";
+
+            addButton.onclick =
+                function () {
+
+                    const row = {};
+
+                    definition.columns.forEach(
+                        function (column) {
+
+                            row[column.name] =
+                                column.default ??
+                                "";
+
+                        }
+                    );
+
+                    rows.push(row);
+
+                    node.data[
+                        definition.name
+                    ] = rows;
+
+                    editor.updateNodeDataFromId(
+                        node.id,
+                        node.data
+                    );
+
+                    renderProperties(
+                        node
+                    );
+
+                };
+
+            actions.appendChild(
+                addButton
+            );
+
+            wrapper.appendChild(
+                actions
+            );
+        }
+
+        function addTableRow(
+            tbody,
+            node,
+            definition,
+            row,
+            index
+        ) {
+
+            const tr =
+                document.createElement(
+                    "tr"
+                );
+
+            definition.columns.forEach(
+                function (column) {
+
+                    const td =
+                        document.createElement(
+                            "td"
+                        );
+
+                    const input =
+                        createInput(
+                            column,
+                            row[column.name]
+                        );
+
+                    input.addEventListener(
+                        "change",
+                        function () {
+
+                            row[column.name] =
+                                getInputValue(
+                                    input,
+                                    column
+                                );
 
+                            editor.updateNodeDataFromId(
+                                node.id,
+                                node.data
+                            );
 
-html+=`
+                        }
+                    );
 
+                    td.appendChild(
+                        input
+                    );
 
-<input
+                    tr.appendChild(
+                        td
+                    );
 
+                }
+            );
 
-id="prop_${item.name}"
+            const actionTd =
+                document.createElement(
+                    "td"
+                );
 
+            const deleteButton =
+                document.createElement(
+                    "button"
+                );
 
-${item.type=="number" ?
+            deleteButton.textContent =
+                "DELETE";
 
-'type="number"' : ''}
+            deleteButton.className =
+                "delete-row";
 
+            deleteButton.onclick =
+                function () {
 
-value="${value ?? ""}"
+                    node.data[
+                        definition.name
+                    ].splice(
+                        index,
+                        1
+                    );
 
+                    editor.updateNodeDataFromId(
+                        node.id,
+                        node.data
+                    );
 
->
+                    renderProperties(
+                        node
+                    );
 
+                };
 
-`;
+            actionTd.appendChild(
+                deleteButton
+            );
 
+            tr.appendChild(
+                actionTd
+            );
 
+            tbody.appendChild(
+                tr
+            );
+        }
 
-}
+        function newFactory() {
 
+            if (
+                !confirm(
+                    "Create a new empty factory flow?"
+                )
+            ) {
 
+                return;
+            }
 
+            editor.clear();
 
+            selectedNodeId = null;
 
+            document.getElementById(
+                "property-content"
+            ).innerHTML =
+                "Select Node";
 
+            updateStatus(
+                "NEW FACTORY"
+            );
+        }
 
+        async function loadFactory() {
 
-else if(item.type=="select"){
+            try {
 
+                const response =
+                    await fetch(
+                        "/flow.json?company_id={{ company_id }}"
+                    );
 
+                if (!response.ok) {
 
-html+=`
+                    throw new Error(
+                        "Flow load failed"
+                    );
+                }
 
+                const flow =
+                    await response.json();
 
-<select
+                editor.clear();
 
-id="prop_${item.name}"
+                if (
+                    flow &&
+                    flow.drawflow
+                ) {
 
->
+                    editor.import(
+                        flow
+                    );
 
+                }
 
-`;
+                updateStatus(
+                    "FACTORY LOADED"
+                );
 
+            }
+            catch (error) {
 
+                console.error(error);
 
+                alert(
+                    "Could not load factory."
+                );
 
-(item.options || [])
+                updateStatus(
+                    "LOAD ERROR"
+                );
+            }
+        }
 
-.forEach(option=>{
+        async function saveFactory() {
 
+            try {
 
-html+=`
+                const flow =
+                    editor.export();
 
+                const response =
+                    await fetch(
+                        "/save_flow?company_id={{ company_id }}",
+                        {
+                            method: "POST",
 
-<option
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            },
 
+                            body:
+                                JSON.stringify(
+                                    flow
+                                )
+                        }
+                    );
 
-value="${option}"
+                const result =
+                    await response.json();
 
+                if (!response.ok) {
 
-${value==option ?
+                    throw new Error(
+                        result.message ||
+                        "Save failed"
+                    );
+                }
 
-"selected":""}
+                updateStatus(
+                    "FACTORY SAVED"
+                );
 
+                alert(
+                    "Factory flow saved successfully."
+                );
 
->
+            }
+            catch (error) {
 
+                console.error(error);
 
-${option}
+                alert(
+                    "Could not save factory."
+                );
 
+                updateStatus(
+                    "SAVE ERROR"
+                );
+            }
+        }
 
-</option>
-
-
-`;
-
-
-
-});
-
-
-
-html+=`
-
-
-</select>
-
-
-`;
-
-
-
-}
-
-
-
-
-
-
-
-
-
-
-else if(item.type=="multiselect"){
-
-
-
-html+=`
-
-
-<div
-
-
-class="checkbox-list"
-
-
-id="prop_${item.name}"
-
-
->
-
-
-`;
-
-
-
-
-
-availableTags.forEach(tag=>{
-
-
-
-let checked =
-
-(value || []).includes(tag)
-
-?
-
-"checked"
-
-:
-
-"";
-
-
-
-
-
-html+=`
-
-
-<div class="checkbox-item">
-
-
-<input
-
-
-type="checkbox"
-
-
-value="${tag}"
-
-
-${checked}
-
-
->
-
-
-${tag}
-
-
-</div>
-
-
-`;
-
-
-
-});
-
-
-
-
-html+=`
-
-
-</div>
-
-
-`;
-
-
-
-}
-
-
-
-
-
-
-
-
-
-else if(item.type=="table"){
-
-
-
-html+=createTable(item);
-
-
-
-setTimeout(()=>{
-
-
-renderTable(
-
-item.name,
-
-value
-
-);
-
-
-
-},50);
-
-
-
-}
-
-
-
-
-
-
-html+=`
-
-</div>
-
-`;
-
-
-
-return html;
-
-
-
-}
-
-
-
-
-
-
-
-
-
-
-
-// ==============================
-// CREATE TABLE
-// ==============================
-
-
-function createTable(item){
-
-
-
-let name=item.name;
-
-
-
-let html=`
-
-
-<table>
-
-
-<thead>
-
-
-<tr>
-
-
-<th>#</th>
-
-
-`;
-
-
-
-
-(item.columns || [])
-
-.forEach(col=>{
-
-
-html+=`
-
-<th>
-
-${col.label}
-
-</th>
-
-`;
-
-
-
-});
-
-
-
-html+=`
-
-<th>X</th>
-
-
-</tr>
-
-
-</thead>
-
-
-<tbody
-
-
-id="table_${name}"
-
-
->
-
-
-</tbody>
-
-
-</table>
-
-
-
-<br>
-
-
-<button
-
-
-class="add"
-
-
-onclick="addRow('${name}')"
-
-
->
-
-
-+ ADD ROW
-
-
-</button>
-
-
-`;
-
-
-
-return html;
-
-
-
-}
-
-
-
-
-
-
-
-
-
-
-
-// ==============================
-// RENDER TABLE
-// ==============================
-
-
-function renderTable(name,data){
-
-
-
-let body =
-
-document.getElementById(
-
-"table_"+name
-
-);
-
-
-
-if(!body)
-
-return;
-
-
-
-body.innerHTML="";
-
-
-
-
-(data || [])
-
-.forEach((row,index)=>{
-
-
-body.appendChild(
-
-createRow(
-
-name,
-
-row,
-
-index
-
-)
-
-);
-
-
-
-});
-
-
-
-}
-
-
-
-
-
-
-
-
-
-// ==============================
-// CREATE ROW
-// ==============================
-
-
-function createRow(name,row,index){
-
-
-let tr =
-
-document.createElement(
-
-"tr"
-
-);
-
-
-
-let html=`
-
-
-<td>
-
-${index+1}
-
-</td>
-
-
-`;
-
-
-
-let nodeConfig=null;
-
-
-
-
-Object.values(NODE_REGISTRY)
-
-.forEach(node=>{
-
-
-node.config.forEach(item=>{
-
-
-if(item.name==name)
-
-nodeConfig=item;
-
-
-
-});
-
-
-});
-
-
-
-
-
-
-(nodeConfig.columns || [])
-
-.forEach(col=>{
-
-
-
-let value =
-
-row[col.name] ?? "";
-
-
-
-html+=`<td>`;
-
-
-
-
-
-if(col.type=="select"){
-
-
-
-html+=`
-
-<select class="${col.name}">
-
-`;
-
-
-
-(col.options || [])
-
-.forEach(option=>{
-
-
-html+=`
-
-
-<option
-
-
-value="${option}"
-
-
-${value==option ?
-
-"selected":""}
-
-
->
-
-
-${option}
-
-
-</option>
-
-
-`;
-
-
-
-});
-
-
-
-html+=`
-
-</select>
-
-`;
-
-
-
-}
-
-
-
-
-
-else{
-
-
-
-html+=`
-
-
-<input
-
-
-class="${col.name}"
-
-
-type="${col.type=="number"
-
-?
-
-"number"
-
-:
-
-"text"}"
-
-
-value="${value}"
-
-
->
-
-
-`;
-
-
-
-}
-
-
-
-html+=`</td>`;
-
-
-
-});
-
-
-
-
-
-
-
-html+=`
-
-
-<td>
-
-
-<button
-
-
-class="delete"
-
-
-onclick="this.closest('tr').remove()"
-
-
->
-
-
-X
-
-
-</button>
-
-
-</td>
-
-
-`;
-
-
-
-
-
-tr.innerHTML=html;
-
-
-
-return tr;
-
-
-
-}
-
-
-
-
-
-
-
-
-// ==============================
-// ADD ROW
-// ==============================
-
-
-function addRow(name){
-
-
-
-let body =
-
-document.getElementById(
-
-"table_"+name
-
-);
-
-
-
-body.appendChild(
-
-createRow(
-
-name,
-
-{},
-
-body.children.length
-
-)
-
-);
-
-
-
-}
-
-
-
-// ==============================
-// SAVE PROPERTIES
-// ==============================
-
-
-function saveProperties(){
-
-
-
-if(selectedNode==null){
-
-
-    alert("Select node");
-
-    return;
-
-
-}
-
-
-
-
-
-let node =
-
-editor.getNodeFromId(
-
-    selectedNode
-
-);
-
-
-
-
-let config =
-
-NODE_REGISTRY[node.name];
-
-
-
-
-
-config.config.forEach(item=>{
-
-
-
-
-
-
-
-if(
-
-item.type=="text"
-
-||
-
-item.type=="number"
-
-||
-
-item.type=="select"
-
-){
-
-
-
-let el =
-
-document.getElementById(
-
-"prop_"+item.name
-
-);
-
-
-
-
-if(el){
-
-
-
-if(item.type=="number"){
-
-
-node.data[item.name]=
-
-Number(el.value);
-
-
-
-}
-
-else{
-
-
-node.data[item.name]=
-
-el.value;
-
-
-
-}
-
-
-
-}
-
-
-
-}
-
-
-
-
-
-
-
-
-
-else if(item.type=="multiselect"){
-
-
-
-let box =
-
-document.getElementById(
-
-"prop_"+item.name
-
-);
-
-
-
-let values=[];
-
-
-
-
-box.querySelectorAll(
-
-"input[type=checkbox]"
-
-)
-
-.forEach(check=>{
-
-
-
-if(check.checked){
-
-
-values.push(
-
-check.value
-
-);
-
-
-}
-
-
-
-});
-
-
-
-
-node.data[item.name]=values;
-
-
-
-}
-
-
-
-
-
-
-
-
-
-
-else if(item.type=="table"){
-
-
-
-let rows=[];
-
-
-
-
-document.querySelectorAll(
-
-
-"#table_"+item.name+" tr"
-
-
-)
-
-.forEach(tr=>{
-
-
-
-let obj={};
-
-
-
-item.columns.forEach(col=>{
-
-
-
-let input =
-
-tr.querySelector(
-
-"."+col.name
-
-);
-
-
-
-if(input){
-
-
-
-if(col.type=="number"){
-
-
-
-obj[col.name]=
-
-Number(input.value);
-
-
-
-}
-
-else{
-
-
-
-obj[col.name]=
-
-input.value;
-
-
-
-}
-
-
-
-}
-
-
-
-});
-
-
-
-
-
-
-if(
-
-Object.keys(obj).length>0
-
-){
-
-
-rows.push(obj);
-
-
-}
-
-
-
-});
-
-
-
-
-
-node.data[item.name]=rows;
-
-
-
-}
-
-
-
-
-
-});
-
-
-
-
-
-
-
-
-
-let internal =
-
-editor.drawflow.drawflow.Home.data[selectedNode];
-
-
-
-if(internal){
-
-
-
-internal.data =
-
-JSON.parse(
-
-JSON.stringify(node.data)
-
-);
-
-
-
-}
-
-
-
-
-
-updateAvailableTags();
-
-
-
-alert(
-
-"PROPERTIES SAVED"
-
-);
-
-
-
-}
-
-
-
-
-
-
-
-
-
-
-
-// ==============================
-// SAVE FLOW
-// ==============================
-
-
-function saveFlow(){
-
-
-
-let data =
-
-editor.export();
-
-
-
-
-fetch(
-
-"/save_flow",
-
-{
-
-
-method:"POST",
-
-
-headers:{
-
-
-"Content-Type":
-
-"application/json"
-
-
-},
-
-
-body:
-
-JSON.stringify(data)
-
-
-
-}
-
-)
-
-.then(r=>r.json())
-
-.then(result=>{
-
-
-console.log(
-
-"SAVE RESULT:",
-
-result
-
-);
-
-
-alert(
-
-"FLOW SAVED"
-
-);
-
-
-})
-
-.catch(error=>{
-
-
-console.error(error);
-
-
-alert(
-
-"SAVE ERROR"
-
-);
-
-
-});
-
-
-
-}
-
-
-
-
-
-
-
-
-
-
-
-
-// ==============================
-// LOAD FLOW
-// ==============================
-
-
-function loadFlow(){
-
-
-
-fetch("/flow.json")
-
-.then(r=>r.json())
-
-.then(flow=>{
-
-
-
-editor.clear();
-
-
-
-editor.import(flow);
-
-
-
-
-setTimeout(()=>{
-
-
-
-Object.keys(
-
-editor.drawflow.drawflow.Home.data
-
-)
-
-.forEach(id=>{
-
-
-
-let node =
-
-editor.getNodeFromId(id);
-
-
-
-if(node){
-
-
-
-editor.updateNodeDataFromId(
-
-id,
-
-node.data
-
-);
-
-
-
-}
-
-
-
-});
-
-
-
-editor.zoom_refresh();
-
-
-
-updateAvailableTags();
-
-
-
-},1000);
-
-
-
-
-
-alert(
-
-"FLOW LOADED"
-
-);
-
-
-
-})
-
-.catch(error=>{
-
-
-console.error(error);
-
-
-alert(
-
-"LOAD ERROR"
-
-);
-
-
-
-});
-
-
-
-}
-
-
-
-
-
-
-
-
-
-// ==============================
-// DRAWFLOW EVENTS
-// ==============================
-
-
-editor.on(
-
-"nodeCreated",
-
-function(){
-
-
-updateAvailableTags();
-
-
-}
-
-);
-
-
-
-
-editor.on(
-
-"nodeRemoved",
-
-function(){
-
-
-updateAvailableTags();
-
-
-}
-
-);
-
-
-
-
-
-
-
-
-
-// ==============================
-// RESIZABLE PROPERTY PANEL
-// ==============================
-
-
-let resizeBar =
-
-document.getElementById(
-
-"resize-bar"
-
-);
-
-
-
-let properties =
-
-document.getElementById(
-
-"properties"
-
-);
-
-
-
-let resizing=false;
-
-
-
-
-
-resizeBar.onmousedown=function(){
-
-
-resizing=true;
-
-
-document.body.style.cursor=
-
-"col-resize";
-
-
-};
-
-
-
-
-
-
-document.onmousemove=function(e){
-
-
-
-if(!resizing)
-
-return;
-
-
-
-
-
-let width =
-
-window.innerWidth - e.clientX;
-
-
-
-
-
-if(
-
-width > 250
-
-&&
-
-width < 900
-
-){
-
-
-
-properties.style.width =
-
-width+"px";
-
-
-
-}
-
-
-
-};
-
-
-
-
-
-
-
-document.onmouseup=function(){
-
-
-
-resizing=false;
-
-
-document.body.style.cursor=
-
-"default";
-
-
-
-};
-
-
-
-
-
-</script>
-
+    </script>
 
 </body>
-
-
 </html>

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>SCADA FLOW - Access Denied</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            background:
+                radial-gradient(
+                    circle at top left,
+                    #29333d,
+                    #171b20 55%,
+                    #101317
+                );
+
+            font-family: Arial, sans-serif;
+            color: white;
+        }
+
+        .box {
+            width: 430px;
+            max-width: 92%;
+
+            padding: 42px 38px;
+
+            background: #2b3239;
+
+            border: 1px solid #46515b;
+            border-radius: 16px;
+
+            text-align: center;
+
+            box-shadow:
+                0 25px 60px rgba(0, 0, 0, 0.55);
+        }
+
+        .icon {
+            width: 72px;
+            height: 72px;
+
+            margin: 0 auto 22px;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            border-radius: 50%;
+
+            background: #492c2c;
+            border: 1px solid #704242;
+
+            color: #ff7777;
+
+            font-size: 34px;
+            font-weight: bold;
+        }
+
+        h1 {
+            margin: 0;
+
+            font-size: 25px;
+            letter-spacing: .5px;
+        }
+
+        .message {
+            margin-top: 12px;
+
+            color: #aeb7bf;
+
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .user {
+            margin-top: 20px;
+
+            padding: 11px;
+
+            background: #20252b;
+
+            border: 1px solid #424a52;
+            border-radius: 7px;
+
+            color: #d3d9de;
+
+            font-size: 13px;
+        }
+
+        .logout {
+            display: block;
+
+            margin-top: 25px;
+
+            padding: 13px;
+
+            background:
+                linear-gradient(
+                    135deg,
+                    #d94b4b,
+                    #a83232
+                );
+
+            color: white;
+
+            text-decoration: none;
+
+            border-radius: 8px;
+
+            font-size: 14px;
+            font-weight: bold;
+
+            transition: .2s;
+        }
+
+        .logout:hover {
+            background:
+                linear-gradient(
+                    135deg,
+                    #ed5959,
+                    #bd3939
+                );
+
+            transform: translateY(-1px);
+        }
+
+        .footer {
+            margin-top: 25px;
+
+            padding-top: 16px;
+
+            border-top: 1px solid #424a52;
+
+            color: #707b84;
+
+            font-size: 11px;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="box">
+
+    <div class="icon">
+        !
+    </div>
+
+    <h1>
+        Access Denied
+    </h1>
+
+    <div class="message">
+        You do not have permission to access this page.
+    </div>
+
+    {% if session.get("username") %}
+    <div class="user">
+        Logged in as:
+        <strong>{{ session.get("username") }}</strong>
+    </div>
+    {% endif %}
+
+    <a
+        href="{{ url_for('logout') }}"
+        class="logout"
+    >
+        LOGOUT
+    </a>
+
+    <div class="footer">
+        SCADA FLOW SYSTEM
+    </div>
+
+</div>
+
+</body>
+</html>
