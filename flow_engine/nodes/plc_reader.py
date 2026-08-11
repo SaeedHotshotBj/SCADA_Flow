@@ -2,15 +2,16 @@
 # SCADA_FLOW
 # PLC READER NODE
 #
-# PLC configuration comes ONLY from Drawflow.
-#
 # The SCADA_FLOW server normally receives live PLC values from
-# SCADA_FLOW_EDGE. When fresh edge historian data exists, use it
-# first so the VPS does not try to reach a PLC on the customer's
-# private LAN. Direct Modbus remains available as a fallback.
+# SCADA_FLOW_EDGE. The VPS must not attempt to connect directly
+# to a customer's private PLC network.
 #
-# Expected configuration:
+# Edge historian data is therefore the normal server-side source.
+# Direct Modbus can be explicitly enabled with the environment
+# variable SCADA_DIRECT_MODBUS=1 for installations where the PLC
+# is intentionally reachable from this server.
 #
+# Expected Drawflow configuration:
 # {
 #     "ip": "...",
 #     "port": ...,
@@ -20,25 +21,20 @@
 # }
 #
 # Output:
-#
 # data["Registers"] = {
 #     "100": value,
 #     "101": value,
 #     ...
 # }
-#
-# TagMapper uses these absolute register addresses.
 # ============================================================
+
+import os
 
 from plc import read_registers
 from database import get_connection
 
 
 class PLCReader:
-
-    # ========================================================
-    # INIT
-    # ========================================================
 
     def __init__(self, config=None, *args, **kwargs):
 
@@ -65,10 +61,8 @@ class PLCReader:
         """
         Read the latest values received from SCADA_FLOW_EDGE.
 
-        Register addresses are taken from the company's Tags table,
-        not hard-coded here. This keeps the Drawflow configuration
-        as the source of the PLC read range while the database maps
-        incoming edge tag names back to absolute register addresses.
+        The register mapping remains database/flow driven. This
+        method never contains fixed tag names or register values.
         """
 
         company_id = self._get_config("company_id")
@@ -78,11 +72,10 @@ class PLCReader:
 
         try:
             company_id = int(company_id)
+            start = int(register)
+            end = start + int(count) - 1
         except (TypeError, ValueError):
             return {}
-
-        start = int(register)
-        end = start + int(count) - 1
 
         conn = None
         cursor = None
@@ -120,10 +113,10 @@ class PLCReader:
             )
 
             rows = cursor.fetchall()
-
             registers = {}
 
             for row in rows:
+
                 address = row[0]
                 value = row[1]
 
@@ -158,6 +151,45 @@ class PLCReader:
                     pass
 
     # ========================================================
+    # DIRECT MODBUS
+    # ========================================================
+
+    def _read_direct_modbus(
+        self,
+        ip,
+        port,
+        slave,
+        register,
+        count
+    ):
+
+        raw_registers = read_registers(
+            ip=ip,
+            port=port,
+            slave=slave,
+            register=register,
+            count=count
+        )
+
+        registers = {}
+
+        for index, value in enumerate(raw_registers):
+
+            address = register + index
+            registers[str(address)] = value
+
+        print()
+        print("PLC READER: DIRECT MODBUS")
+        print(f"PLC: {ip}:{port}")
+        print(f"Slave: {slave}")
+        print(f"Start Register: {register}")
+        print(f"Count: {count}")
+        print(f"Registers Read: {len(raw_registers)}")
+        print()
+
+        return registers
+
+    # ========================================================
     # EXECUTE
     # ========================================================
 
@@ -166,19 +198,11 @@ class PLCReader:
         if data is None:
             data = {}
 
-        # ----------------------------------------------------
-        # Read configuration from Drawflow
-        # ----------------------------------------------------
-
         ip = self._get_config("ip")
         port = self._get_config("port")
         slave = self._get_config("slave")
         register = self._get_config("register")
         count = self._get_config("count")
-
-        # ----------------------------------------------------
-        # Validate configuration
-        # ----------------------------------------------------
 
         required = {
             "ip": ip,
@@ -200,40 +224,24 @@ class PLCReader:
                 f"Missing: {', '.join(missing)}"
             )
 
-        # ----------------------------------------------------
-        # Convert numeric configuration
-        # ----------------------------------------------------
-
         try:
             port = int(port)
             slave = int(slave)
             register = int(register)
             count = int(count)
-
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                "PLCReader configuration contains invalid "
-                "numeric values."
+                "PLCReader configuration contains invalid numeric values."
             ) from exc
 
-        # ----------------------------------------------------
-        # Validate numeric values
-        # ----------------------------------------------------
-
         if port <= 0:
-            raise ValueError(
-                "PLC port must be greater than zero."
-            )
+            raise ValueError("PLC port must be greater than zero.")
 
         if slave < 0:
-            raise ValueError(
-                "PLC slave ID cannot be negative."
-            )
+            raise ValueError("PLC slave ID cannot be negative.")
 
         if register < 0:
-            raise ValueError(
-                "PLC start register cannot be negative."
-            )
+            raise ValueError("PLC start register cannot be negative.")
 
         if count <= 0:
             raise ValueError(
@@ -241,11 +249,11 @@ class PLCReader:
             )
 
         # ----------------------------------------------------
-        # Prefer data received from SCADA_FLOW_EDGE.
-        #
-        # This is important on the VPS: the customer's PLC is on
-        # a private LAN and is not directly reachable from the VPS.
+        # SERVER DEFAULT: EDGE DATA
         # ----------------------------------------------------
+        # The VPS should not generate connection errors by trying
+        # to reach 192.168.x.x customer PLCs. Direct Modbus is an
+        # explicit opt-in for installations where it is required.
 
         registers = self._read_edge_registers(
             register,
@@ -264,49 +272,37 @@ class PLCReader:
             )
             print()
 
+        elif os.environ.get(
+            "SCADA_DIRECT_MODBUS",
+            "0"
+        ).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on"
+        }:
+
+            registers = self._read_direct_modbus(
+                ip,
+                port,
+                slave,
+                register,
+                count
+            )
+
         else:
 
-            # ------------------------------------------------
-            # No edge historian values are available.
-            # Fall back to direct Modbus using Drawflow config.
-            # ------------------------------------------------
-
-            raw_registers = read_registers(
-                ip=ip,
-                port=port,
-                slave=slave,
-                register=register,
-                count=count
-            )
-
-            for index, value in enumerate(raw_registers):
-
-                address = register + index
-
-                registers[str(address)] = value
-
+            # No edge value is currently available. This is a
+            # normal transient state, not a PLC connection error.
             print()
-            print("PLC READER: DIRECT MODBUS")
+            print("PLC READER: WAITING FOR EDGE DATA")
             print(
-                f"PLC: {ip}:{port}"
+                f"Company: {self._get_config('company_id')}"
             )
             print(
-                f"Slave: {slave}"
-            )
-            print(
-                f"Start Register: {register}"
-            )
-            print(
-                f"Count: {count}"
-            )
-            print(
-                f"Registers Read: {len(raw_registers)}"
+                f"Register Range: {register}-{register + count - 1}"
             )
             print()
-
-        # ----------------------------------------------------
-        # Output
-        # ----------------------------------------------------
 
         result = dict(data)
 
@@ -319,8 +315,6 @@ class PLCReader:
         }
 
         result["Registers"] = registers
-
-        # Keep compatibility with any code using lowercase key.
         result["registers"] = registers
 
         return result
