@@ -3,9 +3,6 @@
 # DASHBOARD REALTIME DATA
 # =====================================================
 
-from flask_socketio import emit
-
-
 socketio_instance = None
 
 
@@ -17,26 +14,10 @@ def init_socketio(socketio):
 
     global socketio_instance
 
+    # Keep the SocketIO instance for realtime emits.
+    # Flask routes are registered by SCADAFlowSocketIO.run()
+    # after the real Flask app object exists.
     socketio_instance = socketio
-
-    # Register Flow Designer company-management endpoints
-    # once the Flask application object exists.
-    try:
-
-        from flow_company_routes import (
-            register_flow_company_routes
-        )
-
-        register_flow_company_routes(
-            socketio.app
-        )
-
-    except Exception as exc:
-
-        print(
-            "FLOW COMPANY ROUTE REGISTRATION ERROR:",
-            exc
-        )
 
 
 # =====================================================
