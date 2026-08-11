@@ -4,6 +4,11 @@
 #
 # PLC configuration comes ONLY from Drawflow.
 #
+# The SCADA_FLOW server normally receives live PLC values from
+# SCADA_FLOW_EDGE. When fresh edge historian data exists, use it
+# first so the VPS does not try to reach a PLC on the customer's
+# private LAN. Direct Modbus remains available as a fallback.
+#
 # Expected configuration:
 #
 # {
@@ -26,6 +31,7 @@
 # ============================================================
 
 from plc import read_registers
+from database import get_connection
 
 
 class PLCReader:
@@ -50,6 +56,106 @@ class PLCReader:
             return default
 
         return value
+
+    # ========================================================
+    # EDGE HISTORIAN
+    # ========================================================
+
+    def _read_edge_registers(self, register, count):
+        """
+        Read the latest values received from SCADA_FLOW_EDGE.
+
+        Register addresses are taken from the company's Tags table,
+        not hard-coded here. This keeps the Drawflow configuration
+        as the source of the PLC read range while the database maps
+        incoming edge tag names back to absolute register addresses.
+        """
+
+        company_id = self._get_config("company_id")
+
+        if company_id is None:
+            return {}
+
+        try:
+            company_id = int(company_id)
+        except (TypeError, ValueError):
+            return {}
+
+        start = int(register)
+        end = start + int(count) - 1
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    t.RegisterAddress,
+                    h.Value
+                FROM Tags t
+                INNER JOIN TagHistory h
+                    ON h.CompanyID = t.CompanyID
+                   AND h.TagName = t.TagName
+                WHERE t.CompanyID = ?
+                  AND t.RegisterAddress BETWEEN ? AND ?
+                  AND h.ID = (
+                      SELECT h2.ID
+                      FROM TagHistory h2
+                      WHERE h2.CompanyID = h.CompanyID
+                        AND h2.TagName = h.TagName
+                      ORDER BY h2.Timestamp DESC, h2.ID DESC
+                      LIMIT 1
+                  )
+                ORDER BY t.RegisterAddress
+                """,
+                (
+                    company_id,
+                    start,
+                    end,
+                )
+            )
+
+            rows = cursor.fetchall()
+
+            registers = {}
+
+            for row in rows:
+                address = row[0]
+                value = row[1]
+
+                if address is None:
+                    continue
+
+                registers[str(int(address))] = value
+
+            return registers
+
+        except Exception as exc:
+
+            print(
+                "EDGE HISTORIAN READ ERROR:",
+                exc
+            )
+
+            return {}
+
+        finally:
+
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     # ========================================================
     # EXECUTE
@@ -89,7 +195,6 @@ class PLCReader:
         ]
 
         if missing:
-
             raise ValueError(
                 "PLCReader configuration is incomplete. "
                 f"Missing: {', '.join(missing)}"
@@ -100,14 +205,12 @@ class PLCReader:
         # ----------------------------------------------------
 
         try:
-
             port = int(port)
             slave = int(slave)
             register = int(register)
             count = int(count)
 
         except (TypeError, ValueError) as exc:
-
             raise ValueError(
                 "PLCReader configuration contains invalid "
                 "numeric values."
@@ -118,61 +221,88 @@ class PLCReader:
         # ----------------------------------------------------
 
         if port <= 0:
-
             raise ValueError(
                 "PLC port must be greater than zero."
             )
 
         if slave < 0:
-
             raise ValueError(
                 "PLC slave ID cannot be negative."
             )
 
         if register < 0:
-
             raise ValueError(
                 "PLC start register cannot be negative."
             )
 
         if count <= 0:
-
             raise ValueError(
                 "PLC register count must be greater than zero."
             )
 
         # ----------------------------------------------------
-        # Read PLC
+        # Prefer data received from SCADA_FLOW_EDGE.
+        #
+        # This is important on the VPS: the customer's PLC is on
+        # a private LAN and is not directly reachable from the VPS.
         # ----------------------------------------------------
 
-        raw_registers = read_registers(
-            ip=ip,
-            port=port,
-            slave=slave,
-            register=register,
-            count=count
+        registers = self._read_edge_registers(
+            register,
+            count
         )
 
-        # ----------------------------------------------------
-        # Convert returned list into absolute register map
-        #
-        # Example:
-        #
-        # start = 100
-        #
-        # raw_registers[0] -> register 100
-        # raw_registers[1] -> register 101
-        # raw_registers[35] -> register 135
-        # raw_registers[41] -> register 141
-        # ----------------------------------------------------
+        if registers:
 
-        registers = {}
+            print()
+            print("PLC READER: EDGE DATA")
+            print(
+                f"Company: {self._get_config('company_id')}"
+            )
+            print(
+                f"Registers Available: {len(registers)}"
+            )
+            print()
 
-        for index, value in enumerate(raw_registers):
+        else:
 
-            address = register + index
+            # ------------------------------------------------
+            # No edge historian values are available.
+            # Fall back to direct Modbus using Drawflow config.
+            # ------------------------------------------------
 
-            registers[str(address)] = value
+            raw_registers = read_registers(
+                ip=ip,
+                port=port,
+                slave=slave,
+                register=register,
+                count=count
+            )
+
+            for index, value in enumerate(raw_registers):
+
+                address = register + index
+
+                registers[str(address)] = value
+
+            print()
+            print("PLC READER: DIRECT MODBUS")
+            print(
+                f"PLC: {ip}:{port}"
+            )
+            print(
+                f"Slave: {slave}"
+            )
+            print(
+                f"Start Register: {register}"
+            )
+            print(
+                f"Count: {count}"
+            )
+            print(
+                f"Registers Read: {len(raw_registers)}"
+            )
+            print()
 
         # ----------------------------------------------------
         # Output
@@ -192,28 +322,5 @@ class PLCReader:
 
         # Keep compatibility with any code using lowercase key.
         result["registers"] = registers
-
-        # ----------------------------------------------------
-        # Diagnostic information
-        # ----------------------------------------------------
-
-        print()
-        print("PLC READER:")
-        print(
-            f"PLC: {ip}:{port}"
-        )
-        print(
-            f"Slave: {slave}"
-        )
-        print(
-            f"Start Register: {register}"
-        )
-        print(
-            f"Count: {count}"
-        )
-        print(
-            f"Registers Read: {len(raw_registers)}"
-        )
-        print()
 
         return result
