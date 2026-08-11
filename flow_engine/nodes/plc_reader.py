@@ -8,26 +8,15 @@
 #
 # Edge historian data is therefore the normal server-side source.
 # Direct Modbus can be explicitly enabled with the environment
-# variable SCADA_DIRECT_MODBUS=1 for installations where the PLC
-# is intentionally reachable from this server.
+# variable SCADA_DIRECT_MODBUS=1 for installations where it is
+# intentionally required.
 #
-# Expected Drawflow configuration:
-# {
-#     "ip": "...",
-#     "port": ...,
-#     "slave": ...,
-#     "register": ...,
-#     "count": ...
-# }
-#
-# Output:
-# data["Registers"] = {
-#     "100": value,
-#     "101": value,
-#     ...
-# }
+# Register/tag definitions are read from the company's Drawflow
+# TagMapper configuration. No tag names or register values are
+# hard-coded in this node.
 # ============================================================
 
+import json
 import os
 
 from plc import read_registers
@@ -54,28 +43,22 @@ class PLCReader:
         return value
 
     # ========================================================
-    # EDGE HISTORIAN
+    # DRAWFLOW TAG MAPPINGS
     # ========================================================
 
-    def _read_edge_registers(self, register, count):
+    def _get_edge_mappings(self):
         """
-        Read the latest values received from SCADA_FLOW_EDGE.
-
-        The register mapping remains database/flow driven. This
-        method never contains fixed tag names or register values.
+        Load the register -> tag definitions from the company's
+        saved Drawflow. This keeps the editor as the source of
+        configuration and avoids depending on old/demo Tags rows.
         """
 
         company_id = self._get_config("company_id")
 
-        if company_id is None:
-            return {}
-
         try:
             company_id = int(company_id)
-            start = int(register)
-            end = start + int(count) - 1
         except (TypeError, ValueError):
-            return {}
+            return []
 
         conn = None
         cursor = None
@@ -86,44 +69,195 @@ class PLCReader:
 
             cursor.execute(
                 """
-                SELECT
-                    t.RegisterAddress,
-                    h.Value
-                FROM Tags t
-                INNER JOIN TagHistory h
-                    ON h.CompanyID = t.CompanyID
-                   AND h.TagName = t.TagName
-                WHERE t.CompanyID = ?
-                  AND t.RegisterAddress BETWEEN ? AND ?
-                  AND h.ID = (
-                      SELECT h2.ID
-                      FROM TagHistory h2
-                      WHERE h2.CompanyID = h.CompanyID
-                        AND h2.TagName = h.TagName
-                      ORDER BY h2.Timestamp DESC, h2.ID DESC
-                      LIMIT 1
-                  )
-                ORDER BY t.RegisterAddress
+                SELECT FlowJson
+                FROM Flows
+                WHERE CompanyID = ?
+                ORDER BY FlowID DESC
+                LIMIT 1
                 """,
-                (
-                    company_id,
-                    start,
-                    end,
-                )
+                (company_id,)
             )
 
-            rows = cursor.fetchall()
-            registers = {}
+            row = cursor.fetchone()
 
-            for row in rows:
+            if not row:
+                return []
 
-                address = row[0]
-                value = row[1]
+            flow_json = row[0]
 
-                if address is None:
+            if isinstance(flow_json, str):
+                flow = json.loads(flow_json)
+            else:
+                flow = flow_json
+
+            nodes = (
+                flow
+                .get("drawflow", {})
+                .get("Home", {})
+                .get("data", {})
+            )
+
+            mappings = []
+
+            for node in nodes.values():
+
+                if node.get("name") != "TagMapper":
                     continue
 
-                registers[str(int(address))] = value
+                node_data = node.get(
+                    "data",
+                    {}
+                )
+
+                mapper_config = node_data.get(
+                    "config",
+                    node_data
+                )
+
+                node_mappings = mapper_config.get(
+                    "mappings",
+                    []
+                )
+
+                if not isinstance(node_mappings, list):
+                    continue
+
+                for mapping in node_mappings:
+
+                    if not isinstance(mapping, dict):
+                        continue
+
+                    register = mapping.get("register")
+                    name = str(
+                        mapping.get("name", "")
+                    ).strip()
+
+                    if register in (None, "") or not name:
+                        continue
+
+                    try:
+                        register = int(register)
+                    except (TypeError, ValueError):
+                        continue
+
+                    mappings.append({
+                        "register": register,
+                        "name": name
+                    })
+
+            # Remove duplicate register/name definitions.
+            result = []
+            seen = set()
+
+            for mapping in mappings:
+
+                key = (
+                    mapping["register"],
+                    mapping["name"]
+                )
+
+                if key in seen:
+                    continue
+
+                seen.add(key)
+                result.append(mapping)
+
+            return result
+
+        except Exception as exc:
+
+            print(
+                "EDGE MAPPING LOAD ERROR:",
+                exc
+            )
+
+            return []
+
+        finally:
+
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    # ========================================================
+    # EDGE HISTORIAN
+    # ========================================================
+
+    def _read_edge_registers(self, register, count):
+        """
+        Read the latest values received from SCADA_FLOW_EDGE.
+
+        The Drawflow TagMapper supplies the register -> tag mapping.
+        The latest value for each configured tag is then returned
+        using the absolute register address expected by TagMapper.
+        """
+
+        company_id = self._get_config("company_id")
+
+        try:
+            company_id = int(company_id)
+            start = int(register)
+            end = start + int(count) - 1
+        except (TypeError, ValueError):
+            return {}
+
+        mappings = self._get_edge_mappings()
+
+        if not mappings:
+            return {}
+
+        mappings = [
+            mapping
+            for mapping in mappings
+            if start <= mapping["register"] <= end
+        ]
+
+        if not mappings:
+            return {}
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            registers = {}
+
+            for mapping in mappings:
+
+                tag_name = mapping["name"]
+                register_address = mapping["register"]
+
+                cursor.execute(
+                    """
+                    SELECT Value
+                    FROM TagHistory
+                    WHERE CompanyID = ?
+                      AND TagName = ?
+                    ORDER BY Timestamp DESC, ID DESC
+                    LIMIT 1
+                    """,
+                    (
+                        company_id,
+                        tag_name,
+                    )
+                )
+
+                row = cursor.fetchone()
+
+                if not row:
+                    continue
+
+                registers[str(register_address)] = row[0]
 
             return registers
 
@@ -252,8 +386,7 @@ class PLCReader:
         # SERVER DEFAULT: EDGE DATA
         # ----------------------------------------------------
         # The VPS should not generate connection errors by trying
-        # to reach 192.168.x.x customer PLCs. Direct Modbus is an
-        # explicit opt-in for installations where it is required.
+        # to reach customer PLCs. Direct Modbus is explicit opt-in.
 
         registers = self._read_edge_registers(
             register,
