@@ -1,1174 +1,287 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
-    <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
-    <title>SCADA FLOW EDITOR</title>
-
-    <link
-        rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.css"
-    >
-
-    <style>
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: #111;
-            color: #eee;
-            overflow: hidden;
-        }
-
-        #node_buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            padding: 8px;
-            background: #1b1b1b;
-            border-bottom: 1px solid #333;
-        }
-
-        #node_buttons button,
-        .new-factory,
-        .load-factory,
-        .save-factory,
-        .table-actions button,
-        .delete-row {
-            padding: 7px 12px;
-            border: 1px solid #555;
-            background: #292929;
-            color: white;
-            cursor: pointer;
-            border-radius: 4px;
-        }
-
-        #node_buttons button:hover,
-        .new-factory:hover,
-        .load-factory:hover,
-        .save-factory:hover,
-        .table-actions button:hover,
-        .delete-row:hover {
-            background: #444;
-        }
-
-        .new-factory,
-        .load-factory,
-        .save-factory {
-            margin: 8px 4px;
-        }
-
-        .factory-info {
-            display: inline-block;
-            margin-left: 10px;
-            padding: 8px;
-            color: #bbb;
-        }
-
-        #drawflow-container {
-            position: absolute;
-            left: 0;
-            top: 105px;
-            right: 360px;
-            bottom: 0;
-            background: #181818;
-        }
-
-        #drawflow {
-            width: 100%;
-            height: 100%;
-        }
-
-        #status {
-            position: absolute;
-            left: 10px;
-            bottom: 10px;
-            padding: 8px 12px;
-            background: rgba(0,0,0,.75);
-            border: 1px solid #444;
-            border-radius: 4px;
-            z-index: 20;
-        }
-
-        #resize-bar {
-            position: absolute;
-            top: 105px;
-            right: 360px;
-            bottom: 0;
-            width: 4px;
-            background: #444;
-        }
-
-        #properties {
-            position: absolute;
-            top: 105px;
-            right: 0;
-            bottom: 0;
-            width: 360px;
-            overflow-y: auto;
-            background: #202020;
-            border-left: 1px solid #444;
-            padding: 12px;
-        }
-
-        #properties .title {
-            font-size: 20px;
-            font-weight: bold;
-            margin-bottom: 15px;
-        }
-
-        .property-title {
-            font-size: 18px;
-            font-weight: bold;
-            margin-bottom: 15px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid #444;
-        }
-
-        .property-field {
-            margin-bottom: 15px;
-        }
-
-        .property-field label {
-            display: block;
-            margin-bottom: 6px;
-            color: #ccc;
-        }
-
-        .property-field input,
-        .property-field select {
-            width: 100%;
-            padding: 7px;
-            background: #111;
-            color: white;
-            border: 1px solid #555;
-            border-radius: 4px;
-        }
-
-        .config-table-wrapper {
-            overflow-x: auto;
-        }
-
-        .config-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        .config-table th,
-        .config-table td {
-            border: 1px solid #444;
-            padding: 5px;
-        }
-
-        .config-table th {
-            background: #292929;
-        }
-
-        .config-table input,
-        .config-table select {
-            width: 100%;
-            min-width: 80px;
-            padding: 5px;
-            background: #111;
-            color: white;
-            border: 1px solid #555;
-        }
-
-        .table-actions {
-            margin-top: 8px;
-        }
-
-        .delete-row {
-            padding: 5px 8px;
-        }
-
-        .drawflow .drawflow-node {
-            background: #252525;
-            border: 1px solid #777;
-            color: white;
-        }
-
-        .drawflow .drawflow-node.selected {
-            border: 2px solid #00aaff;
-        }
-
-        .drawflow .drawflow-node .title-box {
-            padding: 10px;
-            font-weight: bold;
-        }
-
-    </style>
-
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SCADA FLOW EDITOR</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.css">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#111;color:#eee;overflow:hidden}
+#toolbar{height:105px;background:#1b1b1b;border-bottom:1px solid #333;padding:7px;overflow:auto}
+.row{display:flex;align-items:center;gap:7px;margin-bottom:7px;flex-wrap:wrap}
+button,select,input{font:inherit}
+button{padding:7px 11px;border:1px solid #555;background:#292929;color:#fff;border-radius:4px;cursor:pointer}
+button:hover{background:#444}
+input,select{padding:7px;background:#111;color:#fff;border:1px solid #555;border-radius:4px}
+#company_select{min-width:220px}.company-name{width:220px}.info{color:#aaa;padding-left:6px}
+#node_buttons{display:flex;gap:6px;flex-wrap:wrap}
+#drawflow-container{position:absolute;left:0;top:105px;right:360px;bottom:0;background:#181818}
+#drawflow{width:100%;height:100%}
+#status{position:absolute;left:10px;bottom:10px;padding:8px 12px;background:rgba(0,0,0,.75);border:1px solid #444;border-radius:4px;z-index:20}
+#properties{position:absolute;top:105px;right:0;bottom:0;width:360px;overflow-y:auto;background:#202020;border-left:1px solid #444;padding:12px}
+#properties .title{font-size:20px;font-weight:bold;margin-bottom:15px}
+.property-title{font-size:18px;font-weight:bold;margin-bottom:15px;padding-bottom:8px;border-bottom:1px solid #444}
+.property-field{margin-bottom:15px}.property-field label{display:block;margin-bottom:6px;color:#ccc}
+.property-field>input,.property-field>select{width:100%}
+.config-table-wrapper{overflow-x:auto}.config-table{width:100%;border-collapse:collapse}
+.config-table th,.config-table td{border:1px solid #444;padding:5px}.config-table th{background:#292929}
+.config-table input,.config-table select{width:100%;min-width:75px;padding:5px}
+.delete-row{padding:5px 8px}.table-actions{margin-top:8px}
+.drawflow .drawflow-node{background:#252525;border:1px solid #777;color:#fff}.drawflow .drawflow-node.selected{border:2px solid #00aaff}.drawflow .drawflow-node .title-box{padding:10px;font-weight:bold}
+</style>
 </head>
-
 <body>
-
+<div id="toolbar">
+    <div class="row">
+        <select id="company_select"><option value="">Select Company</option></select>
+        <input id="new_company_name" class="company-name" placeholder="New company name">
+        <button onclick="createCompany()">NEW COMPANY</button>
+        <button onclick="switchCompany()">OPEN COMPANY</button>
+        <button onclick="newFactory()">NEW FACTORY</button>
+        <button onclick="loadFactory()">LOAD FACTORY</button>
+        <button onclick="saveFactory()">SAVE FACTORY</button>
+        <span id="company_info" class="info">Company: {{ company_id }}</span>
+    </div>
     <div id="node_buttons"></div>
+</div>
 
-    <button
-        class="new-factory"
-        onclick="newFactory()">
-        NEW FACTORY
-    </button>
+<div id="drawflow-container">
+    <div id="drawflow"></div>
+    <div id="status">SCADA FLOW EDITOR</div>
+</div>
 
-    <button
-        class="load-factory"
-        onclick="loadFactory()">
-        LOAD FACTORY
-    </button>
+<div id="properties">
+    <div class="title">Properties</div>
+    <div id="property-content">Select Node</div>
+</div>
 
-    <button
-        class="save-factory"
-        onclick="saveFactory()">
-        SAVE FACTORY
-    </button>
+<script src="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.js"></script>
+<script>
+const currentCompanyId={{ company_id|tojson }};
+let editor=null;
+let nodeRegistry={};
+let selectedNodeId=null;
+let flowRoles=[];
 
-    <div
-        id="factory-info"
-        class="factory-info">
-        No Factory Selected
-    </div>
+function status(text){document.getElementById('status').textContent=text}
+function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
 
-    <div id="drawflow-container">
+async function init(){
+    editor=new Drawflow(document.getElementById('drawflow'));
+    editor.reroute=true;
+    editor.start();
+    editor.on('nodeSelected',id=>selectNode(id));
+    editor.on('nodeUnselected',()=>{selectedNodeId=null});
+    editor.on('nodeCreated',()=>refreshRoles());
+    await loadCompanies();
+    await loadRegistry();
+    await loadFactory();
+    status('SCADA FLOW EDITOR READY');
+}
 
-        <div id="drawflow"></div>
+document.addEventListener('DOMContentLoaded',init);
 
-        <div id="status">
-            SCADA FLOW EDITOR
-        </div>
+async function loadCompanies(){
+    const select=document.getElementById('company_select');
+    try{
+        const r=await fetch('/flow/companies');
+        if(!r.ok) return;
+        const companies=await r.json();
+        select.innerHTML='<option value="">Select Company</option>';
+        companies.forEach(c=>select.add(new Option(c.CompanyName,c.CompanyID)));
+        select.value=String(currentCompanyId||'');
+    }catch(e){console.error('COMPANY LIST ERROR',e)}
+}
 
-    </div>
+async function createCompany(){
+    const name=document.getElementById('new_company_name').value.trim();
+    if(!name){alert('Enter a company name.');return}
+    try{
+        const r=await fetch('/flow/company/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company_name:name})});
+        const data=await r.json();
+        if(!r.ok) throw new Error(data.message||'Company creation failed');
+        const id=data.company.CompanyID;
+        document.getElementById('new_company_name').value='';
+        await loadCompanies();
+        document.getElementById('company_select').value=String(id);
+        window.location.href='/flow?company_id='+encodeURIComponent(id);
+    }catch(e){alert(e.message||'Company creation failed')}
+}
 
-    <div id="resize-bar"></div>
+function switchCompany(){
+    const id=document.getElementById('company_select').value;
+    if(!id){alert('Select a company.');return}
+    window.location.href='/flow?company_id='+encodeURIComponent(id);
+}
 
-    <div id="properties">
+async function loadRegistry(){
+    try{
+        const r=await fetch('/node_registry');
+        if(!r.ok) throw new Error('Registry request failed');
+        nodeRegistry=await r.json();
+        const box=document.getElementById('node_buttons');
+        box.innerHTML='';
+        Object.keys(nodeRegistry).forEach(name=>{
+            const b=document.createElement('button');
+            b.textContent=name;
+            b.onclick=()=>addNode(name);
+            box.appendChild(b);
+        });
+    }catch(e){console.error(e);status('NODE REGISTRY ERROR')}
+}
 
-        <div class="title">
-            Properties
-        </div>
+function addNode(name){
+    let data={};
+    if(name==='RolesEngaged') data={roles:[]};
+    const id=editor.addNode(name,1,1,100+Math.random()*350,100+Math.random()*300,name,data,`<div class="title-box">${esc(name)}</div>`,false);
+    selectNode(id);
+    refreshRoles();
+    status('NODE ADDED: '+name);
+}
 
-        <div id="property-content">
-            Select Node
-        </div>
+function collectRoles(){
+    const roles=[];
+    if(!editor) return roles;
+    const nodes=editor.export()?.drawflow?.Home?.data||{};
+    Object.values(nodes).forEach(node=>{
+        if(node.name!=='Roles') return;
+        const rows=Array.isArray(node.data?.roles)?node.data.roles:[];
+        rows.forEach(row=>{
+            const role=typeof row==='string'?row:String(row?.role||'').trim();
+            if(role && !roles.includes(role)) roles.push(role);
+        });
+    });
+    return roles;
+}
 
-    </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/drawflow/dist/drawflow.min.js"></script>
-
-    <script>
-
-        let editor = null;
-        let nodeRegistry = {};
-        let selectedNodeId = null;
-        let flowRoles = [];
-
-        document.addEventListener(
-            "DOMContentLoaded",
-            async function () {
-
-                editor = new Drawflow(
-                    document.getElementById("drawflow")
-                );
-
-                editor.reroute = true;
-                editor.start();
-
-                registerEvents();
-
-                await loadNodeRegistry();
-                await loadFlowRoles();
-
-                updateStatus(
-                    "SCADA FLOW EDITOR READY"
-                );
-            }
-        );
-
-        function updateStatus(message) {
-
-            document.getElementById(
-                "status"
-            ).textContent = message;
-
+async function refreshRoles(){
+    const local=collectRoles();
+    let server=[];
+    try{
+        const r=await fetch('/flow_roles?company_id='+encodeURIComponent(currentCompanyId));
+        if(r.ok){
+            const data=await r.json();
+            if(Array.isArray(data)) server=data.map(x=>String(x.role||'').trim()).filter(Boolean);
         }
-
-        async function loadNodeRegistry() {
-
-            try {
-
-                const response =
-                    await fetch("/node_registry");
-
-                if (!response.ok) {
-                    throw new Error(
-                        "Node registry request failed"
-                    );
-                }
-
-                nodeRegistry =
-                    await response.json();
-
-                createNodeButtons();
-
-            }
-            catch (error) {
-
-                console.error(error);
-
-                updateStatus(
-                    "NODE REGISTRY ERROR"
-                );
-
-            }
-        }
-
-        async function loadFlowRoles() {
-
-            try {
-
-                const response =
-                    await fetch(
-                        "/flow_roles?company_id={{ company_id }}"
-                    );
-
-                if (!response.ok) {
-                    return;
-                }
-
-                const roles =
-                    await response.json();
-
-                flowRoles =
-                    roles
-                        .map(
-                            item => item.role
-                        )
-                        .filter(
-                            role => role
-                        );
-
-            }
-            catch (error) {
-
-                console.error(
-                    "FLOW ROLES ERROR:",
-                    error
-                );
-
-                flowRoles = [];
-
-            }
-        }
-
-        function createNodeButtons() {
-
-            const container =
-                document.getElementById(
-                    "node_buttons"
-                );
-
-            container.innerHTML = "";
-
-            Object.keys(nodeRegistry).forEach(
-                function (nodeName) {
-
-                    const button =
-                        document.createElement(
-                            "button"
-                        );
-
-                    button.textContent =
-                        nodeName;
-
-                    button.onclick =
-                        function () {
-
-                            addNode(
-                                nodeName
-                            );
-
-                        };
-
-                    container.appendChild(
-                        button
-                    );
-
-                }
-            );
-        }
-
-        function addNode(nodeName) {
-
-            if (!editor) {
-                return;
-            }
-
-            let nodeData = {};
-
-            if (nodeName === "RolesEngaged") {
-
-                nodeData = {
-                    roles: []
-                };
-
-            }
-
-            const id =
-                editor.addNode(
-                    nodeName,
-                    1,
-                    1,
-                    150 + Math.random() * 250,
-                    100 + Math.random() * 250,
-                    nodeName,
-                    nodeData,
-                    createNodeHTML(nodeName),
-                    false
-                );
-
-            selectNode(id);
-
-            updateStatus(
-                "NODE ADDED: " + nodeName
-            );
-        }
-
-        function createNodeHTML(nodeName) {
-
-            return `
-                <div class="title-box">
-                    ${escapeHtml(nodeName)}
-                </div>
-            `;
-        }
-
-        function escapeHtml(value) {
-
-            return String(value)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-
-        }
-
-        function registerEvents() {
-
-            editor.on(
-                "nodeSelected",
-                function (id) {
-
-                    selectNode(id);
-
-                }
-            );
-
-            editor.on(
-                "nodeUnselected",
-                function () {
-
-                    selectedNodeId = null;
-
-                }
-            );
-
-            editor.on(
-                "nodeCreated",
-                function (id) {
-
-                    updateStatus(
-                        "NODE CREATED: " + id
-                    );
-
-                }
-            );
-        }
-
-        function selectNode(id) {
-
-            selectedNodeId =
-                String(id);
-
-            const node =
-                editor.getNodeFromId(id);
-
-            if (!node) {
-                return;
-            }
-
-            renderProperties(node);
-        }
-
-        function renderProperties(node) {
-
-            const container =
-                document.getElementById(
-                    "property-content"
-                );
-
-            container.innerHTML = "";
-
-            const title =
-                document.createElement(
-                    "div"
-                );
-
-            title.className =
-                "property-title";
-
-            title.textContent =
-                node.name ||
-                node.class;
-
-            container.appendChild(
-                title
-            );
-
-            const definitions =
-                nodeRegistry[
-                    node.name
-                ];
-
-            if (!definitions) {
-
-                container.innerHTML +=
-                    "<div>No properties.</div>";
-
-                return;
-            }
-
-            const configs =
-                definitions.config || [];
-
-            configs.forEach(
-                function (definition) {
-
-                    renderProperty(
-                        container,
-                        node,
-                        definition
-                    );
-
-                }
-            );
-        }
-
-        function renderProperty(
-            container,
-            node,
-            definition
-        ) {
-
-            const wrapper =
-                document.createElement(
-                    "div"
-                );
-
-            wrapper.className =
-                "property-field";
-
-            const label =
-                document.createElement(
-                    "label"
-                );
-
-            label.textContent =
-                definition.label ||
-                definition.name;
-
-            wrapper.appendChild(
-                label
-            );
-
-            const currentValue =
-                node.data[
-                    definition.name
-                ];
-
-            if (
-                definition.type ===
-                "table"
-            ) {
-
-                renderTableProperty(
-                    wrapper,
-                    node,
-                    definition,
-                    currentValue
-                );
-
-            }
-            else {
-
-                const input =
-                    createInput(
-                        definition,
-                        currentValue
-                    );
-
-                input.addEventListener(
-                    "change",
-                    function () {
-
-                        updateNodeValue(
-                            node,
-                            definition.name,
-                            getInputValue(
-                                input,
-                                definition
-                            )
-                        );
-
-                    }
-                );
-
-                wrapper.appendChild(
-                    input
-                );
-            }
-
-            container.appendChild(
-                wrapper
-            );
-        }
-
-        function createInput(
-            definition,
-            value
-        ) {
-
-            let input;
-
-            if (
-                definition.type ===
-                "select"
-            ) {
-
-                input =
-                    document.createElement(
-                        "select"
-                    );
-
-                let options =
-                    definition.options || [];
-
-                if (
-                    definition.name ===
-                    "role"
-                ) {
-
-                    options =
-                        flowRoles;
-
-                }
-
-                options.forEach(
-                    function (option) {
-
-                        const item =
-                            document.createElement(
-                                "option"
-                            );
-
-                        item.value =
-                            option;
-
-                        item.textContent =
-                            option;
-
-                        input.appendChild(
-                            item
-                        );
-
-                    }
-                );
-
-                input.value =
-                    value ??
-                    definition.default ??
-                    "";
-
-            }
-            else {
-
-                input =
-                    document.createElement(
-                        "input"
-                    );
-
-                input.type =
-                    definition.type ===
-                    "number"
-                        ? "number"
-                        : "text";
-
-                input.value =
-                    value ??
-                    definition.default ??
-                    "";
-
-            }
-
-            return input;
-        }
-
-        function getInputValue(
-            input,
-            definition
-        ) {
-
-            if (
-                definition.type ===
-                "number"
-            ) {
-
-                return Number(
-                    input.value
-                );
-
-            }
-
-            return input.value;
-        }
-
-        function updateNodeValue(
-            node,
-            name,
-            value
-        ) {
-
-            node.data[name] =
-                value;
-
-            editor.updateNodeDataFromId(
-                node.id,
-                node.data
-            );
-        }
-
-        function renderTableProperty(
-            wrapper,
-            node,
-            definition,
-            value
-        ) {
-
-            let rows =
-                Array.isArray(value)
-                    ? value
-                    : [];
-
-            node.data[
-                definition.name
-            ] = rows;
-
-            const tableWrapper =
-                document.createElement(
-                    "div"
-                );
-
-            tableWrapper.className =
-                "config-table-wrapper";
-
-            const table =
-                document.createElement(
-                    "table"
-                );
-
-            table.className =
-                "config-table";
-
-            const thead =
-                document.createElement(
-                    "thead"
-                );
-
-            const headerRow =
-                document.createElement(
-                    "tr"
-                );
-
-            definition.columns.forEach(
-                function (column) {
-
-                    const th =
-                        document.createElement(
-                            "th"
-                        );
-
-                    th.textContent =
-                        column.label ||
-                        column.name;
-
-                    headerRow.appendChild(
-                        th
-                    );
-
-                }
-            );
-
-            const actionHeader =
-                document.createElement(
-                    "th"
-                );
-
-            actionHeader.textContent =
-                "Action";
-
-            headerRow.appendChild(
-                actionHeader
-            );
-
-            thead.appendChild(
-                headerRow
-            );
-
-            table.appendChild(
-                thead
-            );
-
-            const tbody =
-                document.createElement(
-                    "tbody"
-                );
-
-            rows.forEach(
-                function (row, index) {
-
-                    addTableRow(
-                        tbody,
-                        node,
-                        definition,
-                        row,
-                        index
-                    );
-
-                }
-            );
-
-            table.appendChild(
-                tbody
-            );
-
-            tableWrapper.appendChild(
-                table
-            );
-
-            wrapper.appendChild(
-                tableWrapper
-            );
-
-            const actions =
-                document.createElement(
-                    "div"
-                );
-
-            actions.className =
-                "table-actions";
-
-            const addButton =
-                document.createElement(
-                    "button"
-                );
-
-            addButton.textContent =
-                "ADD ROW";
-
-            addButton.onclick =
-                function () {
-
-                    const row = {};
-
-                    definition.columns.forEach(
-                        function (column) {
-
-                            row[column.name] =
-                                column.default ??
-                                "";
-
-                        }
-                    );
-
-                    rows.push(row);
-
-                    node.data[
-                        definition.name
-                    ] = rows;
-
-                    editor.updateNodeDataFromId(
-                        node.id,
-                        node.data
-                    );
-
-                    renderProperties(
-                        node
-                    );
-
-                };
-
-            actions.appendChild(
-                addButton
-            );
-
-            wrapper.appendChild(
-                actions
-            );
-        }
-
-        function addTableRow(
-            tbody,
-            node,
-            definition,
-            row,
-            index
-        ) {
-
-            const tr =
-                document.createElement(
-                    "tr"
-                );
-
-            definition.columns.forEach(
-                function (column) {
-
-                    const td =
-                        document.createElement(
-                            "td"
-                        );
-
-                    const input =
-                        createInput(
-                            column,
-                            row[column.name]
-                        );
-
-                    input.addEventListener(
-                        "change",
-                        function () {
-
-                            row[column.name] =
-                                getInputValue(
-                                    input,
-                                    column
-                                );
-
-                            editor.updateNodeDataFromId(
-                                node.id,
-                                node.data
-                            );
-
-                        }
-                    );
-
-                    td.appendChild(
-                        input
-                    );
-
-                    tr.appendChild(
-                        td
-                    );
-
-                }
-            );
-
-            const actionTd =
-                document.createElement(
-                    "td"
-                );
-
-            const deleteButton =
-                document.createElement(
-                    "button"
-                );
-
-            deleteButton.textContent =
-                "DELETE";
-
-            deleteButton.className =
-                "delete-row";
-
-            deleteButton.onclick =
-                function () {
-
-                    node.data[
-                        definition.name
-                    ].splice(
-                        index,
-                        1
-                    );
-
-                    editor.updateNodeDataFromId(
-                        node.id,
-                        node.data
-                    );
-
-                    renderProperties(
-                        node
-                    );
-
-                };
-
-            actionTd.appendChild(
-                deleteButton
-            );
-
-            tr.appendChild(
-                actionTd
-            );
-
-            tbody.appendChild(
-                tr
-            );
-        }
-
-        function newFactory() {
-
-            if (
-                !confirm(
-                    "Create a new empty factory flow?"
-                )
-            ) {
-
-                return;
-            }
-
-            editor.clear();
-
-            selectedNodeId = null;
-
-            document.getElementById(
-                "property-content"
-            ).innerHTML =
-                "Select Node";
-
-            updateStatus(
-                "NEW FACTORY"
-            );
-        }
-
-        async function loadFactory() {
-
-            try {
-
-                const response =
-                    await fetch(
-                        "/flow.json?company_id={{ company_id }}"
-                    );
-
-                if (!response.ok) {
-
-                    throw new Error(
-                        "Flow load failed"
-                    );
-                }
-
-                const flow =
-                    await response.json();
-
-                editor.clear();
-
-                if (
-                    flow &&
-                    flow.drawflow
-                ) {
-
-                    editor.import(
-                        flow
-                    );
-
-                }
-
-                updateStatus(
-                    "FACTORY LOADED"
-                );
-
-            }
-            catch (error) {
-
-                console.error(error);
-
-                alert(
-                    "Could not load factory."
-                );
-
-                updateStatus(
-                    "LOAD ERROR"
-                );
-            }
-        }
-
-        async function saveFactory() {
-
-            try {
-
-                const flow =
-                    editor.export();
-
-                const response =
-                    await fetch(
-                        "/save_flow?company_id={{ company_id }}",
-                        {
-                            method: "POST",
-
-                            headers: {
-                                "Content-Type":
-                                    "application/json"
-                            },
-
-                            body:
-                                JSON.stringify(
-                                    flow
-                                )
-                        }
-                    );
-
-                const result =
-                    await response.json();
-
-                if (!response.ok) {
-
-                    throw new Error(
-                        result.message ||
-                        "Save failed"
-                    );
-                }
-
-                updateStatus(
-                    "FACTORY SAVED"
-                );
-
-                alert(
-                    "Factory flow saved successfully."
-                );
-
-            }
-            catch (error) {
-
-                console.error(error);
-
-                alert(
-                    "Could not save factory."
-                );
-
-                updateStatus(
-                    "SAVE ERROR"
-                );
-            }
-        }
-
-    </script>
-
+    }catch(e){}
+    flowRoles=[...new Set([...server,...local])];
+    if(selectedNodeId){
+        const node=editor.getNodeFromId(selectedNodeId);
+        if(node && node.name==='RolesEngaged') renderProperties(node);
+    }
+}
+
+async function loadFactory(){
+    try{
+        const r=await fetch('/flow.json?company_id='+encodeURIComponent(currentCompanyId));
+        if(!r.ok) throw new Error('Flow load failed');
+        const flow=await r.json();
+        editor.clear();
+        if(flow && flow.drawflow) editor.import(flow);
+        await refreshRoles();
+        status('FACTORY LOADED');
+    }catch(e){console.error(e);status('LOAD ERROR');alert('Could not load factory.')}
+}
+
+async function saveFactory(){
+    try{
+        const flow=editor.export();
+        const r=await fetch('/save_flow?company_id='+encodeURIComponent(currentCompanyId),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(flow)});
+        const data=await r.json();
+        if(!r.ok) throw new Error(data.message||'Save failed');
+        status('FACTORY SAVED');
+        await refreshRoles();
+    }catch(e){console.error(e);status('SAVE ERROR');alert(e.message||'Could not save factory.')}
+}
+
+function newFactory(){
+    if(!confirm('Create a new empty factory flow?')) return;
+    editor.clear();
+    selectedNodeId=null;
+    flowRoles=[];
+    document.getElementById('property-content').textContent='Select Node';
+    status('NEW FACTORY');
+}
+
+function selectNode(id){
+    selectedNodeId=String(id);
+    const node=editor.getNodeFromId(id);
+    if(node) renderProperties(node);
+}
+
+function renderProperties(node){
+    const box=document.getElementById('property-content');
+    box.innerHTML='';
+    const title=document.createElement('div');
+    title.className='property-title';
+    title.textContent=node.name||node.class;
+    box.appendChild(title);
+    const def=nodeRegistry[node.name];
+    if(!def){box.insertAdjacentHTML('beforeend','<div>No properties.</div>');return}
+    (def.config||[]).forEach(c=>renderProperty(box,node,c));
+}
+
+function renderProperty(box,node,def){
+    const wrap=document.createElement('div');wrap.className='property-field';
+    const label=document.createElement('label');label.textContent=def.label||def.name;wrap.appendChild(label);
+    if(def.type==='table') renderTable(wrap,node,def);
+    else{
+        const input=createInput(def,node.data?.[def.name]);
+        input.onchange=()=>setNodeValue(node,def.name,inputValue(input,def));
+        wrap.appendChild(input);
+    }
+    box.appendChild(wrap);
+}
+
+function optionsFor(def){
+    if(def.name==='role') return flowRoles;
+    return def.options||[];
+}
+
+function createInput(def,value){
+    let input;
+    if(def.type==='select'){
+        input=document.createElement('select');
+        optionsFor(def).forEach(o=>input.add(new Option(o,o)));
+        input.value=value??def.default??'';
+    }else{
+        input=document.createElement('input');
+        input.type=def.type==='number'?'number':def.type==='password'?'password':'text';
+        input.value=value??def.default??'';
+    }
+    return input;
+}
+
+function inputValue(input,def){return def.type==='number'?Number(input.value):input.value}
+function setNodeValue(node,name,value){node.data[name]=value;editor.updateNodeDataFromId(node.id,node.data);if(node.name==='Roles') refreshRoles()}
+
+function renderTable(wrap,node,def){
+    const rows=Array.isArray(node.data?.[def.name])?node.data[def.name]:[];
+    node.data[def.name]=rows;
+    const holder=document.createElement('div');holder.className='config-table-wrapper';
+    const table=document.createElement('table');table.className='config-table';
+    const head=document.createElement('thead');const hr=document.createElement('tr');
+    (def.columns||[]).forEach(col=>{const th=document.createElement('th');th.textContent=col.label||col.name;hr.appendChild(th)});
+    const action=document.createElement('th');action.textContent='Action';hr.appendChild(action);head.appendChild(hr);table.appendChild(head);
+    const body=document.createElement('tbody');
+    rows.forEach((row,index)=>{
+        const tr=document.createElement('tr');
+        (def.columns||[]).forEach(col=>{
+            const td=document.createElement('td');
+            const input=createInput(col,row?.[col.name]);
+            input.onchange=()=>{row[col.name]=inputValue(input,col);editor.updateNodeDataFromId(node.id,node.data);if(node.name==='Roles')refreshRoles()};
+            td.appendChild(input);tr.appendChild(td);
+        });
+        const td=document.createElement('td');const del=document.createElement('button');del.className='delete-row';del.textContent='DELETE';
+        del.onclick=()=>{rows.splice(index,1);editor.updateNodeDataFromId(node.id,node.data);renderProperties(node);refreshRoles()};
+        td.appendChild(del);tr.appendChild(td);body.appendChild(tr);
+    });
+    table.appendChild(body);holder.appendChild(table);wrap.appendChild(holder);
+    const actions=document.createElement('div');actions.className='table-actions';const add=document.createElement('button');add.textContent='ADD ROW';
+    add.onclick=()=>{const row={};(def.columns||[]).forEach(col=>row[col.name]=col.default??'');rows.push(row);editor.updateNodeDataFromId(node.id,node.data);renderProperties(node);refreshRoles()};
+    actions.appendChild(add);wrap.appendChild(actions);
+}
+</script>
 </body>
 </html>
