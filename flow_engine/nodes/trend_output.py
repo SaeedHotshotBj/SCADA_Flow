@@ -2,7 +2,7 @@
 # SCADA_FLOW TREND OUTPUT NODE
 # =====================================================
 
-from datetime import datetime
+from datetime import datetime, timezone
 import calendar
 import jdatetime
 
@@ -13,20 +13,15 @@ class TrendOutput:
         self.config = config or {}
 
     def convert_time(self, value):
-        """Convert a historian timestamp to an exact JavaScript epoch.
-
-        Historian timestamps are stored as timezone-naive local clock values.
-        Using datetime.timestamp() makes Python apply the computer's local
-        timezone, which can shift the chart date.  Treat the stored clock
-        value as UTC for the transport timestamp so the browser can display
-        exactly the same clock date/time and then convert it to Jalali.
-        """
+        """Return an epoch for a historian timestamp without local-timezone conversion."""
         try:
             if value is None:
                 return None
 
             if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
                 dt = value
+                if getattr(dt, "tzinfo", None) is not None:
+                    return int(dt.timestamp() * 1000)
                 return int(calendar.timegm(dt.timetuple()) * 1000 + getattr(dt, "microsecond", 0) // 1000)
 
             text = str(value).strip().replace("T", " ")
@@ -34,7 +29,7 @@ class TrendOutput:
                 text = text[:-1]
 
             if "/" in text:
-                for fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+                for fmt in ("%Y/%m/%d %H:%M:%S.%f", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
                     try:
                         jalali = jdatetime.datetime.strptime(text, fmt)
                         gregorian = jalali.togregorian()
@@ -62,6 +57,45 @@ class TrendOutput:
         except Exception:
             return None
 
+    def jalali_label(self, value):
+        """Create the graph label from the historian clock value on the server.
+
+        This deliberately avoids browser Date/timezone conversion. The label is
+        generated from the exact Gregorian/Jalali clock represented by the DB row.
+        """
+        try:
+            if value is None:
+                return ""
+
+            if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+                dt = value
+            else:
+                text = str(value).strip().replace("T", " ")
+                if text.endswith("Z"):
+                    text = text[:-1]
+                dt = None
+                for fmt in (
+                    "%Y-%m-%d %H:%M:%S.%f",
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%d %H:%M",
+                ):
+                    try:
+                        dt = datetime.strptime(text, fmt)
+                        break
+                    except Exception:
+                        pass
+                if dt is None:
+                    dt = datetime.fromisoformat(text)
+
+            if getattr(dt, "tzinfo", None) is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+            jdt = jdatetime.datetime.fromgregorian(datetime=dt)
+            return jdt.strftime("%Y/%m/%d %H:%M:%S")
+
+        except Exception:
+            return str(value)
+
     def execute(self, data=None):
         if data is None:
             data = {}
@@ -87,7 +121,8 @@ class TrendOutput:
             if selected_tag and item_tag != selected_tag:
                 continue
 
-            x = self.convert_time(item.get("Timestamp"))
+            timestamp = item.get("Timestamp")
+            x = self.convert_time(timestamp)
             if x is None:
                 continue
 
@@ -96,7 +131,11 @@ class TrendOutput:
             except (TypeError, ValueError):
                 continue
 
-            points.append({"x": x, "y": y})
+            points.append({
+                "x": x,
+                "y": y,
+                "label": self.jalali_label(timestamp),
+            })
 
         if selected_tag:
             output.append({
@@ -111,7 +150,8 @@ class TrendOutput:
                 if not tag:
                     continue
 
-                x = self.convert_time(item.get("Timestamp"))
+                timestamp = item.get("Timestamp")
+                x = self.convert_time(timestamp)
                 if x is None:
                     continue
 
@@ -120,7 +160,11 @@ class TrendOutput:
                 except (TypeError, ValueError):
                     continue
 
-                grouped.setdefault(tag, []).append({"x": x, "y": y})
+                grouped.setdefault(tag, []).append({
+                    "x": x,
+                    "y": y,
+                    "label": self.jalali_label(timestamp),
+                })
 
             if grouped:
                 first_tag = list(grouped.keys())[0]
