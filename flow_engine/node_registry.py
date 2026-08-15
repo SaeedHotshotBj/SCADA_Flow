@@ -51,12 +51,7 @@ NODE_REGISTRY = {
 
     "SQLWriter": {
         "config": [
-            {
-                "name": "company_id",
-                "label": "Company ID",
-                "type": "number",
-                "default": ""
-            }
+            {"name": "company_id", "label": "Company ID", "type": "number", "default": ""}
         ]
     },
 
@@ -154,13 +149,12 @@ NODE_REGISTRY = {
             },
             {
                 "name": "products",
-                "label": "Products",
+                "label": "Report Tags",
                 "type": "table",
                 "columns": [
                     {"name": "name", "label": "Product Name", "type": "text"},
-                    {"name": "tag", "label": "Production Tag", "type": "text"},
-                    {"name": "unit", "label": "Unit", "type": "text"},
-                    {"name": "aggregation", "label": "Calculation", "type": "select", "options": ["SUM", "MAX", "MIN", "AVG", "DELTA"]}
+                    {"name": "tag", "label": "Tag", "type": "text"},
+                    {"name": "unit", "label": "Unit", "type": "text"}
                 ]
             }
         ]
