@@ -89,7 +89,6 @@ class ReportOutput:
         rows = cursor.fetchall()
         cursor.close()
 
-        # One trigger creates one timestamp shared by all report tags.
         by_time = {}
         for row in rows:
             timestamp = str(row["Timestamp"])
@@ -164,6 +163,7 @@ class ReportOutput:
             "type": "bar",
             "calendar": calendar,
             "date_picker": self.date_picker,
+            "report": report,
             "labels": [item["name"] for item in report["columns"]],
             "datasets": [{
                 "label": "مجموع تولید",
