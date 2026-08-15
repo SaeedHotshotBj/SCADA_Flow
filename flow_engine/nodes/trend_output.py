@@ -3,6 +3,7 @@
 # =====================================================
 
 from datetime import datetime
+import calendar
 import jdatetime
 
 
@@ -12,12 +13,21 @@ class TrendOutput:
         self.config = config or {}
 
     def convert_time(self, value):
-        """Return a numeric JavaScript timestamp (milliseconds)."""
+        """Convert a historian timestamp to an exact JavaScript epoch.
+
+        Historian timestamps are stored as timezone-naive local clock values.
+        Using datetime.timestamp() makes Python apply the computer's local
+        timezone, which can shift the chart date.  Treat the stored clock
+        value as UTC for the transport timestamp so the browser can display
+        exactly the same clock date/time and then convert it to Jalali.
+        """
         try:
             if value is None:
                 return None
-            if hasattr(value, "timestamp"):
-                return int(value.timestamp() * 1000)
+
+            if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+                dt = value
+                return int(calendar.timegm(dt.timetuple()) * 1000 + getattr(dt, "microsecond", 0) // 1000)
 
             text = str(value).strip().replace("T", " ")
             if text.endswith("Z"):
@@ -28,7 +38,7 @@ class TrendOutput:
                     try:
                         jalali = jdatetime.datetime.strptime(text, fmt)
                         gregorian = jalali.togregorian()
-                        return int(gregorian.timestamp() * 1000)
+                        return int(calendar.timegm(gregorian.timetuple()) * 1000 + gregorian.microsecond // 1000)
                     except Exception:
                         pass
 
@@ -39,15 +49,17 @@ class TrendOutput:
             ):
                 try:
                     dt = datetime.strptime(text, fmt)
-                    return int(dt.timestamp() * 1000)
+                    return int(calendar.timegm(dt.timetuple()) * 1000 + dt.microsecond // 1000)
                 except Exception:
                     pass
 
             dt = datetime.fromisoformat(text)
-            return int(dt.timestamp() * 1000)
+            if dt.tzinfo is not None:
+                return int(dt.timestamp() * 1000)
 
-        except Exception as e:
-            print("TIME CONVERSION ERROR:", e, value)
+            return int(calendar.timegm(dt.timetuple()) * 1000 + dt.microsecond // 1000)
+
+        except Exception:
             return None
 
     def execute(self, data=None):
@@ -119,16 +131,4 @@ class TrendOutput:
                 })
 
         data["ChartData"] = {"datasets": output}
-
-        print()
-        print("========== TREND OUTPUT DEBUG ==========")
-        print("Selected tag:", selected_tag)
-        print("Datasets:", len(output))
-        print("Points:", len(points))
-        if points:
-            print("FIRST POINT:", points[0])
-            print("LAST POINT:", points[-1])
-        print("========================================")
-        print()
-
         return data
