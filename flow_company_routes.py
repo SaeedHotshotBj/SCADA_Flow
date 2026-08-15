@@ -1,3 +1,5 @@
+import json
+
 # =====================================================
 # SCADA_FLOW FLOW DESIGNER COMPANY MANAGEMENT
 # =====================================================
@@ -50,64 +52,32 @@ def _report_company_id():
 
 @flow_company_bp.get("/flow/companies")
 def flow_companies():
-
     if not _is_master():
-        return jsonify({
-            "status": "error",
-            "message": "Access denied",
-        }), 403
-
-    return jsonify([
-        dict(row)
-        for row in get_companies()
-    ])
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+    return jsonify([dict(row) for row in get_companies()])
 
 
 @flow_company_bp.post("/flow/company/create")
 def flow_company_create():
-
     if not _is_master():
-        return jsonify({
-            "status": "error",
-            "message": "Access denied",
-        }), 403
+        return jsonify({"status": "error", "message": "Access denied"}), 403
 
-    data = request.get_json(
-        silent=True
-    ) or {}
-
-    company_name = str(
-        data.get(
-            "company_name",
-            "",
-        )
-    ).strip()
+    data = request.get_json(silent=True) or {}
+    company_name = str(data.get("company_name", "")).strip()
 
     if not company_name:
-        return jsonify({
-            "status": "error",
-            "message": "Company name is required",
-        }), 400
+        return jsonify({"status": "error", "message": "Company name is required"}), 400
 
     existing = get_companies()
 
     if any(
-        str(row["CompanyName"]).strip().lower()
-        == company_name.lower()
+        str(row["CompanyName"]).strip().lower() == company_name.lower()
         for row in existing
     ):
-        return jsonify({
-            "status": "error",
-            "message": "Company already exists",
-        }), 409
+        return jsonify({"status": "error", "message": "Company already exists"}), 409
 
-    company_id = create_company(
-        company_name
-    )
-
-    company = get_company(
-        company_id
-    )
+    company_id = create_company(company_name)
+    company = get_company(company_id)
 
     return jsonify({
         "status": "ok",
@@ -119,17 +89,10 @@ def flow_company_create():
 def report_page():
     """Production report page driven by the company's ReportOutput node."""
     if not session.get("user_id"):
-        return jsonify({
-            "status": "error",
-            "message": "Login required",
-        }), 401
+        return jsonify({"status": "error", "message": "Login required"}), 401
 
-    company_id = _report_company_id()
-    if company_id is None:
-        return jsonify({
-            "status": "error",
-            "message": "Company is required",
-        }), 403
+    if _report_company_id() is None:
+        return jsonify({"status": "error", "message": "Company is required"}), 403
 
     return render_template("date_filter.html")
 
@@ -138,17 +101,11 @@ def report_page():
 def flow_report():
     """Execute the saved flow and return ReportOutput ChartData."""
     if not session.get("user_id"):
-        return jsonify({
-            "status": "error",
-            "message": "Login required",
-        }), 401
+        return jsonify({"status": "error", "message": "Login required"}), 401
 
     company_id = _report_company_id()
     if company_id is None:
-        return jsonify({
-            "status": "error",
-            "message": "Company is required",
-        }), 403
+        return jsonify({"status": "error", "message": "Company is required"}), 403
 
     try:
         flow_json = get_company_flow(company_id)
@@ -180,10 +137,7 @@ def flow_report():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-        }), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @flow_company_bp.get("/master/database")
@@ -195,12 +149,8 @@ def master_database():
     table/row data through the existing SCADA web application. It does
     not expose the SQLite file itself.
     """
-
     if not _is_master():
-        return jsonify({
-            "status": "error",
-            "message": "Access denied",
-        }), 403
+        return jsonify({"status": "error", "message": "Access denied"}), 403
 
     conn = None
 
@@ -208,28 +158,17 @@ def master_database():
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT name
             FROM sqlite_master
             WHERE type = 'table'
               AND name NOT LIKE 'sqlite_%'
             ORDER BY name
-            """
-        )
+        """)
 
-        tables = [
-            row["name"]
-            for row in cursor.fetchall()
-        ]
+        tables = [row["name"] for row in cursor.fetchall()]
 
-        selected_table = str(
-            request.args.get(
-                "table",
-                ""
-            )
-        ).strip()
-
+        selected_table = str(request.args.get("table", "")).strip()
         if selected_table not in tables:
             selected_table = tables[0] if tables else ""
 
@@ -238,64 +177,32 @@ def master_database():
         total_rows = 0
 
         try:
-            limit = int(
-                request.args.get(
-                    "limit",
-                    100
-                )
-            )
+            limit = int(request.args.get("limit", 100))
         except (TypeError, ValueError):
             limit = 100
-
-        limit = max(
-            10,
-            min(limit, 500)
-        )
+        limit = max(10, min(limit, 500))
 
         try:
-            offset = int(
-                request.args.get(
-                    "offset",
-                    0
-                )
-            )
+            offset = int(request.args.get("offset", 0))
         except (TypeError, ValueError):
             offset = 0
-
-        offset = max(
-            0,
-            offset
-        )
+        offset = max(0, offset)
 
         if selected_table:
-            safe_table = selected_table.replace(
-                '"',
-                '""'
-            )
+            safe_table = selected_table.replace('"', '""')
 
-            cursor.execute(
-                f'SELECT COUNT(*) AS row_count FROM "{safe_table}"'
-            )
-
-            total_rows = int(
-                cursor.fetchone()["row_count"]
-            )
+            cursor.execute(f'SELECT COUNT(*) AS row_count FROM "{safe_table}"')
+            total_rows = int(cursor.fetchone()["row_count"])
 
             cursor.execute(
                 f'SELECT * FROM "{safe_table}" LIMIT ? OFFSET ?',
-                (
-                    limit,
-                    offset,
-                )
+                (limit, offset),
             )
 
             fetched = cursor.fetchall()
 
             if fetched:
-                columns = [
-                    description[0]
-                    for description in cursor.description
-                ]
+                columns = [description[0] for description in cursor.description]
 
                 for row in fetched:
                     display_row = []
@@ -305,15 +212,9 @@ def master_database():
 
                         if any(
                             token in column.lower()
-                            for token in (
-                                "passwordhash",
-                                "password_hash",
-                                "token",
-                                "secret",
-                            )
+                            for token in ("passwordhash", "password_hash", "token", "secret")
                         ):
                             value = "••••••••"
-
                         elif isinstance(value, str) and len(value) > 300:
                             value = value[:300] + " …"
 
@@ -333,10 +234,7 @@ def master_database():
         )
 
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-        }), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
     finally:
         if conn is not None:
@@ -347,8 +245,5 @@ def master_database():
 
 
 def register_flow_company_routes(app):
-
     if "flow_company.flow_companies" not in app.view_functions:
-        app.register_blueprint(
-            flow_company_bp
-        )
+        app.register_blueprint(flow_company_bp)
