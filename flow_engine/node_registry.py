@@ -143,6 +143,29 @@ NODE_REGISTRY = {
         ]
     },
 
+    "ReportOutput": {
+        "config": [
+            {
+                "name": "DatePicker",
+                "label": "Date Type",
+                "type": "select",
+                "options": ["GregorianPicker", "JalaliPicker"],
+                "default": "GregorianPicker"
+            },
+            {
+                "name": "products",
+                "label": "Products",
+                "type": "table",
+                "columns": [
+                    {"name": "name", "label": "Product Name", "type": "text"},
+                    {"name": "tag", "label": "Production Tag", "type": "text"},
+                    {"name": "unit", "label": "Unit", "type": "text"},
+                    {"name": "aggregation", "label": "Calculation", "type": "select", "options": ["SUM", "MAX", "MIN", "AVG", "DELTA"]}
+                ]
+            }
+        ]
+    },
+
     "DateConverter": {
         "config": [
             {
