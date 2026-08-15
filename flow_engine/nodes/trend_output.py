@@ -11,27 +11,18 @@ class TrendOutput:
     def __init__(self, config):
         self.config = config or {}
 
-    # =====================================================
-    # TIME CONVERSION
-    # =====================================================
-
     def convert_time(self, value):
         """Return a numeric JavaScript timestamp (milliseconds)."""
         try:
             if value is None:
                 return None
-
             if hasattr(value, "timestamp"):
                 return int(value.timestamp() * 1000)
 
-            text = str(value).strip()
-
-            # ISO datetime from SQLite / API.
-            text = text.replace("T", " ")
+            text = str(value).strip().replace("T", " ")
             if text.endswith("Z"):
                 text = text[:-1]
 
-            # Jalali input is converted to Gregorian first.
             if "/" in text:
                 for fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
                     try:
@@ -52,7 +43,6 @@ class TrendOutput:
                 except Exception:
                     pass
 
-            # Last chance: ISO parser.
             dt = datetime.fromisoformat(text)
             return int(dt.timestamp() * 1000)
 
@@ -60,17 +50,16 @@ class TrendOutput:
             print("TIME CONVERSION ERROR:", e, value)
             return None
 
-    # =====================================================
-    # EXECUTE
-    # =====================================================
-
     def execute(self, data=None):
         if data is None:
             data = {}
 
+        # Report requests use ReportOutput. Do not replace its ChartData.
+        if "ReportRequest" in data:
+            return data
+
         trend_data = data.get("TrendData", [])
         request = data.get("TrendRequest", {})
-
         selected_tag = request.get("Tag")
 
         if not selected_tag:
@@ -83,7 +72,6 @@ class TrendOutput:
 
         for item in trend_data:
             item_tag = item.get("Tag")
-
             if selected_tag and item_tag != selected_tag:
                 continue
 
@@ -104,7 +92,6 @@ class TrendOutput:
                 "title": selected_tag,
                 "data": points,
             })
-
         else:
             grouped = {}
             for item in trend_data:
