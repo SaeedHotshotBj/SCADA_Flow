@@ -29,6 +29,12 @@ from flow_engine.nodes.trend_output import TrendOutput
 from flow_engine.nodes.trend_database_reader import TrendDatabaseReader
 
 # =====================================================
+# REPORT NODES
+# =====================================================
+
+from flow_engine.nodes.report_output import ReportOutput
+
+# =====================================================
 # DATE NODES
 # =====================================================
 
@@ -76,6 +82,10 @@ NODE_CLASSES = {
 
     "TrendOutput":
         TrendOutput,
+
+    # REPORT
+    "ReportOutput":
+        ReportOutput,
 
     # DATE
     "DateConverter":
