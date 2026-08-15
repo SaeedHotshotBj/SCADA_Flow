@@ -15,7 +15,10 @@ from database import (
     get_companies,
     get_company,
     get_connection,
+    get_company_flow,
 )
+
+from flow_runner import FlowRunner
 
 
 flow_company_bp = Blueprint(
@@ -31,6 +34,18 @@ def _is_master():
         ).strip().lower()
         == "master"
     )
+
+
+def _report_company_id():
+    """Return the company available to the current session."""
+    if _is_master():
+        return request.args.get("company_id", type=int) or session.get("selected_company_id")
+
+    company_id = session.get("company_id")
+    try:
+        return int(company_id) if company_id is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 @flow_company_bp.get("/flow/companies")
@@ -98,6 +113,77 @@ def flow_company_create():
         "status": "ok",
         "company": dict(company),
     }), 201
+
+
+@flow_company_bp.route("/report")
+def report_page():
+    """Production report page driven by the company's ReportOutput node."""
+    if not session.get("user_id"):
+        return jsonify({
+            "status": "error",
+            "message": "Login required",
+        }), 401
+
+    company_id = _report_company_id()
+    if company_id is None:
+        return jsonify({
+            "status": "error",
+            "message": "Company is required",
+        }), 403
+
+    return render_template("date_filter.html")
+
+
+@flow_company_bp.post("/flow_report")
+def flow_report():
+    """Execute the saved flow and return ReportOutput ChartData."""
+    if not session.get("user_id"):
+        return jsonify({
+            "status": "error",
+            "message": "Login required",
+        }), 401
+
+    company_id = _report_company_id()
+    if company_id is None:
+        return jsonify({
+            "status": "error",
+            "message": "Company is required",
+        }), 403
+
+    try:
+        flow_json = get_company_flow(company_id)
+        if not flow_json:
+            return jsonify({
+                "status": "error",
+                "message": "No flow configured for this company",
+            }), 404
+
+        flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
+        payload = request.get_json(silent=True) or {}
+        report_request = payload.get("ReportRequest", {}) or {}
+        report_request["CompanyID"] = company_id
+        payload["ReportRequest"] = report_request
+
+        runner = FlowRunner(flow, company_id)
+        result = runner.execute_request(payload)
+        chart_data = result.get("ChartData", {}) or {}
+        report = chart_data.get("report", result.get("ReportData", {})) or {}
+
+        return jsonify({
+            "calendar": chart_data.get("calendar", report_request.get("Calendar", "Gregorian")),
+            "date_picker": chart_data.get("date_picker", "GregorianPicker"),
+            "report": report,
+            "labels": chart_data.get("labels", []),
+            "datasets": chart_data.get("datasets", []),
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+        }), 500
 
 
 @flow_company_bp.get("/master/database")
@@ -217,8 +303,6 @@ def master_database():
                     for column in columns:
                         value = row[column]
 
-                        # Never display password hashes or similar
-                        # credential material in the browser.
                         if any(
                             token in column.lower()
                             for token in (
