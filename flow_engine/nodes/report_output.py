@@ -96,8 +96,6 @@ class ReportOutput:
                         "unit": str(mapping.get("unit", "")).strip(),
                     }
 
-                # A company's flow normally has one TagMapper. Once found,
-                # all its mappings have been collected.
                 if definitions:
                     break
 
@@ -109,10 +107,6 @@ class ReportOutput:
     def _selected_products(self):
         """
         Resolve ReportOutput selections against TagMapper definitions.
-
-        A report selection is accepted only when its tag/name exists in
-        TagMapper. This prevents hardcoded backend report columns and keeps
-        the report tied to the Flow Designer configuration.
         """
         result = []
         seen = set()
@@ -131,9 +125,6 @@ class ReportOutput:
 
             definition = definitions.get(requested_tag.lower())
 
-            # Also allow a numeric register in ReportOutput. The register is
-            # resolved through TagMapper; it is never used as a hardcoded DB
-            # column name.
             if definition is None:
                 try:
                     requested_register = int(requested_tag)
@@ -191,15 +182,27 @@ class ReportOutput:
         placeholders = ",".join("?" for _ in tags)
 
         cursor = conn.cursor()
+
+        # Edge stores ISO timestamps such as 2026-08-15T07:30:00.
+        # Convert both stored and requested timestamps through SQLite's
+        # datetime() so Jalali/Gregorian filtering works correctly.
+        #
+        # Edge currently stores incoming values as StorageType='EDGE'.
+        # ReportOutput selections identify which tags belong in the report,
+        # so both EDGE and REPORT_TRIGGER records are accepted here.
         cursor.execute(
             f"""
-            SELECT Timestamp, TagName, Value
+            SELECT ID, Timestamp, TagName, Value
             FROM PLC_Data
             WHERE CompanyID = ?
               AND LOWER(TagName) IN ({placeholders})
-              AND Timestamp BETWEEN ? AND ?
-              AND StorageType = 'REPORT_TRIGGER'
-            ORDER BY Timestamp ASC, ID ASC
+              AND datetime(Timestamp) BETWEEN datetime(?) AND datetime(?)
+              AND (
+                    UPPER(COALESCE(StorageType, '')) = 'EDGE'
+                    OR
+                    UPPER(COALESCE(StorageType, '')) = 'REPORT_TRIGGER'
+              )
+            ORDER BY datetime(Timestamp) ASC, ID ASC
             """,
             [
                 self.company_id,
@@ -223,6 +226,8 @@ class ReportOutput:
             except (TypeError, ValueError):
                 continue
 
+            # Keep the original timestamp string for display, while using
+            # normalized datetime ordering in SQL.
             by_time.setdefault(timestamp, {})[tag] = value
 
         result_rows = []
