@@ -35,10 +35,6 @@
         }
 
 
-        /* =====================================================
-           HEADER
-           ===================================================== */
-
         .topbar {
 
             height: 70px;
@@ -131,10 +127,6 @@
         }
 
 
-        /* =====================================================
-           MAIN
-           ===================================================== */
-
         .main {
 
             padding: 28px;
@@ -166,13 +158,9 @@
         }
 
 
-        /* =====================================================
-           COMPANY CONTROL PANEL
-           ===================================================== */
-
         .control-panel {
 
-            width: 520px;
+            width: 650px;
 
             max-width: 100%;
 
@@ -252,10 +240,6 @@
         }
 
 
-        /* =====================================================
-           BUTTONS
-           ===================================================== */
-
         .buttons {
 
             display: flex;
@@ -263,10 +247,13 @@
             gap: 10px;
 
             margin-top: 18px;
+
+            flex-wrap: wrap;
         }
 
 
-        button {
+        button,
+        .db-button {
 
             padding: 10px 17px;
 
@@ -279,6 +266,10 @@
             font-weight: bold;
 
             cursor: pointer;
+
+            text-decoration: none;
+
+            display: inline-block;
         }
 
 
@@ -313,9 +304,20 @@
         }
 
 
-        /* =====================================================
-           FUTURE CONTENT AREA
-           ===================================================== */
+        .db-button {
+
+            background: #236b45;
+
+            color: white;
+
+        }
+
+
+        .db-button:hover {
+
+            background: #2b8255;
+        }
+
 
         .content-area {
 
@@ -343,10 +345,6 @@
             margin-bottom: 20px;
         }
 
-
-        /* =====================================================
-           MOBILE
-           ===================================================== */
 
         @media (
             max-width: 650px
@@ -378,9 +376,12 @@
             }
 
 
-            button {
+            button,
+            .db-button {
 
                 width: 100%;
+
+                text-align: center;
             }
 
         }
@@ -392,10 +393,6 @@
 
 <body>
 
-
-<!-- =====================================================
-     TOP BAR
-     ===================================================== -->
 
 <header class="topbar">
 
@@ -432,10 +429,6 @@
 </header>
 
 
-<!-- =====================================================
-     MAIN
-     ===================================================== -->
-
 <main class="main">
 
 
@@ -446,15 +439,11 @@
         </h1>
 
         <p>
-            Select a company or open the Flow Designer.
+            Select a company, open the Flow Designer, or inspect the production database.
         </p>
 
     </div>
 
-
-    <!-- =================================================
-         COMPANY CONTROL
-         ================================================= -->
 
     <div class="control-panel">
 
@@ -521,25 +510,25 @@
             </button>
 
 
+            <a
+                class="db-button"
+                href="{{ url_for('flow_company.master_database') }}"
+            >
+                DATABASE VIEWER
+            </a>
+
+
         </div>
 
 
     </div>
 
 
-    <!-- =================================================
-         FUTURE MASTER CONTENT
-         ================================================= -->
-
     <div class="content-area">
 
         <div class="content-title">
             Master workspace
         </div>
-
-        <!--
-            Future Master controls can be added here.
-        -->
 
     </div>
 
@@ -659,4 +648,3 @@
 </body>
 
 </html>
-
