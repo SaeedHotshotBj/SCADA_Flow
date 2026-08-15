@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SCADA FLOW - Database</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #20252b;
+            color: #fff;
+            font-family: Arial, sans-serif;
+        }
+        .topbar {
+            min-height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            background: #171b20;
+            border-bottom: 1px solid #3d464f;
+            gap: 15px;
+        }
+        .brand { font-size: 20px; font-weight: bold; }
+        .subtitle { color: #9da7b0; font-size: 12px; margin-top: 4px; }
+        .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn, select {
+            padding: 9px 13px;
+            border-radius: 6px;
+            border: 1px solid #4b5660;
+            background: #2b3239;
+            color: #fff;
+            text-decoration: none;
+        }
+        select { min-width: 220px; }
+        .btn:hover { background: #3a444e; }
+        .main { padding: 24px; }
+        .panel {
+            background: #292f35;
+            border: 1px solid #414b54;
+            border-radius: 10px;
+            padding: 18px;
+            margin-bottom: 18px;
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .info { color: #9da7b0; font-size: 13px; }
+        .table-wrap {
+            overflow: auto;
+            max-height: 70vh;
+            border: 1px solid #414b54;
+            border-radius: 7px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: max-content;
+        }
+        th, td {
+            padding: 9px 11px;
+            border-bottom: 1px solid #3b444c;
+            border-right: 1px solid #343d45;
+            text-align: left;
+            vertical-align: top;
+            font-size: 12px;
+            max-width: 420px;
+            word-break: break-word;
+        }
+        th {
+            position: sticky;
+            top: 0;
+            background: #171b20;
+            color: #fff;
+            z-index: 1;
+        }
+        tr:hover td { background: #30373e; }
+        .empty { padding: 30px; color: #9da7b0; text-align: center; }
+        .pager { display: flex; gap: 8px; align-items: center; }
+        .disabled { opacity: .45; pointer-events: none; }
+        @media (max-width: 700px) {
+            .main { padding: 14px; }
+            .topbar { padding: 0 14px; }
+            select { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+<header class="topbar">
+    <div>
+        <div class="brand">SCADA FLOW — Database Viewer</div>
+        <div class="subtitle">Read-only production database browser • Master only</div>
+    </div>
+    <div class="actions">
+        <a class="btn" href="{{ url_for('master_companies') }}">Master Panel</a>
+        <a class="btn" href="{{ url_for('logout') }}">Logout</a>
+    </div>
+</header>
+
+<main class="main">
+    <div class="panel">
+        <form class="toolbar" method="get" action="{{ url_for('flow_company.master_database') }}">
+            <div>
+                <label for="table">Table</label><br>
+                <select id="table" name="table" onchange="this.form.submit()">
+                    {% for table in tables %}
+                    <option value="{{ table }}" {% if table == selected_table %}selected{% endif %}>
+                        {{ table }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="info">
+                {{ total_rows }} rows • showing {{ rows|length }} • offset {{ offset }}
+            </div>
+        </form>
+    </div>
+
+    <div class="panel">
+        <div class="toolbar" style="margin-bottom: 12px;">
+            <div class="info">
+                Database table: <strong>{{ selected_table }}</strong>
+            </div>
+            <div class="pager">
+                {% set previous_offset = [offset - limit, 0]|max %}
+                {% set next_offset = offset + limit %}
+                <a class="btn {% if offset == 0 %}disabled{% endif %}"
+                   href="{{ url_for('flow_company.master_database', table=selected_table, offset=previous_offset, limit=limit) }}">Previous</a>
+                <a class="btn {% if next_offset >= total_rows %}disabled{% endif %}"
+                   href="{{ url_for('flow_company.master_database', table=selected_table, offset=next_offset, limit=limit) }}">Next</a>
+            </div>
+        </div>
+
+        {% if columns %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        {% for column in columns %}
+                        <th>{{ column }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                    <tr>
+                        {% for value in row %}
+                        <td>{{ value if value is not none else '' }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty">No rows found in this table.</div>
+        {% endif %}
+    </div>
+</main>
+</body>
+</html>
