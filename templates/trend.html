@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SCADA Trend</title>
-
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
@@ -12,273 +11,33 @@
 <script src="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/js/persian-datepicker.min.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/css/persian-datepicker.min.css">
 <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;800&display=swap" rel="stylesheet">
-
 <style>
-*{box-sizing:border-box}
-body{margin:0;background:#eef3f8;color:#1e293b;font-family:'Vazirmatn',sans-serif}
-.header{background:linear-gradient(135deg,#0f172a,#2563eb);padding:35px;text-align:center;color:#fff}
-.title{font-size:34px;font-weight:800}.subtitle{margin-top:10px;font-size:17px}
-.container{width:95%;max-width:1500px;margin:30px auto}.card{background:#fff;border-radius:18px;padding:25px;margin-bottom:25px;box-shadow:0 8px 25px rgba(0,0,0,.08)}
-.parameter-card{text-align:center;border-right:8px solid #2563eb}.parameter-label{font-size:18px;color:#64748b}.parameter-name{margin-top:10px;font-size:36px;font-weight:800;color:#2563eb}
-.filter-container{display:flex;gap:20px;justify-content:center;align-items:end;flex-wrap:wrap}.filter-item{background:#f8fafc;padding:20px;border-radius:15px}
-label{display:block;margin-bottom:10px;font-weight:bold}input,select{padding:12px;border-radius:10px;border:1px solid #cbd5e1;font-family:'Vazirmatn';text-align:center;direction:ltr;min-width:220px}
-button{background:#2563eb;color:white;border:none;padding:14px 25px;border-radius:12px;font-size:16px;cursor:pointer;font-family:'Vazirmatn'}
-.status{margin-top:15px;text-align:center;color:#64748b}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}.stat{background:#f8fafc;padding:20px;border-radius:15px;text-align:center}.stat-title{color:#64748b}.stat-value{font-size:28px;font-weight:800;color:#2563eb;margin-top:10px}.chart-card{height:600px}canvas{width:100%!important;height:100%!important}
-@media(max-width:800px){.stats{grid-template-columns:repeat(2,1fr)}.chart-card{height:450px}}
+*{box-sizing:border-box}body{margin:0;background:#eef3f8;color:#1e293b;font-family:'Vazirmatn',sans-serif}.header{background:linear-gradient(135deg,#0f172a,#2563eb);padding:35px;text-align:center;color:#fff}.title{font-size:34px;font-weight:800}.subtitle{margin-top:10px;font-size:17px}.container{width:95%;max-width:1500px;margin:30px auto}.card{background:#fff;border-radius:18px;padding:25px;margin-bottom:25px;box-shadow:0 8px 25px rgba(0,0,0,.08)}.parameter-card{text-align:center;border-right:8px solid #2563eb}.parameter-label{font-size:18px;color:#64748b}.parameter-name{margin-top:10px;font-size:36px;font-weight:800;color:#2563eb}.filter-container{display:flex;gap:20px;justify-content:center;align-items:end;flex-wrap:wrap}.filter-item{background:#f8fafc;padding:20px;border-radius:15px}label{display:block;margin-bottom:10px;font-weight:bold}input,select{padding:12px;border-radius:10px;border:1px solid #cbd5e1;font-family:'Vazirmatn';text-align:center;direction:ltr;min-width:220px}button{background:#2563eb;color:white;border:none;padding:14px 25px;border-radius:12px;font-size:16px;cursor:pointer;font-family:'Vazirmatn'}.status{margin-top:15px;text-align:center;color:#64748b}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}.stat{background:#f8fafc;padding:20px;border-radius:15px;text-align:center}.stat-title{color:#64748b}.stat-value{font-size:28px;font-weight:800;color:#2563eb;margin-top:10px}.chart-card{height:600px}canvas{width:100%!important;height:100%!important}@media(max-width:800px){.stats{grid-template-columns:repeat(2,1fr)}.chart-card{height:450px}}
 </style>
 </head>
-
 <body>
 {% include "nav.html" %}
-<div class="header">
-<div class="title">سامانه مانیتورینگ صنعتی SCADA</div>
-<div class="subtitle">نمایش و تحلیل روند پارامترها</div>
-</div>
-
+<div class="header"><div class="title">سامانه مانیتورینگ صنعتی SCADA</div><div class="subtitle">نمایش و تحلیل روند پارامترها</div></div>
 <div class="container">
-<div class="card parameter-card">
-<div class="parameter-label">پارامتر انتخاب شده</div>
-<div class="parameter-name" id="parameterName">-</div>
-<div class="status" id="configStatus">در حال دریافت تنظیمات Flow...</div>
-</div>
-
-<div class="card">
-<h3>انتخاب بازه زمانی</h3>
-<div class="filter-container">
-<div class="filter-item">
-<label>پارامتر</label>
-<select id="tag"></select>
-</div>
-<div class="filter-item">
-<label id="startLabel">از تاریخ و ساعت</label>
-<input id="start_time" type="text">
-</div>
-<div class="filter-item">
-<label id="endLabel">تا تاریخ و ساعت</label>
-<input id="end_time" type="text">
-</div>
-<button onclick="loadGraph()">📈 نمایش نمودار</button>
-<button onclick="resetZoom()">🔄 بازگشت زوم</button>
-<button onclick="saveGraph()">💾 ذخیره نمودار</button>
-</div>
-</div>
-
-<div class="card">
-<div class="stats">
-<div class="stat"><div class="stat-title">مقدار فعلی</div><div class="stat-value" id="current">-</div></div>
-<div class="stat"><div class="stat-title">کمترین مقدار</div><div class="stat-value" id="min">-</div></div>
-<div class="stat"><div class="stat-title">بیشترین مقدار</div><div class="stat-value" id="max">-</div></div>
-<div class="stat"><div class="stat-title">میانگین</div><div class="stat-value" id="avg">-</div></div>
-</div>
-</div>
-
+<div class="card parameter-card"><div class="parameter-label">پارامتر انتخاب شده</div><div class="parameter-name" id="parameterName">-</div><div class="status" id="configStatus">در حال دریافت تنظیمات Flow...</div></div>
+<div class="card"><h3>انتخاب بازه زمانی</h3><div class="filter-container"><div class="filter-item"><label>پارامتر</label><select id="tag"></select></div><div class="filter-item"><label id="startLabel">از تاریخ و ساعت</label><input id="start_time" type="text"></div><div class="filter-item"><label id="endLabel">تا تاریخ و ساعت</label><input id="end_time" type="text"></div><button onclick="loadGraph()">📈 نمایش نمودار</button><button onclick="resetZoom()">🔄 بازگشت زوم</button><button onclick="saveGraph()">💾 ذخیره نمودار</button></div></div>
+<div class="card"><div class="stats"><div class="stat"><div class="stat-title">مقدار فعلی</div><div class="stat-value" id="current">-</div></div><div class="stat"><div class="stat-title">کمترین مقدار</div><div class="stat-value" id="min">-</div></div><div class="stat"><div class="stat-title">بیشترین مقدار</div><div class="stat-value" id="max">-</div></div><div class="stat"><div class="stat-title">میانگین</div><div class="stat-value" id="avg">-</div></div></div></div>
 <div class="card chart-card"><canvas id="trendChart"></canvas></div>
 </div>
-
 <script>
-let chart=null;
-let trendConfig={};
-let calendarMode='Gregorian';
-
-function normalizeTags(tags){
-    if(!Array.isArray(tags)) return [];
-    return tags.filter(t=>t && t.tag).map(t=>({
-        tag:String(t.tag),
-        title:t.title || t.tag,
-        unit:t.unit || ''
-    }));
-}
-
-async function loadFlow(){
-    try{
-        const response=await fetch('/trend_config',{cache:'no-store'});
-        if(!response.ok) throw new Error('trend_config HTTP '+response.status);
-        trendConfig=await response.json();
-
-        // IMPORTANT: parameters come from the Flow configuration.
-        // Do not overwrite these with a second hard-coded/legacy tag source.
-        trendConfig.tags=normalizeTags(trendConfig.tags);
-
-        calendarMode=(String(trendConfig.calendar || '').toLowerCase()==='jalali' || trendConfig.date_picker==='JalaliPicker')
-            ? 'Jalali' : 'Gregorian';
-
-        setupTags();
-        setupPicker();
-        setDefaultDateRange();
-
-        document.getElementById('configStatus').textContent=
-            'تقویم تعریف شده در Flow: '+(calendarMode==='Jalali'?'جلالی':'میلادی');
-
-        if(trendConfig.tags.length){
-            await loadGraph();
-        }else{
-            document.getElementById('configStatus').textContent=
-                'هیچ پارامتر Trend در Flow تعریف نشده است.';
-            clearStats();
-        }
-    }catch(e){
-        console.error('TREND FLOW ERROR',e);
-        document.getElementById('configStatus').textContent='خطا در دریافت تنظیمات Trend از Flow';
-    }
-}
-
-function setupTags(){
-    const select=document.getElementById('tag');
-    select.innerHTML='';
-    for(const item of trendConfig.tags || []){
-        const option=document.createElement('option');
-        option.value=item.tag;
-        option.textContent=item.title + (item.unit ? ' ('+item.unit+')' : '');
-        select.appendChild(option);
-    }
-    select.onchange=()=>{
-        document.getElementById('parameterName').textContent=select.value || '-';
-    };
-    if(select.options.length){
-        document.getElementById('parameterName').textContent=select.value;
-    }else{
-        document.getElementById('parameterName').textContent='-';
-    }
-}
-
-function setupPicker(){
-    const start=document.getElementById('start_time');
-    const end=document.getElementById('end_time');
-
-    if(calendarMode==='Jalali'){
-        start.type='text'; end.type='text';
-        $(start).persianDatepicker({format:'YYYY/MM/DD HH:mm',timePicker:{enabled:true}});
-        $(end).persianDatepicker({format:'YYYY/MM/DD HH:mm',timePicker:{enabled:true}});
-    }else{
-        start.type='datetime-local';
-        end.type='datetime-local';
-    }
-}
-
-function pad(n){return String(n).padStart(2,'0')}
-function localDateTimeValue(d){
-    return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
-}
-
-function setDefaultDateRange(){
-    const end=new Date();
-    const start=new Date();
-    start.setDate(start.getDate()-10);
-
-    if(calendarMode==='Jalali'){
-        $('#start_time').val(new persianDate(start).format('YYYY/MM/DD HH:mm'));
-        $('#end_time').val(new persianDate(end).format('YYYY/MM/DD HH:mm'));
-    }else{
-        document.getElementById('start_time').value=localDateTimeValue(start);
-        document.getElementById('end_time').value=localDateTimeValue(end);
-    }
-}
-
-async function loadGraph(){
-    const tag=document.getElementById('tag').value;
-    if(!tag){clearStats();return}
-
-    document.getElementById('parameterName').textContent=tag;
-
-    const payload={
-        tag:tag,
-        start:document.getElementById('start_time').value,
-        end:document.getElementById('end_time').value,
-        // This value is only a display/request value. The server should use
-        // the calendar configured by the company's Flow.
-        calendar:calendarMode
-    };
-
-    try{
-        const response=await fetch('/trend_request',{
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(payload),
-            cache:'no-store'
-        });
-        const data=await response.json();
-        if(!response.ok) throw new Error(data.error || ('HTTP '+response.status));
-        drawChart(data);
-        updateStats(data);
-    }catch(e){
-        console.error('TREND REQUEST ERROR',e);
-        clearStats();
-    }
-}
-
-function formatAxisDate(value){
-    const date=new Date(value);
-    if(Number.isNaN(date.getTime())) return String(value);
-    if(calendarMode==='Jalali') return new persianDate(date).format('YYYY/MM/DD HH:mm:ss');
-    return date.getFullYear()+'-'+pad(date.getMonth()+1)+'-'+pad(date.getDate())+' '+pad(date.getHours())+':'+pad(date.getMinutes())+':'+pad(date.getSeconds());
-}
-
-function drawChart(data){
-    const datasets=data && Array.isArray(data.datasets) ? data.datasets : [];
-    const first=datasets.length ? datasets[0] : null;
-    const points=first && Array.isArray(first.data) ? first.data : [];
-
-    if(chart) chart.destroy();
-
-    chart=new Chart(document.getElementById('trendChart'),{
-        type:'line',
-        data:{datasets:datasets.map(ds=>({
-            label:ds.title || ds.tag || 'Trend',
-            data:ds.data || [],
-            borderWidth:2,
-            pointRadius:0,
-            tension:.15,
-            fill:false
-        }))},
-        options:{
-            responsive:true,
-            maintainAspectRatio:false,
-            parsing:false,
-            interaction:{mode:'nearest',intersect:false},
-            scales:{
-                x:{
-                    type:'linear',
-                    ticks:{
-                        callback:function(value){return formatAxisDate(value)}
-                    },
-                    title:{display:true,text:calendarMode==='Jalali'?'تاریخ و زمان جلالی':'Date / Time'}
-                },
-                y:{beginAtZero:false,title:{display:true,text:'Value'}}
-            },
-            plugins:{
-                legend:{display:true},
-                tooltip:{callbacks:{
-                    title:function(items){return items.length ? formatAxisDate(items[0].parsed.x) : ''},
-                    label:function(item){return ' '+item.dataset.label+': '+item.parsed.y}
-                }},
-                zoom:{zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'},pan:{enabled:true,mode:'x'}}
-            }
-        }
-    });
-
-    if(!points.length) clearStats();
-}
-
-function updateStats(data){
-    const ds=data && data.datasets && data.datasets.length ? data.datasets[0] : null;
-    const points=ds && Array.isArray(ds.data) ? ds.data : [];
-    const values=points.map(p=>Number(p.y)).filter(v=>Number.isFinite(v));
-    if(!values.length){clearStats();return}
-    const min=Math.min(...values),max=Math.max(...values);
-    const avg=values.reduce((a,b)=>a+b,0)/values.length;
-    document.getElementById('current').textContent=values[values.length-1];
-    document.getElementById('min').textContent=min;
-    document.getElementById('max').textContent=max;
-    document.getElementById('avg').textContent=avg.toFixed(2);
-}
-
-function clearStats(){
-    ['current','min','max','avg'].forEach(id=>document.getElementById(id).textContent='-');
-}
-function resetZoom(){if(chart) chart.resetZoom()}
-function saveGraph(){if(chart){const a=document.createElement('a');a.href=chart.toBase64Image();a.download='scada-trend.png';a.click()}}
-
-loadFlow();
+let chart=null,trendConfig={},calendarMode='Gregorian';
+function normalizeTags(tags){if(!Array.isArray(tags))return [];return tags.filter(t=>t&&t.tag).map(t=>({tag:String(t.tag),title:t.title||t.tag,unit:t.unit||''}));}
+async function loadFlow(){try{const response=await fetch('/trend_config',{cache:'no-store'});if(!response.ok)throw new Error('trend_config HTTP '+response.status);trendConfig=await response.json();trendConfig.tags=normalizeTags(trendConfig.tags);calendarMode=(String(trendConfig.calendar||'').toLowerCase()==='jalali'||trendConfig.date_picker==='JalaliPicker')?'Jalali':'Gregorian';setupTags();setupPicker();setDefaultDateRange();document.getElementById('configStatus').textContent='تقویم تعریف شده در Flow: '+(calendarMode==='Jalali'?'جلالی':'میلادی');if(trendConfig.tags.length)await loadGraph();else{document.getElementById('configStatus').textContent='هیچ پارامتر Trend در Flow تعریف نشده است.';clearStats();}}catch(e){console.error('TREND FLOW ERROR',e);document.getElementById('configStatus').textContent='خطا در دریافت تنظیمات Trend از Flow';}}
+function setupTags(){const select=document.getElementById('tag');select.innerHTML='';for(const item of trendConfig.tags||[]){const option=document.createElement('option');option.value=item.tag;option.textContent=item.title+(item.unit?' ('+item.unit+')':'');select.appendChild(option);}select.onchange=()=>document.getElementById('parameterName').textContent=select.value||'-';if(select.options.length)document.getElementById('parameterName').textContent=select.value;else document.getElementById('parameterName').textContent='-';}
+function setupPicker(){const start=document.getElementById('start_time'),end=document.getElementById('end_time');if(calendarMode==='Jalali'){start.type='text';end.type='text';$(start).persianDatepicker({format:'YYYY/MM/DD HH:mm',timePicker:{enabled:true}});$(end).persianDatepicker({format:'YYYY/MM/DD HH:mm',timePicker:{enabled:true}});}else{start.type='datetime-local';end.type='datetime-local';}}
+function pad(n){return String(n).padStart(2,'0')}function localDateTimeValue(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());}
+function setDefaultDateRange(){const end=new Date(),start=new Date();start.setDate(start.getDate()-10);if(calendarMode==='Jalali'){$('#start_time').val(new persianDate(start).format('YYYY/MM/DD HH:mm'));$('#end_time').val(new persianDate(end).format('YYYY/MM/DD HH:mm'));}else{document.getElementById('start_time').value=localDateTimeValue(start);document.getElementById('end_time').value=localDateTimeValue(end);}}
+async function loadGraph(){const tag=document.getElementById('tag').value;if(!tag){clearStats();return}document.getElementById('parameterName').textContent=tag;const payload={tag:tag,start:document.getElementById('start_time').value,end:document.getElementById('end_time').value,calendar:calendarMode};try{const response=await fetch('/trend_request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),cache:'no-store'});const data=await response.json();if(!response.ok)throw new Error(data.error||('HTTP '+response.status));console.log('TREND DATA RECEIVED',data);drawChart(data);updateStats(data);}catch(e){console.error('TREND REQUEST ERROR',e);clearStats();}}
+function parsePointX(value){if(typeof value==='number'&&Number.isFinite(value))return value;const d=new Date(value);return Number.isNaN(d.getTime())?null:d.getTime();}
+function formatAxisDate(value){const date=new Date(Number(value));if(Number.isNaN(date.getTime()))return String(value);if(calendarMode==='Jalali')return new persianDate(date).format('YYYY/MM/DD HH:mm:ss');return date.getFullYear()+'-'+pad(date.getMonth()+1)+'-'+pad(date.getDate())+' '+pad(date.getHours())+':'+pad(date.getMinutes())+':'+pad(date.getSeconds());}
+function drawChart(data){const rawDatasets=data&&Array.isArray(data.datasets)?data.datasets:[];const datasets=rawDatasets.map(ds=>({...ds,data:(Array.isArray(ds.data)?ds.data:[]).map(p=>({x:parsePointX(p.x),y:Number(p.y)})).filter(p=>p.x!==null&&Number.isFinite(p.y))}));const points=datasets.length?datasets[0].data:[];console.log('TREND POINTS FOR CHART',points.length,points.slice(0,3));if(chart)chart.destroy();chart=new Chart(document.getElementById('trendChart'),{type:'line',data:{datasets:datasets.map(ds=>({label:ds.title||ds.tag||'Trend',data:ds.data,borderWidth:2,pointRadius:0,tension:.15,fill:false}))},options:{responsive:true,maintainAspectRatio:false,parsing:false,interaction:{mode:'nearest',intersect:false},scales:{x:{type:'linear',ticks:{callback:function(value){return formatAxisDate(value)}},title:{display:true,text:calendarMode==='Jalali'?'تاریخ و زمان جلالی':'Date / Time'}},y:{beginAtZero:false,title:{display:true,text:'Value'}}},plugins:{legend:{display:true},tooltip:{callbacks:{title:function(items){return items.length?formatAxisDate(items[0].parsed.x):''},label:function(item){return ' '+item.dataset.label+': '+item.parsed.y}}},zoom:{zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'},pan:{enabled:true,mode:'x'}}}}});if(!points.length)clearStats();}
+function updateStats(data){const ds=data&&data.datasets&&data.datasets.length?data.datasets[0]:null;const points=ds&&Array.isArray(ds.data)?ds.data:[];const values=points.map(p=>Number(p.y)).filter(v=>Number.isFinite(v));if(!values.length){clearStats();return}const min=Math.min(...values),max=Math.max(...values),avg=values.reduce((a,b)=>a+b,0)/values.length;document.getElementById('current').textContent=values[values.length-1];document.getElementById('min').textContent=min;document.getElementById('max').textContent=max;document.getElementById('avg').textContent=avg.toFixed(2);}
+function clearStats(){['current','min','max','avg'].forEach(id=>document.getElementById(id).textContent='-');}function resetZoom(){if(chart)chart.resetZoom()}function saveGraph(){if(chart){const a=document.createElement('a');a.href=chart.toBase64Image();a.download='scada-trend.png';a.click()}}loadFlow();
 </script>
 </body>
 </html>
