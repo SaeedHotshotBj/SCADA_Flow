@@ -1,131 +1,38 @@
 <!DOCTYPE html>
-
-<html>
-
+<html lang="fa" dir="rtl">
 <head>
-
-<title>Date Filter</title>
-
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SCADA Report</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/persian-date@1.1.0/dist/persian-date.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/js/persian-datepicker.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/css/persian-datepicker.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eef3f8;color:#1e293b;font-family:'Vazirmatn',sans-serif}.header{background:linear-gradient(135deg,#0f172a,#2563eb);padding:32px;text-align:center;color:#fff}.title{font-size:32px;font-weight:800}.subtitle{margin-top:8px;font-size:16px}.container{width:95%;max-width:1450px;margin:28px auto}.card{background:#fff;border-radius:18px;padding:24px;margin-bottom:24px;box-shadow:0 8px 25px rgba(0,0,0,.08)}.filter{display:flex;gap:18px;align-items:end;justify-content:center;flex-wrap:wrap}.item{background:#f8fafc;padding:18px;border-radius:14px}.item label{display:block;font-weight:700;margin-bottom:8px}input{padding:12px;border:1px solid #cbd5e1;border-radius:10px;min-width:235px;font-family:'Vazirmatn';text-align:center;direction:ltr}button{background:#2563eb;color:#fff;border:0;border-radius:10px;padding:13px 24px;font-family:'Vazirmatn';font-size:15px;cursor:pointer}.status{text-align:center;color:#64748b;margin-top:12px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:12px;border-bottom:1px solid #e2e8f0;text-align:center}th{background:#f1f5f9}td:first-child,th:first-child{text-align:right}.chart-box{height:520px}canvas{width:100%!important;height:100%!important}.empty{text-align:center;color:#64748b;padding:30px}.datepicker-plot-area .timepicker{display:block!important;visibility:visible!important;opacity:1!important}.datepicker-plot-area .timepicker .timepicker-list{display:flex!important;visibility:visible!important}@media(max-width:800px){.chart-box{height:420px}}
+</style>
 </head>
-
-
 <body>
 {% include "nav.html" %}
-
-<h2>
-Trend Date Filter
-</h2>
-
-
-<select id="calendar">
-
-<option value="Gregorian">
-Gregorian
-</option>
-
-
-<option value="Jalali">
-Jalali
-</option>
-
-
-</select>
-
-
-<br><br>
-
-
-Start:
-
-<input 
-id="start"
-placeholder="2026/07/22 10:00:00">
-
-
-<br><br>
-
-
-End:
-
-<input 
-id="end"
-placeholder="2026/07/22 12:00:00">
-
-
-<br><br>
-
-
-<button onclick="sendFilter()">
-
-APPLY
-
-</button>
-
-
-
-
+<div class="header"><div class="title">گزارش تولید</div><div class="subtitle">گزارش محصولات در بازه زمانی انتخاب شده</div></div>
+<div class="container">
+<div class="card"><div class="filter"><div class="item"><label>از تاریخ و ساعت</label><input id="start" type="text"></div><div class="item"><label>تا تاریخ و ساعت</label><input id="end" type="text"></div><button onclick="loadReport()">📊 نمایش گزارش</button></div><div class="status" id="status">در حال دریافت تنظیمات Report از Flow...</div></div>
+<div class="card"><h3>جدول محصولات</h3><div class="table-wrap"><table><thead><tr><th>محصول</th><th>مقدار</th><th>واحد</th><th>روش محاسبه</th></tr></thead><tbody id="reportBody"></tbody></table></div></div>
+<div class="card chart-box"><canvas id="reportChart"></canvas></div>
+</div>
 <script>
-
-
-function sendFilter(){
-
-
-fetch(
-"/set_date_filter",
-{
-
-method:"POST",
-
-headers:
-{
-"Content-Type":
-"application/json"
-},
-
-
-body:
-JSON.stringify({
-
-calendar:
-document.getElementById(
-"calendar"
-).value,
-
-
-start:
-document.getElementById(
-"start"
-).value,
-
-
-end:
-document.getElementById(
-"end"
-).value
-
-})
-
-}
-
-)
-
-.then(
-r=>r.json()
-)
-
-.then(
-d=>alert(
-"Filter Updated"
-)
-);
-
-
-}
-
-
+let calendarMode='Gregorian',chart=null,ready=false;
+function pad(n){return String(n).padStart(2,'0')}
+function localValue(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes())}
+function setupPicker(){const s=document.getElementById('start'),e=document.getElementById('end');if(calendarMode==='Jalali'){s.type='text';e.type='text';const o={format:'YYYY/MM/DD HH:mm',initialValue:true,initialValueType:'gregorian',autoClose:false,observer:true,timePicker:{enabled:true,step:1,hour:{enabled:true},minute:{enabled:true},second:{enabled:false},meridian:{enabled:false}},toolbox:{enabled:true,submitButton:{enabled:true},todayButton:{enabled:true},calendarSwitch:{enabled:false}}};$(s).persianDatepicker(o);$(e).persianDatepicker({...o});}else{s.type='datetime-local';e.type='datetime-local'}}
+function setDefaults(){const e=new Date(),s=new Date();s.setDate(s.getDate()-1);if(calendarMode==='Jalali'){document.getElementById('start').value=new persianDate(s).format('YYYY/MM/DD HH:mm');document.getElementById('end').value=new persianDate(e).format('YYYY/MM/DD HH:mm')}else{document.getElementById('start').value=localValue(s);document.getElementById('end').value=localValue(e)}}
+async function loadConfig(){try{const r=await fetch('/flow_trend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ReportRequest:{}}),cache:'no-store'});const d=await r.json();calendarMode=String(d.calendar||'Gregorian')==='Jalali'?'Jalali':'Gregorian';setupPicker();setDefaults();document.getElementById('status').textContent='تقویم تعریف شده در Flow: '+(calendarMode==='Jalali'?'جلالی':'میلادی');ready=true}catch(e){console.error(e);document.getElementById('status').textContent='خطا در دریافت تنظیمات Report از Flow'}}
+async function loadReport(){if(!ready)return;const start=document.getElementById('start').value,end=document.getElementById('end').value;if(!start||!end)return;document.getElementById('status').textContent='در حال دریافت گزارش...';try{const r=await fetch('/flow_trend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ReportRequest:{Start:start,End:end,Calendar:calendarMode}}),cache:'no-store'});const d=await r.json();renderReport(d);document.getElementById('status').textContent='گزارش دریافت شد';}catch(e){console.error(e);document.getElementById('status').textContent='خطا در دریافت گزارش'}}
+function renderReport(d){const labels=Array.isArray(d.labels)?d.labels:[];const ds=d.datasets&&d.datasets.length?d.datasets[0]:{data:[]};const values=Array.isArray(ds.data)?ds.data:[];const body=document.getElementById('reportBody');body.innerHTML='';if(!labels.length){body.innerHTML='<tr><td colspan="4" class="empty">داده‌ای برای این بازه وجود ندارد.</td></tr>'}else{labels.forEach((name,i)=>{const tr=document.createElement('tr');tr.innerHTML='<td>'+escapeHtml(name)+'</td><td>'+Number(values[i]||0).toLocaleString()+'</td><td>-</td><td>SUM</td>';body.appendChild(tr)})}if(chart)chart.destroy();chart=new Chart(document.getElementById('reportChart'),{type:'bar',data:{labels:labels,datasets:[{label:(ds.label||'Production'),data:values,borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}},plugins:{legend:{display:true}}}})}
+function escapeHtml(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
+loadConfig();
 </script>
-
-
 </body>
-
 </html>
