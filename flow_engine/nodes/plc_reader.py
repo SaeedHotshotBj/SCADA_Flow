@@ -18,9 +18,15 @@
 
 import json
 import os
+from datetime import datetime
 
 from plc import read_registers
 from database import get_connection
+
+
+# Edge is considered offline when no fresh historian sample has
+# arrived for this many seconds.
+EDGE_OFFLINE_TIMEOUT = 2
 
 
 class PLCReader:
@@ -191,6 +197,35 @@ class PLCReader:
     # EDGE HISTORIAN
     # ========================================================
 
+    def _is_fresh_edge_timestamp(self, timestamp):
+        """Return True only when the latest Edge sample is <= 2 seconds old."""
+
+        if timestamp is None:
+            return False
+
+        if isinstance(timestamp, datetime):
+            sample_time = timestamp
+        else:
+            text = str(timestamp).strip().replace("T", " ")
+            sample_time = None
+
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S",
+            ):
+                try:
+                    sample_time = datetime.strptime(text, fmt)
+                    break
+                except ValueError:
+                    continue
+
+            if sample_time is None:
+                return False
+
+        age = (datetime.now() - sample_time).total_seconds()
+
+        return age <= EDGE_OFFLINE_TIMEOUT
+
     def _read_edge_registers(self, register, count):
         """
         Read the latest values received from SCADA_FLOW_EDGE.
@@ -198,6 +233,11 @@ class PLCReader:
         The Drawflow TagMapper supplies the register -> tag mapping.
         The latest value for each configured tag is then returned
         using the absolute register address expected by TagMapper.
+
+        If the latest Edge historian sample is older than the
+        configured offline timeout, return zero for that tag. This
+        prevents the server from repeatedly reusing the last PLC
+        value while the Edge is disconnected.
         """
 
         company_id = self._get_config("company_id")
@@ -239,7 +279,7 @@ class PLCReader:
 
                 cursor.execute(
                     """
-                    SELECT Value
+                    SELECT Value, Timestamp
                     FROM TagHistory
                     WHERE CompanyID = ?
                       AND TagName = ?
@@ -257,7 +297,13 @@ class PLCReader:
                 if not row:
                     continue
 
-                registers[str(register_address)] = row[0]
+                # The Edge has stopped sending. Do not reuse the
+                # previous PLC value; expose zero to the existing
+                # flow so SQLWriter can store it normally.
+                if not self._is_fresh_edge_timestamp(row["Timestamp"]):
+                    registers[str(register_address)] = 0
+                else:
+                    registers[str(register_address)] = row["Value"]
 
             return registers
 
