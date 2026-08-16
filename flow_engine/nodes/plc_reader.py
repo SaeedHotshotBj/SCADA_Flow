@@ -32,11 +32,11 @@ class PLCReader:
 
     def _edge_timeout(self):
         """Maximum age of Edge data considered live, in seconds."""
-        value = os.environ.get("SCADA_EDGE_TIMEOUT", "10")
+        value = os.environ.get("SCADA_EDGE_TIMEOUT", "2")
         try:
-            return max(1.0, float(value))
+            return max(0.1, float(value))
         except (TypeError, ValueError):
-            return 10.0
+            return 2.0
 
     # ========================================================
     # DRAWFLOW TAG MAPPINGS
@@ -224,7 +224,6 @@ class PLCReader:
                     edge_time = datetime.fromisoformat(timestamp_text).timestamp()
                     age = now - edge_time
                 except Exception:
-                    # If the timestamp cannot be trusted, fail safe to zero.
                     age = timeout + 1
 
                 if age > timeout:
