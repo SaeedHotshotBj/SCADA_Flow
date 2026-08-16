@@ -30,9 +30,7 @@ const REFRESH_MS=2000;
 const el=id=>document.getElementById(id);
 
 function setupPicker(){
-    if(!window.jQuery || !jQuery.fn || !jQuery.fn.persianDatepicker){
-        throw new Error('Persian date picker library is not loaded');
-    }
+    if(!window.jQuery || !jQuery.fn || !jQuery.fn.persianDatepicker)throw new Error('Persian date picker library is not loaded');
     const opts={format:'YYYY/MM/DD HH:mm',initialValue:false,autoClose:false,observer:true,timePicker:{enabled:true,step:1,hour:{enabled:true},minute:{enabled:true},second:{enabled:false},meridian:{enabled:false}}};
     jQuery('#start_time').persianDatepicker(opts);
     jQuery('#end_time').persianDatepicker({...opts});
@@ -65,11 +63,15 @@ async function requestTrend(start,end){
     return d;
 }
 
+function normalizePoints(ds){
+    return (ds?.data||[]).map(p=>({x:Number(p.x),y:Number(p.y)})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);
+}
+
 function draw(d){
     const ds=(d.datasets||[]).find(x=>x.tag===el('tag').value)||(d.datasets||[])[0];
-    const points=(ds?.data||[]).map(p=>({x:Number(p.x),y:Number(p.y)})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);
+    const points=normalizePoints(ds);
     if(chart)chart.destroy();
-    chart=new Chart(el('trendChart'),{type:'line',data:{datasets:[{label:ds?.title||el('tag').value,data:points,borderWidth:3,tension:0,pointRadius:1.5,pointHoverRadius:6,fill:false,borderColor:'#2563eb',backgroundColor:'#2563eb'}]},options:{responsive:true,maintainAspectRatio:false,animation:false,parsing:false,interaction:{mode:'nearest',intersect:false},scales:{x:{type:'linear',ticks:{maxTicksLimit:14,callback:v=>formatTime(v)},title:{display:true,text:'زمان'}},y:{beginAtZero:false,title:{display:true,text:ds?.title||el('tag').value}}},plugins:{legend:{position:'top'},tooltip:{rtl:true,callbacks:{title:items=>items.length?formatTime(items[0].parsed.x):'',label:item=>' '+item.parsed.y}},zoom:{pan:{enabled:true,mode:'x'},zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}}}}});
+    chart=new Chart(el('trendChart'),{type:'line',data:{datasets:[{label:ds?.title||el('tag').value,data:points,borderWidth:3,tension:0,stepped:ds?.stepped||'after',pointRadius:2,pointHoverRadius:7,fill:false,borderColor:'#2563eb',backgroundColor:'#2563eb'}]},options:{responsive:true,maintainAspectRatio:false,animation:false,parsing:false,spanGaps:false,interaction:{mode:'nearest',intersect:false},scales:{x:{type:'linear',ticks:{maxTicksLimit:14,callback:v=>formatTime(v)},title:{display:true,text:'زمان'}},y:{beginAtZero:false,title:{display:true,text:ds?.title||el('tag').value}}},plugins:{legend:{position:'top'},tooltip:{rtl:true,callbacks:{title:items=>items.length?formatTime(items[0].parsed.x):'',label:item=>' '+item.parsed.y}},zoom:{pan:{enabled:true,mode:'x'},zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}}}}});
     updateStats(points);
 }
 function formatTime(ms){try{return new persianDate(new Date(ms)).format('YYYY/MM/DD HH:mm:ss')}catch(e){return new Date(ms).toLocaleString()}}
@@ -89,7 +91,16 @@ async function loadGraph(){
     }catch(e){console.error(e);el('status').textContent='خطا در خواندن Trend: '+e.message}
 }
 async function refreshLive(){if(!liveMode||busy)return;busy=true;try{const d=await requestTrend(jalaliMinutesAgo(10),jalaliNow());drawLive(d)}catch(e){console.error('LIVE TREND',e)}finally{busy=false}}
-function drawLive(d){const ds=(d.datasets||[]).find(x=>x.tag===el('tag').value)||(d.datasets||[])[0];const points=(ds?.data||[]).map(p=>({x:Number(p.x),y:Number(p.y)})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);if(!chart){draw(d);return}chart.data.datasets[0].data=points;chart.update('none');updateStats(points);el('status').textContent='Trend زنده — '+points.length+' نقطه — بروزرسانی هر ۲ ثانیه'}
+function drawLive(d){
+    const ds=(d.datasets||[]).find(x=>x.tag===el('tag').value)||(d.datasets||[])[0];
+    const points=normalizePoints(ds);
+    if(!chart){draw(d);return}
+    chart.data.datasets[0].data=points;
+    chart.data.datasets[0].stepped=ds?.stepped||'after';
+    chart.update('none');
+    updateStats(points);
+    el('status').textContent='Trend زنده — '+points.length+' نقطه — بروزرسانی هر ۲ ثانیه';
+}
 function startLive(){stopLive(false);liveTimer=setInterval(refreshLive,REFRESH_MS)}
 function stopLive(clear=true){if(liveTimer){clearInterval(liveTimer);liveTimer=null}busy=false;if(clear)liveMode=false}
 function resetZoom(){if(chart)chart.resetZoom()}
