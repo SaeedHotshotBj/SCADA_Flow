@@ -28,8 +28,7 @@ class TrendDatabaseReader:
                 result = datetime.strptime(value, "%Y-%m-%d %H:%M")
 
             # Browser date/time is local time. Historian timestamps are stored
-            # in the server clock, so use the browser's offset instead of a
-            # hardcoded timezone.
+            # in the server clock. Use the browser offset when supplied.
             if timezone_offset is not None:
                 result += timedelta(minutes=float(timezone_offset))
 
@@ -58,6 +57,42 @@ class TrendDatabaseReader:
             timezone_offset = float(timezone_offset) if timezone_offset is not None else None
         except (TypeError, ValueError):
             timezone_offset = None
+
+        # Some SCADA_FLOW app versions do not forward the browser timezone
+        # offset. Infer it from the requested local end time when that time is
+        # close to the server's current time. This keeps recent trend data
+        # aligned with the browser without hardcoding a timezone.
+        if timezone_offset is None and request.get("End"):
+            try:
+                end_value = str(request.get("End"))
+
+                if request.get("Calendar", "Gregorian") == "Jalali":
+                    end_value = end_value.replace("-", "/")
+                    local_end = jdatetime.datetime.strptime(
+                        end_value,
+                        "%Y/%m/%d %H:%M"
+                    ).togregorian()
+                else:
+                    end_value = end_value.replace("T", " ")
+                    local_end = datetime.strptime(
+                        end_value,
+                        "%Y-%m-%d %H:%M"
+                    )
+
+                difference_minutes = (
+                    local_end - datetime.now()
+                ).total_seconds() / 60.0
+
+                # Only infer a normal timezone difference.
+                if abs(difference_minutes) <= 16 * 60:
+                    timezone_offset = -difference_minutes
+                    print(
+                        "TREND TIMEZONE OFFSET INFERRED:",
+                        timezone_offset
+                    )
+
+            except Exception as e:
+                print("TREND TIMEZONE INFERENCE ERROR:", e)
 
         start = self.normalize_date(
             request.get("Start"),
