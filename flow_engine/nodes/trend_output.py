@@ -96,6 +96,22 @@ class TrendOutput:
         except Exception:
             return str(value)
 
+    def _point(self, timestamp, value):
+        x = self.convert_time(timestamp)
+        if x is None:
+            return None
+
+        try:
+            y = float(value)
+        except (TypeError, ValueError):
+            return None
+
+        return {
+            "x": x,
+            "y": y,
+            "label": self.jalali_label(timestamp),
+        }
+
     def execute(self, data=None):
         if data is None:
             data = {}
@@ -112,67 +128,41 @@ class TrendOutput:
             if len(tags) == 1:
                 selected_tag = tags[0]
 
-        output = []
-        points = []
-
+        grouped = {}
         for item in trend_data:
-            item_tag = item.get("Tag")
-            if selected_tag and item_tag != selected_tag:
+            tag = item.get("Tag")
+            if not tag:
                 continue
 
-            timestamp = item.get("Timestamp")
-            x = self.convert_time(timestamp)
-            if x is None:
+            point = self._point(
+                item.get("Timestamp"),
+                item.get("Value", 0)
+            )
+            if point is None:
                 continue
 
-            try:
-                y = float(item.get("Value", 0))
-            except (TypeError, ValueError):
-                continue
+            grouped.setdefault(tag, []).append(point)
 
-            points.append({
-                "x": x,
-                "y": y,
-                "label": self.jalali_label(timestamp),
-            })
-
-        points.sort(key=lambda p: p["x"])
+        output = []
 
         if selected_tag:
+            points = grouped.get(selected_tag, [])
+            points.sort(key=lambda p: p["x"])
+
             output.append({
                 "tag": selected_tag,
                 "title": selected_tag,
                 "data": points,
+                "stepped": "after",
             })
         else:
-            grouped = {}
-            for item in trend_data:
-                tag = item.get("Tag")
-                if not tag:
-                    continue
-
-                timestamp = item.get("Timestamp")
-                x = self.convert_time(timestamp)
-                if x is None:
-                    continue
-
-                try:
-                    y = float(item.get("Value", 0))
-                except (TypeError, ValueError):
-                    continue
-
-                grouped.setdefault(tag, []).append({
-                    "x": x,
-                    "y": y,
-                    "label": self.jalali_label(timestamp),
-                })
-
             for tag, tag_points in grouped.items():
                 tag_points.sort(key=lambda p: p["x"])
                 output.append({
                     "tag": tag,
                     "title": tag,
                     "data": tag_points,
+                    "stepped": "after",
                 })
 
         data["ChartData"] = {"datasets": output}
