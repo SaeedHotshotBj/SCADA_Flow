@@ -106,6 +106,7 @@ def _cleanup_duplicate_seconds(cursor):
             FROM PLC_Data
             WHERE Timestamp IS NOT NULL
               AND StorageType IN (
+                  'TIME',
                   'EDGE',
                   'EDGE_OFFLINE'
               )
@@ -116,6 +117,7 @@ def _cleanup_duplicate_seconds(cursor):
         )
         AND Timestamp IS NOT NULL
         AND StorageType IN (
+            'TIME',
             'EDGE',
             'EDGE_OFFLINE'
         )
@@ -138,6 +140,9 @@ def _watch_once():
         cutoff_text = cutoff.strftime("%Y-%m-%d %H:%M:%S")
         now_text = now.strftime("%Y-%m-%d %H:%M:%S")
 
+        # Normal Edge historian values are stored by HistorianService
+        # as StorageType='TIME'. Older versions may use 'EDGE'. Monitor
+        # both, but never monitor REPORT/TRIGGER historian records.
         cursor.execute(
             """
             SELECT
@@ -145,7 +150,7 @@ def _watch_once():
                 TagName,
                 MAX(Timestamp) AS LastEdgeTimestamp
             FROM PLC_Data
-            WHERE StorageType = 'EDGE'
+            WHERE StorageType IN ('TIME', 'EDGE')
             GROUP BY CompanyID, LOWER(TagName)
             """
         )
