@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta
 
 
-EDGE_OFFLINE_TIMEOUT = 5
+EDGE_OFFLINE_TIMEOUT = 2
 WATCHDOG_INTERVAL = 1
 
 _started = False
