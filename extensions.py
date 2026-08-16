@@ -8,17 +8,12 @@ from datetime import datetime
 # =====================================================
 # EDGE OFFLINE WATCHDOG
 # =====================================================
-# This watchdog is completely independent from the Trend
-# page, Trend Query, Trend Output, and database trend reader.
-# It only writes zero samples to the existing PLC_Data table
-# when new Edge TagHistory rows stop arriving.
-#
-# IMPORTANT:
-# The Edge Timestamp is supplied by the Edge PC. Do not use it
-# as the server heartbeat because the Edge PC clock and VPS clock
-# may differ. The TagHistory ID is used only to detect arrival of
-# a new server-side row, and the watchdog uses server monotonic
-# time to measure the 2-second timeout.
+# Completely independent from Trend code.
+# It checks Edge arrival state and writes zero only when
+# an Edge tag has actually stopped sending for 2 seconds.
+# Database write connections are opened only when a zero
+# must actually be inserted, so normal Trend reads are not
+# continuously competing with the watchdog for SQLite locks.
 # =====================================================
 
 EDGE_OFFLINE_TIMEOUT = 2.0
@@ -26,25 +21,24 @@ EDGE_WATCHDOG_INTERVAL = 0.5
 _edge_watchdog_started = False
 _edge_watchdog_lock = threading.Lock()
 
-# (CompanyID, normalized TagName) -> {last_id, last_seen}
+# (CompanyID, normalized TagName) -> {last_id, last_seen, tag_name}
 _edge_watch_state = {}
 
 
 def _watchdog_once():
-    conn = None
-    cursor = None
+    read_conn = None
+    read_cursor = None
 
     try:
-        # Lazy import keeps the normal application import path unchanged.
         from database import get_connection
 
-        conn = get_connection()
-        cursor = conn.cursor()
+        # -------------------------------------------------
+        # READ-ONLY HEARTBEAT CHECK
+        # -------------------------------------------------
+        read_conn = get_connection()
+        read_cursor = read_conn.cursor()
 
-        # TagHistory is the existing Edge historian source used by
-        # PLCReader. Only tags that have actually received Edge data
-        # are monitored.
-        cursor.execute(
+        read_cursor.execute(
             """
             SELECT
                 CompanyID,
@@ -55,11 +49,12 @@ def _watchdog_once():
             """
         )
 
-        rows = cursor.fetchall()
+        rows = read_cursor.fetchall()
         now_monotonic = time.monotonic()
         now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         active_keys = set()
+        stale_tags = []
 
         for row in rows:
             company_id = row["CompanyID"]
@@ -78,8 +73,6 @@ def _watchdog_once():
 
             state = _edge_watch_state.get(key)
 
-            # First observation after server start: initialize the
-            # heartbeat state. Do not immediately declare the Edge offline.
             if state is None:
                 _edge_watch_state[key] = {
                     "last_id": int(last_edge_id),
@@ -88,24 +81,60 @@ def _watchdog_once():
                 }
                 continue
 
-            # A new TagHistory row means Edge data actually arrived at
-            # the server, independent of the Edge PC clock.
             if int(last_edge_id) != int(state["last_id"]):
                 state["last_id"] = int(last_edge_id)
                 state["last_seen"] = now_monotonic
                 state["tag_name"] = str(tag_name)
                 continue
 
-            # No new Edge sample has arrived for the timeout period.
             if (
                 now_monotonic - float(state["last_seen"])
-                <= EDGE_OFFLINE_TIMEOUT
+                > EDGE_OFFLINE_TIMEOUT
             ):
-                continue
+                stale_tags.append((
+                    company_id,
+                    str(tag_name)
+                ))
 
-            # Never add a zero when a real PLC_Data point already exists
-            # in this exact server second.
-            cursor.execute(
+        for key in list(_edge_watch_state.keys()):
+            if key not in active_keys:
+                del _edge_watch_state[key]
+
+    except Exception as exc:
+        print("EDGE WATCHDOG ERROR:", exc)
+        return
+
+    finally:
+        if read_cursor is not None:
+            try:
+                read_cursor.close()
+            except Exception:
+                pass
+
+        if read_conn is not None:
+            try:
+                read_conn.close()
+            except Exception:
+                pass
+
+    if not stale_tags:
+        return
+
+    # -------------------------------------------------
+    # WRITE ONLY WHEN A ZERO IS REALLY NEEDED
+    # -------------------------------------------------
+    write_conn = None
+    write_cursor = None
+
+    try:
+        from database import get_connection
+
+        write_conn = get_connection()
+        write_cursor = write_conn.cursor()
+
+        for company_id, tag_name in stale_tags:
+
+            write_cursor.execute(
                 """
                 SELECT ID
                 FROM PLC_Data
@@ -123,11 +152,10 @@ def _watchdog_once():
                 )
             )
 
-            if cursor.fetchone():
+            if write_cursor.fetchone():
                 continue
 
-            # Exactly one offline point for this tag/second.
-            cursor.execute(
+            write_cursor.execute(
                 """
                 INSERT INTO PLC_Data
                 (
@@ -147,38 +175,32 @@ def _watchdog_once():
                 )
             )
 
-        # Remove state for tags that no longer exist in TagHistory.
-        for key in list(_edge_watch_state.keys()):
-            if key not in active_keys:
-                del _edge_watch_state[key]
-
-        conn.commit()
+        write_conn.commit()
 
     except Exception as exc:
-        print("EDGE WATCHDOG ERROR:", exc)
+        print("EDGE WATCHDOG WRITE ERROR:", exc)
 
-        if conn is not None:
+        if write_conn is not None:
             try:
-                conn.rollback()
+                write_conn.rollback()
             except Exception:
                 pass
 
     finally:
-        if cursor is not None:
+        if write_cursor is not None:
             try:
-                cursor.close()
+                write_cursor.close()
             except Exception:
                 pass
 
-        if conn is not None:
+        if write_conn is not None:
             try:
-                conn.close()
+                write_conn.close()
             except Exception:
                 pass
 
 
 def _edge_watchdog_loop():
-    # Let normal Flask/database initialization finish first.
     time.sleep(2)
 
     while True:
@@ -212,12 +234,6 @@ def _start_edge_watchdog():
 class SCADAFlowSocketIO(SocketIO):
 
     def run(self, app, *args, **kwargs):
-        """
-        Register Flow Designer company-management routes
-        after the Flask application has been created and
-        immediately before the server starts.
-        """
-
         try:
             from flow_company_routes import (
                 register_flow_company_routes
@@ -230,7 +246,6 @@ class SCADAFlowSocketIO(SocketIO):
             )
 
         except Exception as exc:
-
             print(
                 "FLOW COMPANY ROUTE REGISTRATION ERROR:",
                 exc
