@@ -2102,31 +2102,12 @@ def trend_request():
         )
 
         # -------------------------------------------------
-        # LIMIT CHART POINTS
+        # KEEP EVERY HISTORIAN POINT
         # -------------------------------------------------
+        # Do not downsample or slice historian data.
+        # TIME tags are stored at their configured interval
+        # and every stored point must reach the Trend chart.
 
-        for ds in chart_data.get(
-            "datasets",
-            []
-        ):
-
-            points = ds.get(
-                "data",
-                []
-            )
-
-            if len(points) > 2000:
-
-                step = max(
-                    1,
-                    len(points) // 2000
-                )
-
-                ds["data"] = (
-                    points[::step]
-                )
-
-        print()
         print(
             "FINAL CHART DATASETS:",
             len(
