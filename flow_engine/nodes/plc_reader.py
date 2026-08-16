@@ -11,6 +11,8 @@ import json
 import os
 import time
 
+from datetime import datetime
+
 from plc import read_registers
 from database import get_connection
 
@@ -19,6 +21,7 @@ class PLCReader:
 
     def __init__(self, config=None, *args, **kwargs):
         self.config = config or {}
+        self._watchdog_zero_memory = set()
 
     # ========================================================
     # CONFIG
@@ -147,6 +150,122 @@ class PLCReader:
                     pass
 
     # ========================================================
+    # WATCHDOG ZERO
+    # ========================================================
+
+    def _write_watchdog_zero(self, company_id, tag_name):
+        """Write one zero transition when an Edge tag becomes stale."""
+        key = (int(company_id), str(tag_name).strip().lower())
+        if key in self._watchdog_zero_memory:
+            return False
+
+        conn = None
+        cursor = None
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT Value
+                FROM TagHistory
+                WHERE CompanyID = ?
+                  AND TagName = ?
+                ORDER BY Timestamp DESC, ID DESC
+                LIMIT 1
+                """,
+                (company_id, tag_name)
+            )
+            row = cursor.fetchone()
+
+            if row is not None:
+                try:
+                    if float(row["Value"]) == 0.0:
+                        self._watchdog_zero_memory.add(key)
+                        return False
+                except (TypeError, ValueError):
+                    pass
+
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+
+            cursor.execute(
+                """
+                INSERT INTO PLC_Data
+                (
+                    CompanyID,
+                    TagName,
+                    Value,
+                    StorageType,
+                    Timestamp
+                )
+                VALUES
+                (?, ?, 0, 'EDGE_WATCHDOG', ?)
+                """,
+                (company_id, tag_name, timestamp)
+            )
+
+            cursor.execute(
+                """
+                SELECT PLC_ID
+                FROM PLCs
+                WHERE CompanyID = ?
+                ORDER BY PLC_ID
+                LIMIT 1
+                """,
+                (company_id,)
+            )
+            plc_row = cursor.fetchone()
+            plc_id = plc_row["PLC_ID"] if plc_row else None
+
+            cursor.execute(
+                """
+                INSERT INTO TagHistory
+                (
+                    CompanyID,
+                    PLC_ID,
+                    TagName,
+                    Value,
+                    Timestamp
+                )
+                VALUES
+                (?, ?, ?, 0, ?)
+                """,
+                (company_id, plc_id, tag_name, timestamp)
+            )
+
+            conn.commit()
+            self._watchdog_zero_memory.add(key)
+
+            print(
+                "EDGE WATCHDOG ZERO:",
+                tag_name,
+                "TIME:",
+                timestamp
+            )
+            return True
+
+        except Exception as exc:
+            print("EDGE WATCHDOG ZERO ERROR:", exc)
+            return False
+
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _clear_watchdog_zero(self, company_id, tag_name):
+        key = (int(company_id), str(tag_name).strip().lower())
+        self._watchdog_zero_memory.discard(key)
+
+    # ========================================================
     # EDGE HISTORIAN
     # ========================================================
 
@@ -155,9 +274,8 @@ class PLCReader:
         Read the latest Edge values only when the Edge data is fresh.
 
         If the newest TagHistory row is older than SCADA_EDGE_TIMEOUT,
-        return zero for every configured register in the requested range.
-        This prevents a stale value such as 230 from surviving while the
-        PLC/Edge is offline.
+        write one zero transition for the tag and return zero.
+        The zero is not repeatedly inserted while the Edge remains offline.
         """
         company_id = self._get_config("company_id")
 
@@ -220,7 +338,6 @@ class PLCReader:
                     if timestamp_text.endswith("Z"):
                         timestamp_text = timestamp_text[:-1]
 
-                    from datetime import datetime
                     edge_time = datetime.fromisoformat(timestamp_text).timestamp()
                     age = now - edge_time
                 except Exception:
@@ -228,8 +345,11 @@ class PLCReader:
 
                 if age > timeout:
                     registers[str(register_address)] = 0
+                    self._write_watchdog_zero(company_id, tag_name)
                 else:
                     registers[str(register_address)] = value
+                    if value not in (None, 0, 0.0):
+                        self._clear_watchdog_zero(company_id, tag_name)
 
             return registers
 
@@ -274,8 +394,7 @@ class PLCReader:
         print(f"PLC: {ip}:{port}")
         print(f"Slave: {slave}")
         print(f"Start Register: {register}")
-        print(f"Count: {count}")
-        print(f"Registers Read: {len(raw_registers)}")
+        print(f"Count: {len(raw_registers)}")
         print()
 
         return registers
