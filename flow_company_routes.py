@@ -34,15 +34,11 @@ flow_company_bp = Blueprint(
 
 def _is_master():
     return (
-        str(
-            session.get("role", "")
-        ).strip().lower()
-        == "master"
+        str(session.get("role", "")).strip().lower() == "master"
     )
 
 
 def _report_company_id():
-    """Return the company available to the current session."""
     if _is_master():
         return request.args.get("company_id", type=int) or session.get("selected_company_id")
 
@@ -72,37 +68,25 @@ def flow_company_create():
         return jsonify({"status": "error", "message": "Company name is required"}), 400
 
     existing = get_companies()
-
-    if any(
-        str(row["CompanyName"]).strip().lower() == company_name.lower()
-        for row in existing
-    ):
+    if any(str(row["CompanyName"]).strip().lower() == company_name.lower() for row in existing):
         return jsonify({"status": "error", "message": "Company already exists"}), 409
 
     company_id = create_company(company_name)
     company = get_company(company_id)
-
-    return jsonify({
-        "status": "ok",
-        "company": dict(company),
-    }), 201
+    return jsonify({"status": "ok", "company": dict(company)}), 201
 
 
 @flow_company_bp.route("/report")
 def report_page():
-    """Production report page driven by the company's ReportOutput node."""
     if not session.get("user_id"):
         return jsonify({"status": "error", "message": "Login required"}), 401
-
     if _report_company_id() is None:
         return jsonify({"status": "error", "message": "Company is required"}), 403
-
     return render_template("date_filter.html")
 
 
 @flow_company_bp.post("/flow_report")
 def flow_report():
-    """Execute the saved flow and return ReportOutput ChartData."""
     if not session.get("user_id"):
         return jsonify({"status": "error", "message": "Login required"}), 401
 
@@ -113,10 +97,7 @@ def flow_report():
     try:
         flow_json = get_company_flow(company_id)
         if not flow_json:
-            return jsonify({
-                "status": "error",
-                "message": "No flow configured for this company",
-            }), 404
+            return jsonify({"status": "error", "message": "No flow configured for this company"}), 404
 
         flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
         payload = request.get_json(silent=True) or {}
@@ -145,13 +126,7 @@ def flow_report():
 
 @flow_company_bp.get("/master/database")
 def master_database():
-    """
-    Read-only browser for the production SQLite database.
-
-    This is intentionally restricted to Master users and only exposes
-    table/row data through the existing SCADA web application. It does
-    not expose the SQLite file itself.
-    """
+    """Read-only Master database browser with newest records first."""
     if not _is_master():
         return jsonify({"status": "error", "message": "Access denied"}), 403
 
@@ -197,8 +172,25 @@ def master_database():
             cursor.execute(f'SELECT COUNT(*) AS row_count FROM "{safe_table}"')
             total_rows = int(cursor.fetchone()["row_count"])
 
+            # Database Viewer must show newest records first.
+            # Timestamp is preferred; ID is used as a deterministic tie-breaker.
+            cursor.execute(f'PRAGMA table_info("{safe_table}")')
+            table_info = cursor.fetchall()
+            column_names = [row["name"] for row in table_info]
+
+            if "Timestamp" in column_names:
+                order_sql = 'ORDER BY "Timestamp" DESC, "ID" DESC'
+            elif "CreatedTime" in column_names:
+                order_sql = 'ORDER BY "CreatedTime" DESC, "ID" DESC'
+            elif "LastModified" in column_names:
+                order_sql = 'ORDER BY "LastModified" DESC, "ID" DESC'
+            elif "ID" in column_names:
+                order_sql = 'ORDER BY "ID" DESC'
+            else:
+                order_sql = ""
+
             cursor.execute(
-                f'SELECT * FROM "{safe_table}" LIMIT ? OFFSET ?',
+                f'SELECT * FROM "{safe_table}" {order_sql} LIMIT ? OFFSET ?',
                 (limit, offset),
             )
 
@@ -213,10 +205,7 @@ def master_database():
                     for column in columns:
                         value = row[column]
 
-                        if any(
-                            token in column.lower()
-                            for token in ("passwordhash", "password_hash", "token", "secret")
-                        ):
+                        if any(token in column.lower() for token in ("passwordhash", "password_hash", "token", "secret")):
                             value = "••••••••"
                         elif isinstance(value, str) and len(value) > 300:
                             value = value[:300] + " …"
@@ -287,7 +276,6 @@ def _parse_jalali(value):
 
 @flow_company_bp.get("/trend_db_config")
 def trend_db_config():
-    """Return historian parameters directly from SQLite, without FlowRunner."""
     if not session.get("user_id"):
         return jsonify({"status": "error", "message": "Login required"}), 401
 
@@ -309,16 +297,7 @@ def trend_db_config():
             (company_id,),
         ).fetchall()
 
-        tags = [
-            {
-                "tag": row["TagName"],
-                "title": row["TagName"],
-                "last": row["LastTimestamp"],
-            }
-            for row in rows
-            if row["TagName"]
-        ]
-
+        tags = [{"tag": row["TagName"], "title": row["TagName"], "last": row["LastTimestamp"]} for row in rows if row["TagName"]]
         return jsonify({"calendar": "Jalali", "tags": tags})
     finally:
         conn.close()
@@ -326,7 +305,6 @@ def trend_db_config():
 
 @flow_company_bp.post("/trend_db_data")
 def trend_db_data():
-    """Read historian rows directly from PLC_Data and return exact line points."""
     if not session.get("user_id"):
         return jsonify({"status": "error", "message": "Login required"}), 401
 
@@ -342,7 +320,6 @@ def trend_db_data():
     start = _parse_utc(payload.get("startUtc"))
     end = _parse_utc(payload.get("endUtc"))
 
-    # Empty date fields mean LIVE: only the recent historian window is read.
     live = start is None and end is None
     if live:
         end = datetime.now()
@@ -385,14 +362,7 @@ def trend_db_data():
                 continue
             points.append({"x": x, "y": y})
 
-        return jsonify({
-            "tag": tag,
-            "live": live,
-            "start": start_text,
-            "end": end_text,
-            "count": len(points),
-            "points": points,
-        })
+        return jsonify({"tag": tag, "live": live, "start": start_text, "end": end_text, "count": len(points), "points": points})
     finally:
         conn.close()
 
