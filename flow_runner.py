@@ -1,5 +1,6 @@
 import time
 import traceback
+import copy
 
 from flow_engine.registry import get_node_class
 from flow_status import flow_status
@@ -502,19 +503,76 @@ class FlowRunner:
 
         print()
 
-        result = request
-
         start_nodes = self.get_start_nodes()
+        fallback_result = None
+        requested_tag = (
+            request.get("TrendRequest", {})
+            .get("Tag")
+        )
 
+        # Each start node is an independent branch. Do not let a later
+        # branch (for example ReportOutput) overwrite TrendOutput data.
         for node in start_nodes:
+
+            branch_request = copy.deepcopy(request)
 
             result = self.execute_node(
                 node,
-                result,
+                branch_request,
                 set()
             )
 
-        return result
+            chart_data = result.get(
+                "ChartData"
+            ) if isinstance(result, dict) else None
+
+            if not isinstance(chart_data, dict):
+                continue
+
+            datasets = chart_data.get(
+                "datasets",
+                []
+            )
+
+            if not isinstance(datasets, list):
+                continue
+
+            if fallback_result is None:
+                fallback_result = result
+
+            # Prefer the ChartData produced for the requested Trend tag.
+            for dataset in datasets:
+
+                if not isinstance(dataset, dict):
+                    continue
+
+                dataset_tag = (
+                    dataset.get("tag")
+                    or dataset.get("title")
+                    or dataset.get("name")
+                )
+
+                if (
+                    requested_tag
+                    and
+                    str(dataset_tag).strip().lower()
+                    == str(requested_tag).strip().lower()
+                ):
+                    print(
+                        "TREND OUTPUT SELECTED:",
+                        dataset_tag,
+                        "POINTS:",
+                        len(dataset.get("data", []))
+                    )
+                    return result
+
+        if fallback_result is not None:
+            print(
+                "TREND FALLBACK CHART DATA SELECTED"
+            )
+            return fallback_result
+
+        return request
 
     # =====================================================
     # STOP
