@@ -1,4 +1,7 @@
 import json
+from datetime import datetime, timedelta
+
+import jdatetime
 
 # =====================================================
 # SCADA_FLOW FLOW DESIGNER COMPANY MANAGEMENT
@@ -242,6 +245,156 @@ def master_database():
                 conn.close()
             except Exception:
                 pass
+
+
+# =====================================================
+# DIRECT DATABASE TREND
+# =====================================================
+
+
+def _direct_trend_company_id():
+    company_id = session.get("company_id")
+    if company_id is None and _is_master():
+        company_id = session.get("selected_company_id")
+    try:
+        return int(company_id) if company_id is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_utc(value):
+    if not value:
+        return None
+    text = str(value).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(__import__("datetime").timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _parse_jalali(value):
+    if not value:
+        return None
+    try:
+        text = str(value).strip().replace("-", "/").replace("T", " ")
+        return jdatetime.datetime.strptime(text, "%Y/%m/%d %H:%M").togregorian()
+    except Exception:
+        return None
+
+
+@flow_company_bp.get("/trend_db_config")
+def trend_db_config():
+    """Return historian parameters directly from SQLite, without FlowRunner."""
+    if not session.get("user_id"):
+        return jsonify({"status": "error", "message": "Login required"}), 401
+
+    company_id = _direct_trend_company_id()
+    if company_id is None:
+        return jsonify({"status": "error", "message": "Company is required"}), 403
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT TagName, MAX(Timestamp) AS LastTimestamp
+            FROM PLC_Data
+            WHERE CompanyID = ?
+              AND (StorageType IS NULL OR UPPER(StorageType) = 'TIME')
+            GROUP BY TagName
+            ORDER BY TagName
+            """,
+            (company_id,),
+        ).fetchall()
+
+        tags = [
+            {
+                "tag": row["TagName"],
+                "title": row["TagName"],
+                "last": row["LastTimestamp"],
+            }
+            for row in rows
+            if row["TagName"]
+        ]
+
+        return jsonify({"calendar": "Jalali", "tags": tags})
+    finally:
+        conn.close()
+
+
+@flow_company_bp.post("/trend_db_data")
+def trend_db_data():
+    """Read historian rows directly from PLC_Data and return exact line points."""
+    if not session.get("user_id"):
+        return jsonify({"status": "error", "message": "Login required"}), 401
+
+    company_id = _direct_trend_company_id()
+    if company_id is None:
+        return jsonify({"status": "error", "message": "Company is required"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    tag = str(payload.get("tag", "")).strip()
+    if not tag:
+        return jsonify({"status": "error", "message": "Tag is required"}), 400
+
+    start = _parse_utc(payload.get("startUtc"))
+    end = _parse_utc(payload.get("endUtc"))
+
+    # Empty date fields mean LIVE: only the recent historian window is read.
+    live = start is None and end is None
+    if live:
+        end = datetime.now()
+        start = end - timedelta(minutes=10)
+
+    if (start is None) != (end is None):
+        return jsonify({"status": "error", "message": "Both start and end are required"}), 400
+
+    if start > end:
+        start, end = end, start
+
+    start_text = start.strftime("%Y-%m-%d %H:%M:%S")
+    end_text = end.strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT Timestamp, Value
+            FROM PLC_Data
+            WHERE CompanyID = ?
+              AND LOWER(TagName) = LOWER(?)
+              AND Timestamp >= ?
+              AND Timestamp <= ?
+            ORDER BY Timestamp ASC, ID ASC
+            """,
+            (company_id, tag, start_text, end_text),
+        ).fetchall()
+
+        points = []
+        for row in rows:
+            ts = row["Timestamp"]
+            if ts is None:
+                continue
+            try:
+                dt = datetime.fromisoformat(str(ts).replace("Z", ""))
+                x = int(dt.timestamp() * 1000)
+                y = float(row["Value"])
+            except (TypeError, ValueError, OverflowError):
+                continue
+            points.append({"x": x, "y": y})
+
+        return jsonify({
+            "tag": tag,
+            "live": live,
+            "start": start_text,
+            "end": end_text,
+            "count": len(points),
+            "points": points,
+        })
+    finally:
+        conn.close()
 
 
 def register_flow_company_routes(app):
