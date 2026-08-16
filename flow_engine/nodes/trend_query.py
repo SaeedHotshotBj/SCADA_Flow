@@ -7,11 +7,13 @@ from datetime import datetime, timedelta
 from database import get_connection, get_trend_data, row_value
 
 
+_HISTORIAN_INTEGRITY_READY = False
+
+
 class TrendQuery:
 
     def __init__(self, config):
         self.config = config or {}
-        self._historian_integrity_ready = False
 
     # =================================================
     # HISTORIAN INTEGRITY
@@ -27,7 +29,9 @@ class TrendQuery:
         changes to the Edge/API sender.
         """
 
-        if self._historian_integrity_ready:
+        global _HISTORIAN_INTEGRITY_READY
+
+        if _HISTORIAN_INTEGRITY_READY:
             return
 
         conn = None
@@ -100,7 +104,7 @@ class TrendQuery:
             )
 
             conn.commit()
-            self._historian_integrity_ready = True
+            _HISTORIAN_INTEGRITY_READY = True
 
         except Exception as exc:
             if conn is not None:
@@ -228,25 +232,29 @@ class TrendQuery:
         result = []
 
         # -------------------------------------------------
-        # OFFLINE BEFORE FIRST RECEIVED VALUE
+        # NO DATA AT ALL IN THE REQUESTED RANGE
         # -------------------------------------------------
         if not actual:
+            if start_dt == end_dt:
+                return [{
+                    "Timestamp": self._format_output_timestamp(start_dt),
+                    "Value": 0.0
+                }]
+
             return [
                 {
-                    "Timestamp": start_dt,
+                    "Timestamp": self._format_output_timestamp(start_dt),
                     "Value": 0.0
                 },
                 {
-                    "Timestamp": end_dt,
-                    "Value": 0.0
-                }
-            ] if start_dt != end_dt else [
-                {
-                    "Timestamp": start_dt,
+                    "Timestamp": self._format_output_timestamp(end_dt),
                     "Value": 0.0
                 }
             ]
 
+        # -------------------------------------------------
+        # OFFLINE BEFORE FIRST RECEIVED VALUE
+        # -------------------------------------------------
         first = actual[0]["Timestamp"]
 
         if start_dt < first:
