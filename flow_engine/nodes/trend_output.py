@@ -13,7 +13,7 @@ class TrendOutput:
         self.config = config or {}
 
     def convert_time(self, value):
-        """Return an epoch for a historian timestamp without local-timezone conversion."""
+        """Return epoch milliseconds for a historian timestamp."""
         try:
             if value is None:
                 return None
@@ -29,7 +29,11 @@ class TrendOutput:
                 text = text[:-1]
 
             if "/" in text:
-                for fmt in ("%Y/%m/%d %H:%M:%S.%f", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+                for fmt in (
+                    "%Y/%m/%d %H:%M:%S.%f",
+                    "%Y/%m/%d %H:%M:%S",
+                    "%Y/%m/%d %H:%M",
+                ):
                     try:
                         jalali = jdatetime.datetime.strptime(text, fmt)
                         gregorian = jalali.togregorian()
@@ -58,11 +62,7 @@ class TrendOutput:
             return None
 
     def jalali_label(self, value):
-        """Create the graph label from the historian clock value on the server.
-
-        This deliberately avoids browser Date/timezone conversion. The label is
-        generated from the exact Gregorian/Jalali clock represented by the DB row.
-        """
+        """Create an exact visible Jalali label from the historian timestamp."""
         try:
             if value is None:
                 return ""
@@ -100,7 +100,6 @@ class TrendOutput:
         if data is None:
             data = {}
 
-        # Report requests use ReportOutput. Do not replace its ChartData.
         if "ReportRequest" in data:
             return data
 
@@ -137,6 +136,8 @@ class TrendOutput:
                 "label": self.jalali_label(timestamp),
             })
 
+        points.sort(key=lambda p: p["x"])
+
         if selected_tag:
             output.append({
                 "tag": selected_tag,
@@ -166,12 +167,12 @@ class TrendOutput:
                     "label": self.jalali_label(timestamp),
                 })
 
-            if grouped:
-                first_tag = list(grouped.keys())[0]
+            for tag, tag_points in grouped.items():
+                tag_points.sort(key=lambda p: p["x"])
                 output.append({
-                    "tag": first_tag,
-                    "title": first_tag,
-                    "data": grouped[first_tag],
+                    "tag": tag,
+                    "title": tag,
+                    "data": tag_points,
                 })
 
         data["ChartData"] = {"datasets": output}
