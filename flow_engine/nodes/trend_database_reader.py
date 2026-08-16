@@ -151,6 +151,56 @@ class TrendDatabaseReader:
             except Exception as e:
                 print("TREND DATABASE ERROR:", e)
 
+        # -------------------------------------------------
+        # NEWEST DATA FIRST
+        # -------------------------------------------------
+        # Keep the database-reader output deterministic and make the newest
+        # historian record the first item. This is especially useful for the
+        # trend engine when inspecting recent data and for multiple tags.
+        def _trend_timestamp(item):
+            value = item.get("Timestamp")
+
+            if value is None:
+                return datetime.min
+
+            try:
+                if hasattr(value, "timestamp"):
+                    return value
+
+                text = str(value).replace("T", " ")
+
+                for fmt in (
+                    "%Y-%m-%d %H:%M:%S.%f",
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%d %H:%M"
+                ):
+                    try:
+                        return datetime.strptime(text, fmt)
+                    except ValueError:
+                        pass
+
+            except Exception:
+                pass
+
+            return datetime.min
+
+        trend.sort(
+            key=_trend_timestamp,
+            reverse=True
+        )
+
+        if trend:
+            print(
+                "NEWEST TREND POINT:",
+                trend[0].get("Timestamp"),
+                trend[0].get("Value")
+            )
+            print(
+                "OLDEST TREND POINT:",
+                trend[-1].get("Timestamp"),
+                trend[-1].get("Value")
+            )
+
         data["TrendRequest"] = {
             "Tag": selected_tag,
             "Tags": tags,
