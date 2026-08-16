@@ -2,7 +2,7 @@ from flask_socketio import SocketIO
 
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 # =====================================================
@@ -11,7 +11,14 @@ from datetime import datetime, timedelta
 # This watchdog is completely independent from the Trend
 # page, Trend Query, Trend Output, and database trend reader.
 # It only writes zero samples to the existing PLC_Data table
-# when the existing Edge TagHistory stream stops arriving.
+# when new Edge TagHistory rows stop arriving.
+#
+# IMPORTANT:
+# The Edge Timestamp is supplied by the Edge PC. Do not use it
+# as the server heartbeat because the Edge PC clock and VPS clock
+# may differ. The TagHistory ID is used only to detect arrival of
+# a new server-side row, and the watchdog uses server monotonic
+# time to measure the 2-second timeout.
 # =====================================================
 
 EDGE_OFFLINE_TIMEOUT = 2.0
@@ -19,15 +26,8 @@ EDGE_WATCHDOG_INTERVAL = 0.5
 _edge_watchdog_started = False
 _edge_watchdog_lock = threading.Lock()
 
-
-def _watchdog_timestamp(value):
-    if value is None:
-        return None
-
-    if hasattr(value, "strftime"):
-        return value.strftime("%Y-%m-%d %H:%M:%S")
-
-    return str(value).strip().replace("T", " ")[:19]
+# (CompanyID, normalized TagName) -> {last_id, last_seen}
+_edge_watch_state = {}
 
 
 def _watchdog_once():
@@ -49,33 +49,62 @@ def _watchdog_once():
             SELECT
                 CompanyID,
                 TagName,
-                MAX(Timestamp) AS LastEdgeTimestamp
+                MAX(ID) AS LastEdgeID
             FROM TagHistory
-            WHERE Timestamp IS NOT NULL
             GROUP BY CompanyID, LOWER(TagName)
             """
         )
 
         rows = cursor.fetchall()
-        now = datetime.now()
-        cutoff = now - timedelta(seconds=EDGE_OFFLINE_TIMEOUT)
-        cutoff_text = cutoff.strftime("%Y-%m-%d %H:%M:%S")
-        second_text = now.strftime("%Y-%m-%d %H:%M:%S")
+        now_monotonic = time.monotonic()
+        now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        active_keys = set()
 
         for row in rows:
             company_id = row["CompanyID"]
             tag_name = row["TagName"]
-            last_edge = _watchdog_timestamp(row["LastEdgeTimestamp"])
+            last_edge_id = row["LastEdgeID"]
 
-            if not tag_name or not last_edge:
+            if not tag_name or last_edge_id is None:
                 continue
 
-            # Edge is still fresh.
-            if last_edge >= cutoff_text:
+            key = (
+                company_id,
+                str(tag_name).strip().lower()
+            )
+
+            active_keys.add(key)
+
+            state = _edge_watch_state.get(key)
+
+            # First observation after server start: initialize the
+            # heartbeat state. Do not immediately declare the Edge offline.
+            if state is None:
+                _edge_watch_state[key] = {
+                    "last_id": int(last_edge_id),
+                    "last_seen": now_monotonic,
+                    "tag_name": str(tag_name),
+                }
+                continue
+
+            # A new TagHistory row means Edge data actually arrived at
+            # the server, independent of the Edge PC clock.
+            if int(last_edge_id) != int(state["last_id"]):
+                state["last_id"] = int(last_edge_id)
+                state["last_seen"] = now_monotonic
+                state["tag_name"] = str(tag_name)
+                continue
+
+            # No new Edge sample has arrived for the timeout period.
+            if (
+                now_monotonic - float(state["last_seen"])
+                <= EDGE_OFFLINE_TIMEOUT
+            ):
                 continue
 
             # Never add a zero when a real PLC_Data point already exists
-            # in this exact second.
+            # in this exact server second.
             cursor.execute(
                 """
                 SELECT ID
@@ -89,8 +118,8 @@ def _watchdog_once():
                 (
                     company_id,
                     tag_name,
-                    second_text,
-                    second_text,
+                    now_text,
+                    now_text,
                 )
             )
 
@@ -114,9 +143,14 @@ def _watchdog_once():
                 (
                     company_id,
                     tag_name,
-                    second_text,
+                    now_text,
                 )
             )
+
+        # Remove state for tags that no longer exist in TagHistory.
+        for key in list(_edge_watch_state.keys()):
+            if key not in active_keys:
+                del _edge_watch_state[key]
 
         conn.commit()
 
