@@ -36,3 +36,21 @@ class SCADAFlowSocketIO(SocketIO):
 
 
 socketio = SCADAFlowSocketIO()
+
+
+# =====================================================
+# EDGE OFFLINE WATCHDOG
+# =====================================================
+# Isolated from the Trend page, Trend Query, and Trend
+# database reader. It only adds zero historian records when
+# the existing Edge samples stop arriving.
+try:
+    from services.edge_watchdog import start_edge_watchdog
+
+    start_edge_watchdog()
+
+except Exception as exc:
+    print(
+        "EDGE WATCHDOG START ERROR:",
+        exc
+    )
