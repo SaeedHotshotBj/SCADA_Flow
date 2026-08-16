@@ -1,12 +1,13 @@
 # =====================================================
 # SCADA_FLOW HISTORIAN SERVICE
 # TIME + TRIGGER + REPORT GROUP STORAGE ENGINE
+# CHANGE-BASED HISTORIAN STORAGE
 # =====================================================
 
 import time
 from datetime import datetime
 
-from database import insert_tag_value
+from database import insert_tag_value, get_latest_tag_values
 
 
 class HistorianService:
@@ -101,6 +102,48 @@ class HistorianService:
 
         return None
 
+    def _value_changed(self, company_id, name, value):
+        """Return True only when the value differs from the latest stored value."""
+        try:
+            latest = get_latest_tag_values(company_id, [name])
+            previous = latest.get(name)
+            if previous is None:
+                return True
+
+            previous_value = previous.get("value")
+            try:
+                return float(previous_value) != float(value)
+            except (TypeError, ValueError):
+                return str(previous_value) != str(value)
+
+        except Exception as exc:
+            print("HISTORIAN CHANGE CHECK ERROR:", name, exc)
+            return True
+
+    def _insert_changed(self, company_id, name, value, storage_type, timestamp=None):
+        """Insert only on a real value transition."""
+        if not self._value_changed(company_id, name, value):
+            print("HISTORIAN SKIP - VALUE UNCHANGED:", name, "=", value)
+            return False
+
+        insert_tag_value(
+            company_id,
+            name,
+            value,
+            storage_type,
+            timestamp=timestamp
+        )
+
+        print(
+            "HISTORIAN INSERT:",
+            name,
+            "=",
+            value,
+            "TIME:",
+            timestamp or time.strftime("%Y-%m-%d %H:%M:%S")
+        )
+        return True
+
     def process_report_group(self, company_id, tags, definitions, registers, report_products):
         if not report_products:
             return 0
@@ -137,9 +180,8 @@ class HistorianService:
             if value is None:
                 continue
 
-            insert_tag_value(company_id, actual_name, value, "REPORT_TRIGGER", timestamp=timestamp)
-            print("REPORT HISTORIAN INSERT:", actual_name, "=", value, "TIME:", timestamp)
-            written += 1
+            if self._insert_changed(company_id, actual_name, value, "REPORT_TRIGGER", timestamp):
+                written += 1
 
         return written
 
@@ -161,9 +203,7 @@ class HistorianService:
             mode = str(definition.get("storage", "TIME")).upper()
             save = self.check_time(definition) if mode == "TIME" else self.check_trigger(definition, registers) if mode == "TRIGGER" else False
 
-            if save:
-                insert_tag_value(company_id, name, value, mode)
-                print("HISTORIAN INSERT:", name, "=", value, "TIME:", time.strftime("%Y-%m-%d %H:%M:%S"))
+            if save and self._insert_changed(company_id, name, value, mode):
                 written += 1
 
         return written
