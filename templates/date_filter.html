@@ -16,24 +16,172 @@
 </head>
 <body>
 {% include "nav.html" %}
-<div class="header"><div class="title">گزارش تولید</div><div class="subtitle">گزارش محصولات در بازه زمانی انتخاب شده</div></div>
+<div class="header"><div class="title">گزارش تولید</div><div class="subtitle">گزارش بر اساس تگ‌های انتخاب شده در ReportOutput</div></div>
 <div class="container">
-<div class="card"><div class="filter"><div class="item"><label>از تاریخ و ساعت</label><input id="start" type="text"></div><div class="item"><label>تا تاریخ و ساعت</label><input id="end" type="text"></div><button onclick="loadReport()">نمایش گزارش</button></div><div class="status" id="status">در حال دریافت تنظیمات...</div></div>
+<div class="card"><div class="filter"><div class="item"><label>از تاریخ و ساعت</label><input id="start" type="text"></div><div class="item"><label>تا تاریخ و ساعت</label><input id="end" type="text"></div><button onclick="loadReport()">نمایش گزارش</button></div><div class="status" id="status">تقویم جلالی آماده است</div></div>
 <div class="card"><h3>جدول گزارش</h3><div class="table-wrap"><table id="reportTable"><thead></thead><tbody></tbody></table></div></div>
 <div class="card chart-box"><canvas id="reportChart"></canvas></div>
 </div>
 <script>
-let calendarMode='Jalali',chart=null,ready=false;
+const calendarMode='Jalali';
+let chart=null;
+let ready=false;
+
 function pad(n){return String(n).padStart(2,'0')}
-function localValue(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes())}
-function setupPicker(){const s=document.getElementById('start'),e=document.getElementById('end');s.type='text';e.type='text';const o={format:'YYYY/MM/DD HH:mm',initialValue:false,autoClose:false,observer:true,timePicker:{enabled:true,step:1,hour:{enabled:true},minute:{enabled:true},second:{enabled:false},meridian:{enabled:false}},toolbox:{enabled:true,submitButton:{enabled:true},todayButton:{enabled:true},calendarSwitch:{enabled:false}}};$(s).persianDatepicker(o);$(e).persianDatepicker({...o});}
-function setDefaults(){const now=new Date(),start=new Date(now);start.setDate(start.getDate()-1);document.getElementById('start').value=new persianDate(start).format('YYYY/MM/DD HH:mm');document.getElementById('end').value=new persianDate(now).format('YYYY/MM/DD HH:mm')}
-async function loadConfig(){try{const r=await fetch('/trend_config?cache='+Date.now(),{cache:'no-store'});const d=await r.json();calendarMode=String(d.calendar||'Jalali')==='Jalali'?'Jalali':'Gregorian';if(calendarMode==='Jalali'){setupPicker();setDefaults()}else{document.getElementById('start').type='datetime-local';document.getElementById('end').type='datetime-local';const e=new Date(),s=new Date(e);s.setDate(s.getDate()-1);document.getElementById('start').value=localValue(s);document.getElementById('end').value=localValue(e)}document.getElementById('status').textContent='تقویم: '+(calendarMode==='Jalali'?'جلالی':'میلادی');ready=true}catch(e){console.error(e);document.getElementById('status').textContent='خطا در دریافت تنظیمات'}}
-async function loadReport(){if(!ready)return;const start=document.getElementById('start').value,end=document.getElementById('end').value;if(!start||!end)return;document.getElementById('status').textContent='در حال دریافت گزارش...';try{const r=await fetch('/flow_trend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ReportRequest:{Start:start,End:end,Calendar:calendarMode}}),cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.message||'Report error');renderReport(d);document.getElementById('status').textContent='گزارش دریافت شد';}catch(e){console.error(e);document.getElementById('status').textContent='خطا در دریافت گزارش: '+e.message}}
-function renderReport(d){const report=d.report||{};const columns=Array.isArray(report.columns)?report.columns:[];const rows=Array.isArray(report.rows)?report.rows:[];const totals=Array.isArray(report.totals)?report.totals:[];const grand=Number(report.grand_total||0);const table=document.getElementById('reportTable'),thead=table.querySelector('thead'),tbody=table.querySelector('tbody');thead.innerHTML='';tbody.innerHTML='';const head=document.createElement('tr');head.innerHTML='<th>تاریخ و ساعت</th>'+columns.map(c=>'<th>'+escapeHtml(c.name)+(c.unit?' ('+escapeHtml(c.unit)+')':'')+'</th>').join('')+'<th class="total-cell">جمع ردیف</th>';thead.appendChild(head);if(!rows.length){const tr=document.createElement('tr');tr.innerHTML='<td colspan="'+(columns.length+2)+'" class="empty">داده‌ای برای این بازه وجود ندارد.</td>';tbody.appendChild(tr)}else{rows.forEach(row=>{const tr=document.createElement('tr');let html='<td>'+escapeHtml(formatTimestamp(row.timestamp))+'</td>';const values=Array.isArray(row.values)?row.values:[];values.forEach(v=>html+='<td>'+Number(v||0).toLocaleString()+'</td>');html+='<td class="total-cell">'+Number(row.row_total||0).toLocaleString()+'</td>';tr.innerHTML=html;tbody.appendChild(tr)});const totalRow=document.createElement('tr');let html='<td class="total-row">جمع ستون‌ها</td>';totals.forEach(v=>html+='<td class="total-row">'+Number(v||0).toLocaleString()+'</td>');html+='<td class="total-row">'+grand.toLocaleString()+'</td>';totalRow.innerHTML=html;tbody.appendChild(totalRow)}if(chart)chart.destroy();const labels=Array.isArray(d.labels)?d.labels:columns.map(c=>c.name);const datasets=Array.isArray(d.datasets)&&d.datasets.length?d.datasets:[{label:'مجموع تولید',data:totals}];chart=new Chart(document.getElementById('reportChart'),{type:'bar',data:{labels:labels,datasets:datasets},options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}},plugins:{legend:{display:true}}}})}
-function formatTimestamp(v){if(!v)return '';if(calendarMode==='Jalali'){try{return new persianDate(new Date(String(v).replace(' ','T'))).format('YYYY/MM/DD HH:mm:ss')}catch(e){return v}}return v}
-function escapeHtml(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#039;')}
-loadConfig();
+
+function setupPicker(){
+    const s=document.getElementById('start');
+    const e=document.getElementById('end');
+    const options={
+        format:'YYYY/MM/DD HH:mm',
+        initialValue:false,
+        autoClose:false,
+        observer:true,
+        timePicker:{enabled:true,step:1,hour:{enabled:true},minute:{enabled:true},second:{enabled:false},meridian:{enabled:false}},
+        toolbox:{enabled:true,submitButton:{enabled:true},todayButton:{enabled:true},calendarSwitch:{enabled:false}}
+    };
+    $(s).persianDatepicker(options);
+    $(e).persianDatepicker({...options});
+}
+
+function setDefaults(){
+    const now=new Date();
+    const start=new Date(now);
+    start.setDate(start.getDate()-1);
+    document.getElementById('start').value=new persianDate(start).format('YYYY/MM/DD HH:mm');
+    document.getElementById('end').value=new persianDate(now).format('YYYY/MM/DD HH:mm');
+    ready=true;
+}
+
+async function loadReport(){
+    if(!ready)return;
+
+    const start=document.getElementById('start').value;
+    const end=document.getElementById('end').value;
+
+    if(!start||!end)return;
+
+    document.getElementById('status').textContent='در حال دریافت گزارش...';
+
+    try{
+        const response=await fetch('/flow_trend',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                ReportRequest:{
+                    Start:start,
+                    End:end,
+                    Calendar:calendarMode
+                }
+            }),
+            cache:'no-store'
+        });
+
+        const data=await response.json();
+
+        if(!response.ok)throw new Error(data.message||'Report error');
+
+        renderReport(data);
+        document.getElementById('status').textContent='گزارش دریافت شد';
+
+    }catch(error){
+        console.error(error);
+        document.getElementById('status').textContent='خطا در دریافت گزارش: '+error.message;
+    }
+}
+
+function renderReport(data){
+    const report=data.report||{};
+    const columns=Array.isArray(report.columns)?report.columns:[];
+    const rows=Array.isArray(report.rows)?report.rows:[];
+    const totals=Array.isArray(report.totals)?report.totals:[];
+    const grand=Number(report.grand_total||0);
+
+    const table=document.getElementById('reportTable');
+    const thead=table.querySelector('thead');
+    const tbody=table.querySelector('tbody');
+
+    thead.innerHTML='';
+    tbody.innerHTML='';
+
+    const head=document.createElement('tr');
+    head.innerHTML='<th>تاریخ و ساعت</th>'+
+        columns.map(column=>
+            '<th>'+escapeHtml(column.name)+(column.unit?' ('+escapeHtml(column.unit)+')':'')+'</th>'
+        ).join('')+
+        '<th class="total-cell">جمع ردیف</th>';
+    thead.appendChild(head);
+
+    if(!rows.length){
+        const tr=document.createElement('tr');
+        tr.innerHTML='<td colspan="'+(columns.length+2)+'" class="empty">داده‌ای برای این بازه وجود ندارد.</td>';
+        tbody.appendChild(tr);
+    }else{
+        rows.forEach(row=>{
+            const tr=document.createElement('tr');
+            let html='<td>'+escapeHtml(formatTimestamp(row.timestamp))+'</td>';
+            const values=Array.isArray(row.values)?row.values:[];
+
+            values.forEach(value=>{
+                html+='<td>'+(value===null||value===undefined?'':Number(value).toLocaleString())+'</td>';
+            });
+
+            html+='<td class="total-cell">'+Number(row.row_total||0).toLocaleString()+'</td>';
+            tr.innerHTML=html;
+            tbody.appendChild(tr);
+        });
+
+        const totalRow=document.createElement('tr');
+        let html='<td class="total-row">جمع ستون‌ها</td>';
+
+        totals.forEach(value=>{
+            html+='<td class="total-row">'+Number(value||0).toLocaleString()+'</td>';
+        });
+
+        html+='<td class="total-row">'+grand.toLocaleString()+'</td>';
+        totalRow.innerHTML=html;
+        tbody.appendChild(totalRow);
+    }
+
+    if(chart)chart.destroy();
+
+    const labels=Array.isArray(data.labels)?data.labels:columns.map(column=>column.name);
+    const datasets=Array.isArray(data.datasets)&&data.datasets.length
+        ?data.datasets
+        :[{label:'مجموع گزارش',data:totals}];
+
+    chart=new Chart(document.getElementById('reportChart'),{
+        type:'bar',
+        data:{labels:labels,datasets:datasets},
+        options:{
+            responsive:true,
+            maintainAspectRatio:false,
+            scales:{y:{beginAtZero:true}},
+            plugins:{legend:{display:true}}
+        }
+    });
+}
+
+function formatTimestamp(value){
+    if(!value)return '';
+    try{
+        return new persianDate(new Date(String(value).replace(' ','T'))).format('YYYY/MM/DD HH:mm:ss');
+    }catch(error){
+        return value;
+    }
+}
+
+function escapeHtml(value){
+    return String(value??'')
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/\"/g,'&quot;')
+        .replace(/'/g,'&#039;');
+}
+
+setupPicker();
+setDefaults();
 </script>
 </body>
 </html>
