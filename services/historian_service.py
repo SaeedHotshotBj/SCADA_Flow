@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 
 from database import insert_tag_value, get_latest_tag_values
+from services.report_service import save_report_snapshot
 
 
 class HistorianService:
@@ -96,7 +97,12 @@ class HistorianService:
                 target = trigger_value
 
             if previous_number == 0 and current_number == target:
-                print("REPORT TRIGGER EVENT:", "Register:", trigger_register, "Value:", current, "Tags:", sorted(selected))
+                print(
+                    "REPORT TRIGGER EVENT:",
+                    "Register:", trigger_register,
+                    "Value:", current,
+                    "Tags:", sorted(selected)
+                )
                 return definition
             return None
 
@@ -169,8 +175,36 @@ class HistorianService:
             return 0
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tag_lookup = {
+            str(name).strip().lower(): (name, value)
+            for name, value in tags.items()
+        }
+
+        # -------------------------------------------------
+        # REPORT DATABASE
+        # -------------------------------------------------
+        # Save one complete report snapshot independently
+        # from the normal historian. This preserves the
+        # report event even when a value has not changed.
+        snapshot_id = save_report_snapshot(
+            company_id,
+            tags,
+            report_products,
+            timestamp=timestamp,
+        )
+
+        if snapshot_id is None:
+            print("REPORT SNAPSHOT SKIPPED - NO VALUES")
+            return 0
+
+        # -------------------------------------------------
+        # KEEP EXISTING PLC HISTORIAN STORAGE
+        # -------------------------------------------------
+        # The existing PLC_Data REPORT_TRIGGER records remain
+        # available for backward compatibility. The new
+        # ReportHistory/ReportValues tables are the reporting
+        # source used by ReportOutput.
         written = 0
-        tag_lookup = {str(name).lower(): (name, value) for name, value in tags.items()}
 
         for tag in report_tags:
             item = tag_lookup.get(tag.lower())
@@ -180,8 +214,21 @@ class HistorianService:
             if value is None:
                 continue
 
-            if self._insert_changed(company_id, actual_name, value, "REPORT_TRIGGER", timestamp):
+            if self._insert_changed(
+                company_id,
+                actual_name,
+                value,
+                "REPORT_TRIGGER",
+                timestamp
+            ):
                 written += 1
+
+        print(
+            "REPORT SNAPSHOT SAVED:",
+            snapshot_id,
+            "TAGS:",
+            len(report_tags)
+        )
 
         return written
 
@@ -201,7 +248,13 @@ class HistorianService:
                 continue
 
             mode = str(definition.get("storage", "TIME")).upper()
-            save = self.check_time(definition) if mode == "TIME" else self.check_trigger(definition, registers) if mode == "TRIGGER" else False
+            save = (
+                self.check_time(definition)
+                if mode == "TIME"
+                else self.check_trigger(definition, registers)
+                if mode == "TRIGGER"
+                else False
+            )
 
             if save and self._insert_changed(company_id, name, value, mode):
                 written += 1
