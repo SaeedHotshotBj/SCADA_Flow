@@ -133,7 +133,7 @@ NODE_REGISTRY = {
                 "label": "Date Type",
                 "type": "select",
                 "options": ["GregorianPicker", "JalaliPicker"],
-                "default": "GregorianPicker"
+                "default": "JalaliPicker"
             }
         ]
     },
@@ -145,15 +145,15 @@ NODE_REGISTRY = {
                 "label": "Date Type",
                 "type": "select",
                 "options": ["GregorianPicker", "JalaliPicker"],
-                "default": "GregorianPicker"
+                "default": "JalaliPicker"
             },
             {
                 "name": "products",
                 "label": "Report Tags",
                 "type": "table",
                 "columns": [
-                    {"name": "name", "label": "Product Name", "type": "text"},
-                    {"name": "tag", "label": "Tag", "type": "text"},
+                    {"name": "name", "label": "Column Name", "type": "text"},
+                    {"name": "tag", "label": "Tag From TagMapper", "type": "text"},
                     {"name": "unit", "label": "Unit", "type": "text"}
                 ]
             }
