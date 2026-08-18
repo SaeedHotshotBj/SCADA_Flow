@@ -1,452 +1,86 @@
-
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SCADA FLOW - Login</title>
-
     <style>
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-
-            margin: 0;
-
-            min-height: 100vh;
-
-            display: flex;
-
-            align-items: center;
-
-            justify-content: center;
-
-            background:
-                radial-gradient(
-                    circle at top left,
-                    #29333d,
-                    #171b20 55%,
-                    #101317
-                );
-
-            font-family: Arial, sans-serif;
-
-            color: white;
-        }
-
-
-        .login-box {
-
-            width: 390px;
-
-            max-width: 92%;
-
-            background: #2b3239;
-
-            padding: 38px;
-
-            border-radius: 15px;
-
-            border:
-                1px solid #46515b;
-
-            box-shadow:
-                0 20px 50px
-                rgba(0, 0, 0, 0.5);
-        }
-
-
-        .logo {
-
-            width: 64px;
-
-            height: 64px;
-
-            margin: 0 auto 18px;
-
-            display: flex;
-
-            align-items: center;
-
-            justify-content: center;
-
-            border-radius: 14px;
-
-            background:
-                linear-gradient(
-                    135deg,
-                    #1677ff,
-                    #0957bd
-                );
-
-            font-size: 28px;
-
-            font-weight: bold;
-        }
-
-
-        .header {
-
-            text-align: center;
-
-            margin-bottom: 28px;
-        }
-
-
-        .header h1 {
-
-            margin: 0;
-
-            font-size: 27px;
-
-            letter-spacing: 1px;
-        }
-
-
-        .header p {
-
-            margin: 8px 0 0;
-
-            color: #9da7b0;
-
-            font-size: 13px;
-        }
-
-
-        .error {
-
-            margin-bottom: 18px;
-
-            padding: 11px 13px;
-
-            border-radius: 7px;
-
-            background: #492c2c;
-
-            border:
-                1px solid #704242;
-
-            color: #ff9c9c;
-
-            text-align: center;
-
-            font-size: 13px;
-        }
-
-
-        .field {
-
-            margin-bottom: 18px;
-        }
-
-
-        label {
-
-            display: block;
-
-            margin-bottom: 8px;
-
-            color: #d3d9de;
-
-            font-size: 12px;
-
-            font-weight: bold;
-
-            letter-spacing: .5px;
-        }
-
-
-        input,
-        select {
-
-            width: 100%;
-
-            padding: 13px;
-
-            background: #20252b;
-
-            color: white;
-
-            border:
-                1px solid #59636d;
-
-            border-radius: 7px;
-
-            outline: none;
-
-            font-size: 14px;
-        }
-
-
-        input::placeholder {
-
-            color: #707b85;
-        }
-
-
-        input:focus,
-        select:focus {
-
-            border-color: #1677ff;
-
-            box-shadow:
-                0 0 0 2px
-                rgba(22, 119, 255, .12);
-        }
-
-
-        select {
-
-            cursor: pointer;
-        }
-
-
-        .login-button {
-
-            width: 100%;
-
-            padding: 13px;
-
-            margin-top: 5px;
-
-            border: none;
-
-            border-radius: 7px;
-
-            background:
-                linear-gradient(
-                    135deg,
-                    #1677ff,
-                    #0866df
-                );
-
-            color: white;
-
-            font-size: 14px;
-
-            font-weight: bold;
-
-            cursor: pointer;
-        }
-
-
-        .login-button:hover {
-
-            background:
-                linear-gradient(
-                    135deg,
-                    #2380ff,
-                    #0a70ed
-                );
-        }
-
-
-        .footer {
-
-            margin-top: 23px;
-
-            padding-top: 17px;
-
-            border-top:
-                1px solid #424a52;
-
-            text-align: center;
-
-            color: #707b84;
-
-            font-size: 11px;
-        }
-
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at top left, #29333d, #171b20 55%, #101317); font-family: Arial, sans-serif; color: white; }
+        .login-box { width: 390px; max-width: 92%; background: #2b3239; padding: 38px; border-radius: 15px; border: 1px solid #46515b; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); }
+        .logo { width: 64px; height: 64px; margin: 0 auto 18px; display: flex; align-items: center; justify-content: center; border-radius: 14px; background: linear-gradient(135deg, #1677ff, #0957bd); font-size: 28px; font-weight: bold; }
+        .header { text-align: center; margin-bottom: 28px; }
+        .header h1 { margin: 0; font-size: 27px; letter-spacing: 1px; }
+        .header p { margin: 8px 0 0; color: #9da7b0; font-size: 13px; }
+        .error { margin-bottom: 18px; padding: 11px 13px; border-radius: 7px; background: #492c2c; border: 1px solid #704242; color: #ff9c9c; text-align: center; font-size: 13px; }
+        .field { margin-bottom: 18px; }
+        label { display: block; margin-bottom: 8px; color: #d3d9de; font-size: 12px; font-weight: bold; letter-spacing: .5px; }
+        input, select { width: 100%; padding: 13px; background: #20252b; color: white; border: 1px solid #59636d; border-radius: 7px; outline: none; font-size: 14px; }
+        input::placeholder { color: #707b85; }
+        input:focus, select:focus { border-color: #1677ff; box-shadow: 0 0 0 2px rgba(22, 119, 255, .12); }
+        select { cursor: pointer; }
+        .login-button { width: 100%; padding: 13px; margin-top: 5px; border: none; border-radius: 7px; background: linear-gradient(135deg, #1677ff, #0866df); color: white; font-size: 14px; font-weight: bold; cursor: pointer; }
+        .login-button:hover { background: linear-gradient(135deg, #2380ff, #0a70ed); }
+        .footer { margin-top: 23px; padding-top: 17px; border-top: 1px solid #424a52; text-align: center; color: #707b84; font-size: 11px; }
     </style>
-
 </head>
-
-
 <body>
-
-
 <div class="login-box">
-
-
-    <div class="logo">
-        S
-    </div>
-
-
+    <div class="logo">S</div>
     <div class="header">
-
-        <h1>
-            SCADA FLOW
-        </h1>
-
-        <p>
-            Industrial Monitoring & Control
-        </p>
-
+        <h1>SCADA FLOW</h1>
+        <p>Industrial Monitoring &amp; Control</p>
     </div>
-
 
     {% if error %}
-
-    <div class="error">
-        {{ error }}
-    </div>
-
+    <div class="error">{{ error }}</div>
+    <script>
+        window.addEventListener("DOMContentLoaded", function () {
+            alert({{ error|tojson }});
+        });
+    </script>
     {% endif %}
 
-
-    <form
-        method="POST"
-        action="{{ url_for('login') }}"
-    >
-
-
+    <form method="POST" action="{{ url_for('login') }}">
         {% if request.args.get('next') %}
-
-        <input
-            type="hidden"
-            name="next"
-            value="{{ request.args.get('next') }}"
-        >
-
+        <input type="hidden" name="next" value="{{ request.args.get('next') }}">
         {% endif %}
 
-
-        <!-- COMPANY -->
-
         <div class="field">
-
-            <label for="company_id">
-                COMPANY
-            </label>
-
-
-            <select
-                id="company_id"
-                name="company_id"
-            >
-
-                <option value="">
-                    Select Company
-                </option>
-
-
+            <label for="company_id">COMPANY</label>
+            <select id="company_id" name="company_id">
+                <option value="">Select Company</option>
                 {% for company in companies %}
-
-                <option
-                    value="{{ company.CompanyID }}"
-                >
-
-                    {{ company.CompanyName }}
-
-                </option>
-
+                <option value="{{ company.CompanyID }}">{{ company.CompanyName }}</option>
                 {% endfor %}
-
             </select>
-
         </div>
-
-
-        <!-- USERNAME -->
 
         <div class="field">
-
-            <label for="username">
-                USERNAME
-            </label>
-
-            <input
-                type="text"
-                id="username"
-                name="username"
-                placeholder="Enter username"
-                autocomplete="username"
-                required
-            >
-
+            <label for="username">USERNAME</label>
+            <input type="text" id="username" name="username" placeholder="Enter username" autocomplete="username" required>
         </div>
-
-
-        <!-- PASSWORD -->
 
         <div class="field">
-
-            <label for="password">
-                PASSWORD
-            </label>
-
-            <input
-                type="password"
-                id="password"
-                name="password"
-                placeholder="Enter password"
-                autocomplete="current-password"
-                required
-            >
-
+            <label for="password">PASSWORD</label>
+            <input type="password" id="password" name="password" placeholder="Enter password" autocomplete="current-password" required>
         </div>
 
-
-        <button
-            type="submit"
-            class="login-button"
-        >
-            LOGIN
-        </button>
-
-
+        <button type="submit" class="login-button">LOGIN</button>
     </form>
 
-
-    <div class="footer">
-        SCADA FLOW SYSTEM
-    </div>
-
-
+    <div class="footer">SCADA FLOW SYSTEM</div>
 </div>
 
-
 <script>
+    const company = document.getElementById("company_id");
+    const username = document.getElementById("username");
 
-    const company =
-        document.getElementById(
-            "company_id"
-        );
-
-    const username =
-        document.getElementById(
-            "username"
-        );
-
-
-    username.addEventListener(
-        "focus",
-        function () {
-
-            if (!company.value) {
-
-                company.focus();
-
-            }
-
+    username.addEventListener("focus", function () {
+        if (!company.value) {
+            company.focus();
         }
-    );
-
+    });
 </script>
-
-
 </body>
-
 </html>
-
