@@ -3,8 +3,9 @@
 # PLC READER NODE
 #
 # Server-side source is SCADA_FLOW_EDGE historian data.
-# If the Edge has stopped sending data, the last database value
-# is retained for the dashboard instead of manufacturing a zero.
+# Temporary zero glitches are ignored for 2 seconds so the
+# dashboard keeps the last valid value. A zero that remains
+# continuously for 2 seconds is accepted as a real zero.
 # ============================================================
 
 import json
@@ -17,11 +18,15 @@ from plc import read_registers
 from database import get_connection
 
 
+ZERO_DEBOUNCE_SECONDS = 2.0
+
+
 class PLCReader:
 
     def __init__(self, config=None, *args, **kwargs):
         self.config = config or {}
         self._watchdog_zero_memory = set()
+        self._zero_memory = {}
 
     # ========================================================
     # CONFIG
@@ -162,6 +167,60 @@ class PLCReader:
         self._watchdog_zero_memory.discard(key)
 
     # ========================================================
+    # ZERO DEBOUNCE
+    # ========================================================
+
+    def _is_zero(self, value):
+        try:
+            return float(value) == 0.0
+        except (TypeError, ValueError):
+            return False
+
+    def _zero_key(self, company_id, tag_name):
+        return (int(company_id), str(tag_name).strip().lower())
+
+    def _handle_zero(self, company_id, tag_name, value):
+        """
+        Return the action for an observed zero.
+
+        True  -> accept zero.
+        False -> ignore zero temporarily and keep previous value.
+        """
+        key = self._zero_key(company_id, tag_name)
+        now = time.monotonic()
+
+        if not self._is_zero(value):
+            self._zero_memory.pop(key, None)
+            return True
+
+        first_zero = self._zero_memory.get(key)
+
+        if first_zero is None:
+            self._zero_memory[key] = now
+            print(
+                "PLC READER ZERO DEBOUNCE START:",
+                tag_name,
+                "WAIT:",
+                ZERO_DEBOUNCE_SECONDS,
+                "seconds"
+            )
+            return False
+
+        if now - first_zero < ZERO_DEBOUNCE_SECONDS:
+            print(
+                "PLC READER ZERO IGNORED:",
+                tag_name,
+                "AGE:",
+                round(now - first_zero, 2),
+                "seconds"
+            )
+            return False
+
+        self._zero_memory.pop(key, None)
+        print("PLC READER ZERO ACCEPTED:", tag_name)
+        return True
+
+    # ========================================================
     # EDGE HISTORIAN
     # ========================================================
 
@@ -169,9 +228,10 @@ class PLCReader:
         """
         Read the latest Edge values.
 
-        If the newest Edge row is temporarily older than the timeout,
-        retain that last known value instead of replacing it with zero.
-        This prevents the dashboard from alternating between value and 0.
+        A zero is treated as a transient communication glitch for the
+        first 2 seconds. During that period the previous non-zero value
+        is returned. If zero remains continuously for 2 seconds, zero is
+        accepted as the real PLC value.
         """
         company_id = self._get_config("company_id")
 
@@ -221,8 +281,6 @@ class PLCReader:
 
                 row = cursor.fetchone()
 
-                # No value has ever arrived for this tag.
-                # Return no register rather than manufacturing zero.
                 if not row:
                     continue
 
@@ -239,9 +297,40 @@ class PLCReader:
                 except Exception:
                     age = timeout + 1
 
-                # IMPORTANT:
-                # A stale sample is still the last known real value.
-                # Do not write/read a synthetic zero here.
+                # -------------------------------------------------
+                # TEMPORARY ZERO
+                # -------------------------------------------------
+                if self._is_zero(value):
+                    if not self._handle_zero(company_id, tag_name, value):
+                        cursor.execute(
+                            """
+                            SELECT Value
+                            FROM TagHistory
+                            WHERE CompanyID = ?
+                              AND TagName = ?
+                              AND Value IS NOT NULL
+                              AND Value != 0
+                            ORDER BY Timestamp DESC, ID DESC
+                            LIMIT 1
+                            """,
+                            (company_id, tag_name)
+                        )
+
+                        previous_row = cursor.fetchone()
+
+                        if previous_row:
+                            value = previous_row["Value"]
+                        else:
+                            # No previous real value exists, so do not
+                            # manufacture a dashboard value.
+                            continue
+
+                else:
+                    self._zero_memory.pop(
+                        self._zero_key(company_id, tag_name),
+                        None
+                    )
+
                 registers[str(register_address)] = value
 
                 if age <= timeout and value not in (None, 0, 0.0):
@@ -365,6 +454,7 @@ class PLCReader:
             print(f"Company: {self._get_config('company_id')}")
             print(f"Registers Available: {len(registers)}")
             print(f"EDGE TIMEOUT: {self._edge_timeout()} seconds")
+            print(f"ZERO DEBOUNCE: {ZERO_DEBOUNCE_SECONDS} seconds")
             print()
 
         elif os.environ.get(
