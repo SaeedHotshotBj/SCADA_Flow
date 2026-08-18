@@ -1,0 +1,160 @@
+name: Fix authentication session validation
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-auth:
+    if: github.event.head_commit.message != 'Apply authentication session validation fix'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch login_required
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''def login_required(view_func):
+
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+
+        if not is_logged_in():
+
+            return redirect(
+                url_for(
+                    "login",
+                    next=request.path
+                )
+            )
+
+        return view_func(
+            *args,
+            **kwargs
+        )
+
+    return wrapped
+'''
+
+          new = '''def _validate_session_user():
+    """Fail closed unless the Flask session matches an enabled database user."""
+
+    user_id = session.get("user_id")
+
+    if user_id is None:
+        return False
+
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT UserID, Username, CompanyID, Role, Enabled
+            FROM Users
+            WHERE UserID = ?
+            """,
+            (user_id,)
+        )
+        user = cursor.fetchone()
+
+        if not user:
+            return False
+
+        if not bool(user["Enabled"]):
+            return False
+
+        session_username = str(session.get("username", "")).strip()
+        session_role = str(session.get("role", "")).strip()
+        session_company = session.get("company_id")
+        db_company = user["CompanyID"]
+
+        if session_username != str(user["Username"]).strip():
+            return False
+
+        if session_role.lower() != str(user["Role"]).strip().lower():
+            return False
+
+        if session_company is None:
+            if db_company is not None:
+                return False
+        else:
+            try:
+                if int(session_company) != int(db_company):
+                    return False
+            except (TypeError, ValueError):
+                return False
+
+        return True
+
+    except Exception as e:
+        print("SESSION AUTH VALIDATION ERROR:", e)
+        return False
+
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def login_required(view_func):
+
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+
+        if not _validate_session_user():
+            session.clear()
+            return redirect(
+                url_for(
+                    "login",
+                    next=request.path
+                )
+            )
+
+        return view_func(
+            *args,
+            **kwargs
+        )
+
+    return wrapped
+'''
+
+          if old not in text:
+              raise SystemExit('Expected login_required block was not found; no changes made.')
+
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Commit authentication fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git diff --cached --quiet && exit 0
+          git commit -m "Apply authentication session validation fix"
+          git push
+
+      - name: Remove one-time workflow
+        if: success()
+        run: |
+          git rm .github/workflows/fix-auth-session.yml
+          git commit -m "Remove one-time authentication fix workflow"
+          git push
