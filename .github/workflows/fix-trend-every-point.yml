@@ -19,6 +19,97 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fix login authentication session handling
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('app.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''    # =================================================
+    # ALREADY LOGGED IN
+    # =================================================
+
+    if is_logged_in():
+
+        print(
+            "ALREADY LOGGED IN:",
+            dict(session)
+        )
+
+        if is_master():
+
+            return redirect(
+                url_for(
+                    "master_companies"
+                )
+            )
+
+        return redirect(
+            url_for(
+                "dashboard"
+            )
+        )
+'''
+
+          new = '''    # =================================================
+    # ALREADY LOGGED IN — GET ONLY
+    # =================================================
+    # A POST to /login must always validate the submitted
+    # username/password. Never redirect merely because an
+    # old session cookie exists.
+
+    if request.method == "GET" and is_logged_in():
+
+        print(
+            "ALREADY LOGGED IN:",
+            dict(session)
+        )
+
+        if is_master():
+
+            return redirect(
+                url_for(
+                    "master_companies"
+                )
+            )
+
+        return redirect(
+            url_for(
+                "dashboard"
+            )
+        )
+'''
+
+          if old not in text:
+              raise SystemExit('Expected login block was not found; no change made.')
+
+          text = text.replace(old, new, 1)
+
+          marker = '''    # =================================================
+    # POST LOGIN
+    # =================================================
+
+'''
+
+          replacement = '''    # =================================================
+    # POST LOGIN
+    # =================================================
+
+    # Do not inherit an old authenticated session when credentials
+    # are submitted. The credentials below must always be validated.
+    session.clear()
+
+'''
+
+          if marker not in text:
+              raise SystemExit('POST LOGIN marker was not found; no change made.')
+
+          text = text.replace(marker, replacement, 1)
+          path.write_text(text, encoding='utf-8')
+          print('Applied login authentication fix to app.py')
+
       - name: Remove Trend point downsampling
         shell: python
         run: |
@@ -53,11 +144,11 @@ jobs:
           if count != 1:
               if 'LIMIT CHART POINTS' not in text:
                   print('Trend point downsampling is already removed.')
-                  raise SystemExit(0)
-              raise SystemExit('Could not locate the Trend point downsampling block.')
-
-          path.write_text(new_text, encoding='utf-8')
-          print('Removed Trend point downsampling from app.py')
+              else:
+                  raise SystemExit('Could not locate the Trend point downsampling block.')
+          else:
+              path.write_text(new_text, encoding='utf-8')
+              print('Removed Trend point downsampling from app.py')
 
       - name: Commit and push
         run: |
@@ -65,5 +156,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app.py
           git diff --cached --quiet && exit 0
-          git commit -m "Fix Trend to keep every historian point"
+          git commit -m "Fix login authentication session handling"
           git push origin main
