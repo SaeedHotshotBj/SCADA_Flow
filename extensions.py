@@ -251,6 +251,32 @@ class SCADAFlowSocketIO(SocketIO):
                 exc
             )
 
+        # -------------------------------------------------
+        # FLOW AUTHENTICATION GUARD
+        # -------------------------------------------------
+        # socket_manager.py needs the real Flask app before
+        # it can install its before_request authentication
+        # guard.  The SocketIO object is created before app.py
+        # calls run(), so provide the app here and register the
+        # guard before Flask starts serving requests.
+        # -------------------------------------------------
+        try:
+            self.app = app
+
+            from socket_manager import init_socketio
+
+            init_socketio(self)
+
+            print(
+                "FLOW AUTHENTICATION GUARD REGISTERED"
+            )
+
+        except Exception as exc:
+            print(
+                "FLOW AUTHENTICATION GUARD ERROR:",
+                exc
+            )
+
         _start_edge_watchdog()
 
         return super().run(
