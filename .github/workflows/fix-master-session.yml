@@ -1,0 +1,71 @@
+name: Fix master session authentication
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-master-session:
+    if: github.event.head_commit.message == 'Temporary workflow to fix master session authentication'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add auth login time to master session
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''                session["company_id"] = None
+
+                session.permanent = True
+'''
+
+          new = '''                session["company_id"] = None
+
+                # Required by is_logged_in() for server-side session validation.
+                session["auth_login_time"] = time.time()
+
+                session.permanent = True
+'''
+
+          if old not in text:
+              raise SystemExit("Master session block not found; no change made.")
+
+          if 'session["auth_login_time"] = time.time()' in text:
+              raise SystemExit("auth_login_time already exists; no change made.")
+
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+
+      - name: Verify Python syntax and diff
+        shell: bash
+        run: |
+          python -m py_compile app.py
+          git diff --check
+          git diff -- app.py
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git diff --cached --quiet && exit 1
+          git commit -m "Fix master session authentication"
+          git push
+
+      - name: Remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/fix-master-session.yml
+          git commit -m "Remove temporary master session workflow"
+          git push
