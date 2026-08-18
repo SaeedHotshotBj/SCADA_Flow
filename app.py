@@ -74,8 +74,34 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 86400
 # AUTHENTICATION / PAGE CACHE PROTECTION
 # =====================================================
 
+@app.before_request
+def _reject_stale_logout_session():
+    """Reject an old authenticated session after an explicit logout.
+
+    Flask sessions are client-side signed cookies.  A browser can retain an
+    old cookie if cookie deletion is blocked or cached.  The logout marker
+    gives the server a second, explicit signal that the browser has logged
+    out and must authenticate again.
+    """
+
+    if request.path in ("/login", "/logout"):
+        return None
+
+    if request.path.startswith("/static/"):
+        return None
+
+    if request.cookies.get("scada_logout_marker") == "1":
+        session.clear()
+        session.modified = True
+        return redirect(url_for("login", next=request.path))
+
+    return None
+
 @app.after_request
 def _auth_no_cache(response):
+    if request.path == "/login" and request.method == "POST" and session.get("user_id") is not None:
+        response.delete_cookie("scada_logout_marker", path="/")
+
     """Prevent browsers/proxies from showing authenticated pages after logout."""
 
     protected_paths = (
