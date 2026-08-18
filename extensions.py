@@ -1,17 +1,18 @@
 from flask_socketio import SocketIO
 
+import json
 import threading
 import time
+from datetime import datetime
 
 
 # =====================================================
 # EDGE OFFLINE WATCHDOG
 # =====================================================
-# The watchdog monitors Edge heartbeat only.
-# IMPORTANT: it must NOT write synthetic zero values into
-# PLC_Data. A temporary Edge communication gap must never
-# overwrite the last valid dashboard value with zero.
-# Real PLC zero values are handled by PLCReader's zero debounce.
+# Dashboard timeout is configured by DashboardOutput in
+# the company's Flow Designer. This watchdog only records
+# the last successful Edge request received by the server.
+# It never writes synthetic values into the historian.
 # =====================================================
 
 EDGE_OFFLINE_TIMEOUT = 2.0
@@ -19,89 +20,237 @@ EDGE_WATCHDOG_INTERVAL = 0.5
 _edge_watchdog_started = False
 _edge_watchdog_lock = threading.Lock()
 
-# (CompanyID, normalized TagName) -> {last_id, last_seen, tag_name}
-_edge_watch_state = {}
+# (CompanyID, PLC_ID) -> server monotonic receive time
+_edge_last_seen = {}
+
+
+def _record_edge_request(response):
+    """Record the server-side receive time of a successful Edge request."""
+
+    try:
+        payload = response.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return
+
+        company_id = payload.get("CompanyID")
+        plc_id = payload.get("PLC_ID")
+
+        if company_id is None or plc_id is None:
+            return
+
+        _edge_last_seen[(int(company_id), str(plc_id))] = time.monotonic()
+
+    except Exception as exc:
+        print("EDGE RECEIVE STATE ERROR:", exc)
+
+
+def _get_dashboard_timeout(company_id):
+    """Read Edge Timeout from the company's DashboardOutput node."""
+
+    default_timeout = 10.0
+
+    try:
+        from database import get_company_flow
+
+        flow_json = get_company_flow(company_id)
+        if not flow_json:
+            return default_timeout
+
+        flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
+        nodes = (
+            flow.get("drawflow", {})
+            .get("Home", {})
+            .get("data", {})
+        )
+
+        for node in nodes.values():
+            if not isinstance(node, dict) or node.get("name") != "DashboardOutput":
+                continue
+
+            data = node.get("data", {}) or {}
+            config = data.get("config", data) or {}
+
+            try:
+                timeout = float(config.get("timeout", default_timeout))
+            except (TypeError, ValueError):
+                timeout = default_timeout
+
+            return max(0.0, timeout)
+
+    except Exception as exc:
+        print("DASHBOARD TIMEOUT CONFIG ERROR:", exc)
+
+    return default_timeout
+
+
+def _parse_timestamp(value):
+    if value is None:
+        return None
+
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+
+        return dt
+
+    except Exception:
+        return None
+
+
+def _latest_edge_plc_for_tag(conn, company_id, tag):
+    try:
+        row = conn.execute(
+            """
+            SELECT PLC_ID, Timestamp
+            FROM TagHistory
+            WHERE CompanyID = ?
+              AND LOWER(TagName) = LOWER(?)
+            ORDER BY ID DESC
+            LIMIT 1
+            """,
+            (company_id, tag),
+        ).fetchone()
+
+        if not row:
+            return None, None
+
+        return row["PLC_ID"], row["Timestamp"]
+
+    except Exception as exc:
+        print("EDGE TAG STATE ERROR:", exc)
+        return None, None
+
+
+def _apply_dashboard_edge_timeout(response):
+    """Zero stale Edge values only after DashboardOutput's configured timeout.
+
+    This changes only the live dashboard response. No synthetic zero is written
+    to PLC_Data or TagHistory, so historian/trend data remains real.
+    """
+
+    if response.status_code != 200:
+        return response
+
+    try:
+        payload = response.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return response
+
+        company_id = None
+
+        try:
+            from flask import request, session
+
+            if str(session.get("role", "")).strip().lower() == "master":
+                company_id = request.args.get("company_id", type=int)
+                if company_id is None:
+                    company_id = session.get("selected_company_id")
+            else:
+                company_id = session.get("company_id")
+        except Exception:
+            company_id = None
+
+        if company_id is None:
+            return response
+
+        try:
+            company_id = int(company_id)
+        except (TypeError, ValueError):
+            return response
+
+        timeout = _get_dashboard_timeout(company_id)
+        tags = payload.get("Tags", {}) or {}
+
+        if not isinstance(tags, dict) or not tags:
+            return response
+
+        conn = None
+        try:
+            from database import get_connection
+
+            conn = get_connection()
+
+            now_monotonic = time.monotonic()
+            any_fresh = False
+            stale_count = 0
+
+            for tag in list(tags.keys()):
+                plc_id, edge_timestamp = _latest_edge_plc_for_tag(
+                    conn,
+                    company_id,
+                    tag,
+                )
+
+                if plc_id is None:
+                    continue
+
+                last_seen = _edge_last_seen.get(
+                    (company_id, str(plc_id))
+                )
+
+                # After a server restart there may be no in-memory receive
+                # time yet. Fall back to the actual Edge timestamp once.
+                if last_seen is None:
+                    parsed = _parse_timestamp(edge_timestamp)
+                    if parsed is not None:
+                        age = max(
+                            0.0,
+                            (datetime.now() - parsed).total_seconds(),
+                        )
+                    else:
+                        age = 0.0
+                else:
+                    age = max(
+                        0.0,
+                        now_monotonic - last_seen,
+                    )
+
+                if age >= timeout:
+                    tags[tag] = 0
+                    stale_count += 1
+                else:
+                    any_fresh = True
+
+            payload["Tags"] = tags
+            payload["Online"] = any_fresh
+
+            if stale_count:
+                print(
+                    "DASHBOARD EDGE TIMEOUT:",
+                    "Company:", company_id,
+                    "Timeout:", timeout,
+                    "Stale Tags:", stale_count,
+                )
+
+            response.set_data(
+                json.dumps(payload, ensure_ascii=False),
+            )
+            response.content_type = "application/json"
+
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    except Exception as exc:
+        print("DASHBOARD EDGE TIMEOUT ERROR:", exc)
+
+    return response
 
 
 def _watchdog_once():
-    read_conn = None
-    read_cursor = None
+    # Keep this lightweight. The actual dashboard timeout is configured in
+    # DashboardOutput and evaluated when /dashboard/latest is requested.
+    now = time.monotonic()
 
-    try:
-        from database import get_connection
-
-        read_conn = get_connection()
-        read_cursor = read_conn.cursor()
-
-        read_cursor.execute(
-            """
-            SELECT
-                CompanyID,
-                TagName,
-                MAX(ID) AS LastEdgeID
-            FROM TagHistory
-            GROUP BY CompanyID, LOWER(TagName)
-            """
-        )
-
-        rows = read_cursor.fetchall()
-        now_monotonic = time.monotonic()
-        active_keys = set()
-
-        for row in rows:
-            company_id = row["CompanyID"]
-            tag_name = row["TagName"]
-            last_edge_id = row["LastEdgeID"]
-
-            if not tag_name or last_edge_id is None:
-                continue
-
-            key = (company_id, str(tag_name).strip().lower())
-            active_keys.add(key)
-            state = _edge_watch_state.get(key)
-
-            if state is None:
-                _edge_watch_state[key] = {
-                    "last_id": int(last_edge_id),
-                    "last_seen": now_monotonic,
-                    "tag_name": str(tag_name),
-                }
-                continue
-
-            if int(last_edge_id) != int(state["last_id"]):
-                state["last_id"] = int(last_edge_id)
-                state["last_seen"] = now_monotonic
-                state["tag_name"] = str(tag_name)
-                continue
-
-            if now_monotonic - float(state["last_seen"]) > EDGE_OFFLINE_TIMEOUT:
-                print(
-                    "EDGE WATCHDOG: stale tag; preserving last value:",
-                    company_id,
-                    tag_name,
-                    "age=",
-                    round(now_monotonic - float(state["last_seen"]), 2),
-                    "seconds",
-                )
-
-        for key in list(_edge_watch_state.keys()):
-            if key not in active_keys:
-                del _edge_watch_state[key]
-
-    except Exception as exc:
-        print("EDGE WATCHDOG ERROR:", exc)
-
-    finally:
-        if read_cursor is not None:
-            try:
-                read_cursor.close()
-            except Exception:
-                pass
-        if read_conn is not None:
-            try:
-                read_conn.close()
-            except Exception:
-                pass
+    for key, last_seen in list(_edge_last_seen.items()):
+        if now - last_seen > 86400:
+            _edge_last_seen.pop(key, None)
 
 
 def _edge_watchdog_loop():
@@ -126,11 +275,7 @@ def _start_edge_watchdog():
         )
         thread.start()
 
-        print(
-            "EDGE WATCHDOG STARTED - TIMEOUT:",
-            EDGE_OFFLINE_TIMEOUT,
-            "seconds - ZERO WRITE DISABLED",
-        )
+        print("EDGE WATCHDOG STARTED")
 
 
 class SCADAFlowSocketIO(SocketIO):
@@ -163,13 +308,6 @@ class SCADAFlowSocketIO(SocketIO):
         # -------------------------------------------------
         # MASTER SESSION NORMALIZATION
         # -------------------------------------------------
-        # app.py validates every authenticated session using
-        # auth_login_time.  The Master login branch already
-        # creates a valid Master session, but historically did
-        # not set this timestamp.  Normalize that session here
-        # before protected routes such as /master/companies
-        # run.  Master remains completely outside Roles and
-        # RolesEngaged.
         try:
             @app.before_request
             def _normalize_master_session():
@@ -185,6 +323,25 @@ class SCADAFlowSocketIO(SocketIO):
 
         except Exception as exc:
             print("MASTER SESSION NORMALIZATION REGISTRATION ERROR:", exc)
+
+        # -------------------------------------------------
+        # EDGE / DASHBOARD TIMEOUT
+        # -------------------------------------------------
+        try:
+            @app.after_request
+            def _edge_dashboard_timeout(response):
+                from flask import request
+
+                if request.path == "/api/data" and response.status_code == 200:
+                    _record_edge_request(response)
+
+                if request.path == "/dashboard/latest":
+                    response = _apply_dashboard_edge_timeout(response)
+
+                return response
+
+        except Exception as exc:
+            print("EDGE DASHBOARD TIMEOUT REGISTRATION ERROR:", exc)
 
         _start_edge_watchdog()
 
