@@ -3,6 +3,14 @@ from flask_socketio import SocketIO
 import threading
 import time
 
+from flask import request, redirect, url_for, session
+
+from services.hardcoded_master import (
+    is_hardcoded_master_credentials,
+    set_hardcoded_master_session,
+    is_hardcoded_master_session,
+)
+
 
 # =====================================================
 # EDGE OFFLINE WATCHDOG
@@ -110,6 +118,56 @@ def _start_edge_watchdog():
         )
 
 
+def _install_hardcoded_master_auth(app):
+    """
+    Keep the hardcoded master completely outside Users/RolesEngaged.
+
+    The normal login route in app.py remains unchanged for company users.
+    This before_request handler catches only master/1234 and creates a
+    dedicated session before the normal /login route can query Users.
+    """
+
+    @app.before_request
+    def _hardcoded_master_login():
+        if request.path != "/login" or request.method != "POST":
+            return None
+
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+
+        if not is_hardcoded_master_credentials(username, password):
+            return None
+
+        set_hardcoded_master_session()
+
+        print("HARDCODED MASTER LOGIN SUCCESS")
+        print("SESSION AFTER MASTER LOGIN:", dict(session))
+
+        return redirect(url_for("master_companies"))
+
+
+def _patch_app_session_validation():
+    """
+    Extend app.py's existing is_logged_in() without replacing the normal
+    database authentication used by all other users.
+    """
+
+    try:
+        import app as app_module
+        original_is_logged_in = app_module.is_logged_in
+
+        def _is_logged_in_with_master():
+            if is_hardcoded_master_session():
+                return True
+            return original_is_logged_in()
+
+        app_module.is_logged_in = _is_logged_in_with_master
+        print("HARDCODED MASTER SESSION VALIDATION ENABLED")
+
+    except Exception as exc:
+        print("HARDCODED MASTER SESSION PATCH ERROR:", exc)
+
+
 class SCADAFlowSocketIO(SocketIO):
 
     def run(self, app, *args, **kwargs):
@@ -128,6 +186,8 @@ class SCADAFlowSocketIO(SocketIO):
         except Exception as exc:
             print("FLOW AUTHENTICATION GUARD ERROR:", exc)
 
+        _install_hardcoded_master_auth(app)
+        _patch_app_session_validation()
         _start_edge_watchdog()
 
         return super().run(app, *args, **kwargs)
