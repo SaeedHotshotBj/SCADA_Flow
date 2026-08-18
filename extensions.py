@@ -277,6 +277,33 @@ class SCADAFlowSocketIO(SocketIO):
                 exc
             )
 
+        # -------------------------------------------------
+        # LOGIN REQUEST MUST ALWAYS BE AUTHENTICATED FROM
+        # THE SUBMITTED CREDENTIALS.
+        #
+        # If an old session already exists, /login POST must
+        # not be short-circuited by app.py's "already logged
+        # in" check. Clear only the session for a POST to
+        # /login, then let the normal login route validate
+        # username/password and Roles/Users rules.
+        # -------------------------------------------------
+        try:
+            @app.before_request
+            def _reset_session_for_login_post():
+                from flask import request, session
+
+                if (
+                    request.method == "POST"
+                    and request.path == "/login"
+                ):
+                    session.clear()
+
+        except Exception as exc:
+            print(
+                "LOGIN SESSION RESET REGISTRATION ERROR:",
+                exc
+            )
+
         _start_edge_watchdog()
 
         return super().run(
