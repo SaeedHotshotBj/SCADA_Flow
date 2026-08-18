@@ -1,0 +1,113 @@
+name: Fix master login routing
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-master-login:
+    if: github.event.head_commit.message == 'Temporary workflow to fix master login routing'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch master login only
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''                session["company_id"] = None
+
+                session.permanent = True
+
+                print()
+                print(
+                    "========== MASTER LOGIN SUCCESS =========="
+                )
+'''
+
+          new = '''                session["company_id"] = None
+
+                # Master sessions must carry the same authentication
+                # timestamp required by is_logged_in().
+                session["auth_login_time"] = time.time()
+
+                session.permanent = True
+
+                print()
+                print(
+                    "========== MASTER LOGIN SUCCESS =========="
+                )
+'''
+
+          if old not in text:
+              raise SystemExit("Expected master session block was not found; no change made.")
+
+          text = text.replace(old, new, 1)
+
+          old_redirect = '''                next_url = request.form.get(
+                    "next"
+                )
+
+                if (
+                    next_url
+                    and next_url.startswith("/")
+                ):
+
+                    return redirect(
+                        next_url
+                    )
+
+                return redirect(
+                    url_for(
+                        "master_companies"
+                    )
+                )
+'''
+
+          new_redirect = '''                # Master always goes to the Master Panel after
+                # successful master authentication. Do not use the
+                # submitted/previous "next" URL for the master account.
+                return redirect(
+                    url_for(
+                        "master_companies"
+                    )
+                )
+'''
+
+          if old_redirect not in text:
+              raise SystemExit("Expected master redirect block was not found; no change made.")
+
+          text = text.replace(old_redirect, new_redirect, 1)
+          path.write_text(text, encoding="utf-8")
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          git diff --check
+          python -m py_compile app.py
+          git diff -- app.py
+
+      - name: Commit app.py fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git diff --cached --quiet && exit 1
+          git commit -m "Fix master session and master panel redirect"
+          git push
+
+      - name: Remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/fix-master-login.yml
+          git commit -m "Remove temporary master login fix workflow"
+          git push
