@@ -1,0 +1,127 @@
+name: Fix login session handling
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-login:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch login route only
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''    # =================================================
+    # ALREADY LOGGED IN
+    # =================================================
+
+    if is_logged_in():
+
+        print(
+            "ALREADY LOGGED IN:",
+            dict(session)
+        )
+
+        if is_master():
+
+            return redirect(
+                url_for(
+                    "master_companies"
+                )
+            )
+
+        return redirect(
+            url_for(
+                "dashboard"
+            )
+        )
+'''
+
+          new = '''    # =================================================
+    # ALREADY LOGGED IN — GET ONLY
+    # =================================================
+    # A POST to /login must always validate the submitted
+    # username/password. Never redirect merely because an
+    # old session cookie exists.
+
+    if request.method == "GET" and is_logged_in():
+
+        print(
+            "ALREADY LOGGED IN:",
+            dict(session)
+        )
+
+        if is_master():
+
+            return redirect(
+                url_for(
+                    "master_companies"
+                )
+            )
+
+        return redirect(
+            url_for(
+                "dashboard"
+            )
+        )
+'''
+
+          if old not in text:
+              raise SystemExit("Expected login block was not found; no change made.")
+
+          text = text.replace(old, new, 1)
+
+          marker = '''    # =================================================
+    # POST LOGIN
+    # =================================================
+
+'''
+
+          replacement = '''    # =================================================
+    # POST LOGIN
+    # =================================================
+
+    # A failed login must not inherit an already-authenticated
+    # session. Clear the old session before validating credentials.
+    session.clear()
+
+'''
+
+          if marker not in text:
+              raise SystemExit("POST LOGIN marker was not found; no change made.")
+
+          text = text.replace(marker, replacement, 1)
+          path.write_text(text, encoding="utf-8")
+
+      - name: Verify only the login route changed
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- app.py
+
+      - name: Commit login fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git diff --cached --quiet && exit 1
+          git commit -m "Fix login authentication session handling"
+          git push
+
+      - name: Remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/fix-login-session.yml
+          git commit -m "Remove temporary login fix workflow"
+          git push
