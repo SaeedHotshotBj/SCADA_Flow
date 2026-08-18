@@ -1,0 +1,71 @@
+name: Fix server-side logout session revocation
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch app.py
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app.py")
+          text = path.read_text(encoding="utf-8")
+
+          # 1) Create a persistent per-user revocation table after DB init.
+          old = "init_database()\n\n\n# =====================================================\n# GLOBAL FLOW STATE"
+          new = '''init_database()\n\n\n# =====================================================\n# SERVER-SIDE AUTH SESSION REVOCATION\n# =====================================================\n\ndef _init_auth_session_revocations():\n    conn = None\n    cursor = None\n    try:\n        conn = get_connection()\n        cursor = conn.cursor()\n        cursor.execute(\n            """\n            CREATE TABLE IF NOT EXISTS AuthSessionRevocations (\n                UserID INTEGER PRIMARY KEY,\n                RevokedAt REAL NOT NULL\n            )\n            """\n        )\n        conn.commit()\n    finally:\n        if cursor is not None:\n            try:\n                cursor.close()\n            except Exception:\n                pass\n        if conn is not None:\n            try:\n                conn.close()\n            except Exception:\n                pass\n\n\n_init_auth_session_revocations()\n\n\n# =====================================================\n# GLOBAL FLOW STATE'''
+          if old not in text:
+              raise SystemExit("DB init marker not found")
+          text = text.replace(old, new, 1)
+
+          # 2) Add a login timestamp to every newly authenticated session.
+          old = '''session["company_id"] = (\n            user["CompanyID"]\n        )\n\n        session.permanent = True'''
+          new = '''session["company_id"] = (\n            user["CompanyID"]\n        )\n\n        session["auth_login_time"] = time.time()\n\n        session.permanent = True'''
+          if old not in text:
+              raise SystemExit("login session marker not found")
+          text = text.replace(old, new, 1)
+
+          # 3) Validate the current session against the server-side revocation time.
+          old = '''    if user_id is None:\n        return False\n\n    conn = None'''
+          new = '''    if user_id is None:\n        return False\n\n    login_time = session.get("auth_login_time")\n    if login_time is None:\n        session.clear()\n        session.modified = True\n        return False\n\n    conn = None'''
+          if old not in text:
+              raise SystemExit("session validation marker not found")
+          text = text.replace(old, new, 1)
+
+          old = '''        user = cursor.fetchone()\n\n        if not user or not user["Enabled"]:'''
+          new = '''        user = cursor.fetchone()\n\n        cursor.execute(\n            "SELECT RevokedAt FROM AuthSessionRevocations WHERE UserID = ?",\n            (user_id,)\n        )\n        revocation = cursor.fetchone()\n\n        if revocation is not None and float(revocation["RevokedAt"]) >= float(login_time):\n            session.clear()\n            session.modified = True\n            return False\n\n        if not user or not user["Enabled"]:'''
+          if old not in text:
+              raise SystemExit("user validation marker not found")
+          text = text.replace(old, new, 1)
+
+          # 4) Revoke the user's server-side session before clearing the cookie.
+          old = '''    username = session.get(\n        "username"\n    )\n\n    # Completely invalidate the Flask session.\n    session.clear()'''
+          new = '''    username = session.get(\n        "username"\n    )\n    user_id = session.get("user_id")\n\n    # Revoke this user's current authenticated session on the server.\n    if user_id is not None:\n        conn = None\n        cursor = None\n        try:\n            conn = get_connection()\n            cursor = conn.cursor()\n            cursor.execute(\n                """\n                INSERT INTO AuthSessionRevocations (UserID, RevokedAt)\n                VALUES (?, ?)\n                ON CONFLICT(UserID) DO UPDATE SET RevokedAt = excluded.RevokedAt\n                """,\n                (user_id, time.time())\n            )\n            conn.commit()\n        finally:\n            if cursor is not None:\n                try:\n                    cursor.close()\n                except Exception:\n                    pass\n            if conn is not None:\n                try:\n                    conn.close()\n                except Exception:\n                    pass\n\n    # Completely invalidate the Flask session.\n    session.clear()'''
+          if old not in text:
+              raise SystemExit("logout marker not found")
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+          print("Authentication session revocation patch applied")
+
+      - name: Commit and remove one-time workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git rm .github/workflows/fix-session-revocation.yml
+          git commit -m "Fix logout with server-side session revocation"
+          git push
