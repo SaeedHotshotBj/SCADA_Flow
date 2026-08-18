@@ -154,17 +154,27 @@
 // LIVE DATA POLICY
 // =====================================================
 //
-// A database value is historical data, not automatically
-// a live value.
+// The dashboard keeps the LAST VALID VALUE for every tag.
 //
-// A dashboard value is considered LIVE only when its
-// timestamp is newer than LIVE_TIMEOUT_MS.
+// Missing data / temporary communication gaps do NOT mean
+// that the PLC value is zero.
 //
-// If SCADA_EDGE stops sending data, the card becomes 0
-// and the dashboard becomes OFFLINE automatically.
+// A real PLC value of zero is accepted and displayed when
+// EDGE actually sends zero.
 //
+// Online/Offline is handled separately from the card value.
+// =====================================================
 
 const LIVE_TIMEOUT_MS = 5000;
+
+// Last time a real value was received from EDGE for each tag.
+const lastTagReceiveTime = {};
+
+// Last valid value received for each tag.
+const lastTagValue = {};
+
+// Last time ANY real EDGE value was received.
+let lastAnyReceiveTime = 0;
 
 // =====================================================
 // SOCKET.IO
@@ -195,28 +205,21 @@ function updateCard(tag, value) {
         return;
     }
 
-    const newValue = String(
-        value === null || value === undefined ? 0 : value
-    );
+    // null/undefined means no new value. It must NEVER replace
+    // an existing valid card value with zero.
+    if (value === null || value === undefined) {
+        return;
+    }
+
+    const newValue = String(value);
 
     if (element.textContent !== newValue) {
         element.textContent = newValue;
     }
-}
 
-// =====================================================
-// CLEAR ALL LIVE VALUES
-// =====================================================
-
-function clearDashboardValues() {
-
-    document.querySelectorAll(".widget-value").forEach(function (element) {
-
-        if (element.id.startsWith("value_")) {
-            element.textContent = "0";
-        }
-
-    });
+    lastTagValue[tag] = value;
+    lastTagReceiveTime[tag] = Date.now();
+    lastAnyReceiveTime = Date.now();
 }
 
 // =====================================================
@@ -252,41 +255,10 @@ function setOffline() {
     status.classList.remove("online");
     status.classList.add("offline");
 
-    clearDashboardValues();
-}
-
-// =====================================================
-// CHECK WHETHER A DATABASE TIMESTAMP IS LIVE
-// =====================================================
-
-function isFreshTimestamp(timestamp) {
-
-    if (!timestamp) {
-        return false;
-    }
-
-    let normalized = String(timestamp).trim();
-
-    // Server/database timestamps may use a space between
-    // date and time. Browser Date parsing is reliable for
-    // ISO date-time strings with a T separator.
-    normalized = normalized.replace(" ", "T");
-
-    const parsed = Date.parse(normalized);
-
-    if (Number.isNaN(parsed)) {
-        return false;
-    }
-
-    const age = Date.now() - parsed;
-
-    // Reject future timestamps as well. A clock mismatch
-    // must never make old data look live indefinitely.
-    if (age < -LIVE_TIMEOUT_MS) {
-        return false;
-    }
-
-    return age <= LIVE_TIMEOUT_MS;
+    // IMPORTANT:
+    // Do NOT clear dashboard cards here.
+    // Offline means communication is currently unavailable,
+    // not that the PLC values became zero.
 }
 
 // =====================================================
@@ -303,37 +275,31 @@ function applyLatestData(data) {
     const tags = data.Tags || {};
     const timestamps = data.Timestamps || {};
 
-    let hasLiveData = false;
+    let foundFreshServerData = false;
 
-    // Always evaluate every dashboard widget.
-    // Missing/stale tags are explicitly reset to zero.
-    document.querySelectorAll(".widget-value").forEach(function (element) {
+    Object.keys(tags).forEach(function (tag) {
 
-        if (!element.id.startsWith("value_")) {
+        if (!document.getElementById("value_" + tag)) {
             return;
         }
 
-        const tag = element.id.substring("value_".length);
-        const timestamp = timestamps[tag];
+        const value = tags[tag];
 
-        if (Object.prototype.hasOwnProperty.call(tags, tag) &&
-            isFreshTimestamp(timestamp)) {
+        // A value returned by /dashboard/latest is already the
+        // latest stored value. It is valid even when it is zero.
+        // We only update the card when the server actually gives
+        // us a value; missing tags are left untouched.
+        if (value !== null && value !== undefined) {
 
-            updateCard(tag, tags[tag]);
-            hasLiveData = true;
-
-        } else {
-
-            updateCard(tag, 0);
+            updateCard(tag, value);
+            foundFreshServerData = true;
 
         }
 
     });
 
-    if (hasLiveData) {
+    if (foundFreshServerData) {
         setOnline();
-    } else {
-        setOffline();
     }
 }
 
@@ -345,10 +311,6 @@ socket.on("connect", function () {
 
     console.log("Dashboard Socket.IO connected");
 
-    // Socket.IO connection itself does NOT mean the PLC
-    // or SCADA_EDGE is online.
-    // The dashboard/latest check below is authoritative.
-
 });
 
 // =====================================================
@@ -359,6 +321,7 @@ socket.on("disconnect", function () {
 
     console.log("Dashboard Socket.IO disconnected");
 
+    // Keep the last values visible.
     setOffline();
 
 });
@@ -381,9 +344,13 @@ socket.on("tag_update", function (data) {
         return;
     }
 
-    // Use the browser receipt time as the live heartbeat.
-    // This avoids relying on clock synchronization between
-    // EDGE, VPS and browser.
+    // IMPORTANT:
+    // Zero is a valid PLC value and must be accepted.
+    // Only null/undefined is considered missing.
+    if (data.Value === null || data.Value === undefined) {
+        return;
+    }
+
     updateCard(tag, data.Value);
     setOnline();
 
@@ -433,6 +400,8 @@ async function loadLatestValues() {
     catch (error) {
 
         console.error("DASHBOARD DATA ERROR:", error);
+
+        // Keep the last values. Only communication status changes.
         setOffline();
 
     }
@@ -446,13 +415,40 @@ async function loadLatestValues() {
 loadLatestValues();
 
 // =====================================================
-// AUTOMATIC LIVE CHECK
+// COMMUNICATION STATUS WATCHDOG
 // =====================================================
 //
-// Check every second. This guarantees that when EDGE stops
-// sending, an old database value is removed from the live
-// dashboard within approximately one second after the
-// 5-second live timeout expires.
+// This timer only changes ONLINE/OFFLINE status.
+// It NEVER changes the value displayed on the cards.
+//
+// Therefore:
+//
+//     EDGE sends 125 -> card = 125
+//     EDGE stops     -> card remains 125, status OFFLINE
+//     EDGE sends 130 -> card = 130, status ONLINE
+//     EDGE sends 0   -> card = 0,   status ONLINE
+// =====================================================
+
+setInterval(function () {
+
+    if (!lastAnyReceiveTime) {
+        return;
+    }
+
+    const age = Date.now() - lastAnyReceiveTime;
+
+    if (age > LIVE_TIMEOUT_MS) {
+        setOffline();
+    }
+
+}, 1000);
+
+// =====================================================
+// PERIODIC SERVER REFRESH
+// =====================================================
+//
+// Keep the latest stored values synchronized with the browser.
+// This does not reset missing/stale values.
 //
 
 setInterval(loadLatestValues, 1000);
