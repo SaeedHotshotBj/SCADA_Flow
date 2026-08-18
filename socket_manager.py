@@ -6,7 +6,7 @@
 import json
 
 from flask import request
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from database import get_connection, get_company_flow
 
@@ -27,24 +27,21 @@ def _validate_flow_login(company_id, username, password):
         username -> password -> role
 
     RolesEngaged is the source of truth for whether that role
-    is allowed to use the application at all.
-
-    The legacy Users table is intentionally NOT trusted for
-    authentication here.
+    is allowed to authenticate.
     """
 
     if company_id is None or not username or not password:
-        return False
+        return None
 
     flow_json = get_company_flow(company_id)
 
     if not flow_json:
-        return False
+        return None
 
     try:
         flow = json.loads(flow_json)
     except Exception:
-        return False
+        return None
 
     nodes = (
         flow
@@ -54,12 +51,10 @@ def _validate_flow_login(company_id, username, password):
     )
 
     if not isinstance(nodes, dict):
-        return False
+        return None
 
     username_key = str(username).strip().lower()
-    matched_role = None
-    matched_password = None
-    matched_enabled = True
+    matched = None
 
     # -------------------------------------------------
     # ROLES = USER DEFINITIONS
@@ -94,52 +89,51 @@ def _validate_flow_login(company_id, username, password):
             if item_username.lower() != username_key:
                 continue
 
-            matched_role = str(
-                item.get(
-                    "role",
-                    item.get("name", "")
+            matched = {
+                "username": item_username,
+                "role": str(
+                    item.get(
+                        "role",
+                        item.get("name", "")
+                    )
+                ).strip(),
+                "password": str(
+                    item.get("password", "")
+                ),
+                "enabled": bool(
+                    item.get("enabled", True)
                 )
-            ).strip()
-
-            matched_password = str(
-                item.get("password", "")
-            )
-
-            matched_enabled = bool(
-                item.get("enabled", True)
-            )
-
+            }
             break
 
-        if matched_role is not None:
+        if matched is not None:
             break
 
-    if not matched_role or not matched_enabled:
-        return False
+    if not matched:
+        return None
+
+    if not matched["role"] or not matched["enabled"]:
+        return None
 
     # -------------------------------------------------
-    # PASSWORD = MUST MATCH THE ROLES BLOCK
+    # PASSWORD = MUST MATCH ROLES BLOCK
     # -------------------------------------------------
 
-    password_ok = False
+    password_ok = (
+        password == matched["password"]
+    )
 
-    # Roles currently stores the configured password as the
-    # value entered in the flow editor. Compare it directly.
-    if password == matched_password:
-        password_ok = True
-    else:
-        # Also accept a Werkzeug hash if a future Roles block
-        # stores hashed credentials instead of plaintext.
+    if not password_ok:
         try:
             password_ok = check_password_hash(
-                matched_password,
+                matched["password"],
                 password
             )
         except Exception:
             password_ok = False
 
     if not password_ok:
-        return False
+        return None
 
     # -------------------------------------------------
     # ROLES ENGAGED = ALLOWED ROLES
@@ -179,22 +173,124 @@ def _validate_flow_login(company_id, username, password):
             if role_name:
                 engaged_roles.append(role_name)
 
-    # A company user is allowed to authenticate only when the
-    # user's role is explicitly engaged somewhere in the flow.
+    # A company user can authenticate only if their role is
+    # explicitly present in at least one RolesEngaged node.
     if not any(
-        matched_role.lower() == role.lower()
+        matched["role"].lower() == role.lower()
         for role in engaged_roles
     ):
-        return False
+        return None
 
-    return True
+    return matched
+
+
+def _sync_authenticated_flow_user(company_id, user):
+    """
+    Synchronize the validated Roles user into Users so the
+    existing application login/session code can continue to
+    operate without changing unrelated routes.
+
+    Authentication has already been decided from the flow.
+    Users is only a session/application compatibility store.
+    """
+
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT UserID
+            FROM Users
+            WHERE Username = ?
+              AND CompanyID = ?
+            LIMIT 1
+            """,
+            (
+                user["username"],
+                company_id
+            )
+        )
+
+        existing = cursor.fetchone()
+        password_hash = generate_password_hash(
+            user["password"]
+        )
+
+        if existing:
+            cursor.execute(
+                """
+                UPDATE Users
+                SET
+                    PasswordHash = ?,
+                    Role = ?,
+                    Enabled = 1
+                WHERE UserID = ?
+                """,
+                (
+                    password_hash,
+                    user["role"],
+                    existing["UserID"]
+                )
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO Users
+                (
+                    Username,
+                    PasswordHash,
+                    CompanyID,
+                    Role,
+                    Enabled
+                )
+                VALUES
+                (
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    1
+                )
+                """,
+                (
+                    user["username"],
+                    password_hash,
+                    company_id,
+                    user["role"]
+                )
+            )
+
+        conn.commit()
+
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        print("FLOW USER SYNC ERROR:", e)
+
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _install_authentication_guard(socketio):
     """
-    Install a small pre-login guard after the real Flask app
-    has been created. This keeps the existing login route and
-    all unrelated application behavior unchanged.
+    Install the authentication guard after the Flask app has
+    been created and the /login route has been registered.
     """
 
     global _auth_guard_registered
@@ -205,6 +301,7 @@ def _install_authentication_guard(socketio):
     flask_app = getattr(socketio, "app", None)
 
     if flask_app is None:
+        print("AUTH GUARD: Flask app not available")
         return
 
     @flask_app.before_request
@@ -231,22 +328,45 @@ def _install_authentication_guard(socketio):
             ""
         )
 
-        # Master authentication remains handled by the existing
-        # dedicated master account in Users because it is global,
-        # not company-scoped.
+        # Master is global and remains handled by the existing
+        # dedicated master account in Users.
         if company_id is None:
             return None
 
-        if not _validate_flow_login(
+        validated_user = _validate_flow_login(
             company_id,
             username,
             password
-        ):
+        )
+
+        if validated_user is None:
+            print(
+                "FLOW LOGIN REJECTED:",
+                username,
+                "COMPANY:",
+                company_id
+            )
             return (
-                "Invalid company, username, password, or "
-                "the user's role is not enabled in RolesEngaged.",
+                "Invalid company, username, password, or the "
+                "user role is not enabled in RolesEngaged.",
                 401
             )
+
+        # Keep the existing login route/session behavior working,
+        # but make sure its Users record exactly matches the flow.
+        _sync_authenticated_flow_user(
+            company_id,
+            validated_user
+        )
+
+        print(
+            "FLOW LOGIN ACCEPTED:",
+            validated_user["username"],
+            "ROLE:",
+            validated_user["role"],
+            "COMPANY:",
+            company_id
+        )
 
         return None
 
@@ -266,8 +386,7 @@ def init_socketio(socketio):
     # after the real Flask app object exists.
     socketio_instance = socketio
 
-    # Authentication is deliberately installed here because
-    # app.py calls init_socketio() after its login route exists.
+    # app.py calls this after the Flask login route exists.
     _install_authentication_guard(socketio)
 
 
