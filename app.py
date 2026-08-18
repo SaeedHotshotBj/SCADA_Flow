@@ -818,39 +818,23 @@ def flow_role_required(
 def login():
 
     # =================================================
-    # ALREADY LOGGED IN
+    # GET LOGIN PAGE / EXISTING SESSION
     # =================================================
 
-    if is_logged_in():
-
-        print(
-            "ALREADY LOGGED IN:",
-            dict(session)
-        )
-
-        if is_master():
-
-            return redirect(
-                url_for(
-                    "master_companies"
-                )
-            )
-
-        return redirect(
-            url_for(
-                "dashboard"
-            )
-        )
-
-    # =================================================
-    # GET LOGIN PAGE
-    # =================================================
-
+    # Existing sessions may redirect only on GET.
+    # POST always validates the submitted credentials.
     if request.method == "GET":
 
-        companies = (
-            _get_companies_for_login()
-        )
+        if is_logged_in():
+
+            print("ALREADY LOGGED IN:", dict(session))
+
+            if is_master():
+                return redirect(url_for("master_companies"))
+
+            return redirect(url_for("dashboard"))
+
+        companies = _get_companies_for_login()
 
         return render_template(
             "login.html",
