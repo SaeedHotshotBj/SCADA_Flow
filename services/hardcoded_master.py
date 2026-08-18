@@ -1,31 +1,35 @@
 import time
 
-from flask import redirect, request, session
+from flask import session
+
 
 MASTER_USERNAME = "master"
 MASTER_PASSWORD = "1234"
 MASTER_ROLE = "master"
+MASTER_USER_ID = "hardcoded-master"
 
 
-def handle_master_login(app):
-    @app.before_request
-    def _hardcoded_master_login():
-        if request.path != "/login" or request.method != "POST":
-            return None
+def is_hardcoded_master_credentials(username, password):
+    return (
+        str(username or "").strip().lower() == MASTER_USERNAME
+        and str(password or "") == MASTER_PASSWORD
+    )
 
-        username = request.form.get("username", "").strip().lower()
-        password = request.form.get("password", "")
 
-        if username != MASTER_USERNAME or password != MASTER_PASSWORD:
-            return None
+def set_hardcoded_master_session():
+    session.clear()
+    session["user_id"] = MASTER_USER_ID
+    session["username"] = MASTER_USERNAME
+    session["role"] = MASTER_ROLE
+    session["company_id"] = None
+    session["auth_login_time"] = time.time()
+    session.permanent = True
 
-        session.clear()
-        session["user_id"] = "hardcoded-master"
-        session["username"] = MASTER_USERNAME
-        session["role"] = MASTER_ROLE
-        session["company_id"] = None
-        session["auth_login_time"] = time.time()
-        session.permanent = True
 
-        print("HARDCODED MASTER LOGIN SUCCESS")
-        return redirect("/master/companies")
+def is_hardcoded_master_session():
+    return (
+        session.get("user_id") == MASTER_USER_ID
+        and str(session.get("username", "")).strip().lower() == MASTER_USERNAME
+        and str(session.get("role", "")).strip().lower() == MASTER_ROLE
+        and session.get("company_id") is None
+    )
