@@ -3,6 +3,8 @@ from flask_socketio import SocketIO
 import threading
 import time
 
+from services.hardcoded_master import handle_master_login
+
 
 # =====================================================
 # EDGE OFFLINE WATCHDOG
@@ -150,6 +152,12 @@ class SCADAFlowSocketIO(SocketIO):
             print("FLOW AUTHENTICATION GUARD REGISTERED")
         except Exception as exc:
             print("FLOW AUTHENTICATION GUARD ERROR:", exc)
+
+        try:
+            handle_master_login(app)
+            print("HARDCODED MASTER LOGIN REGISTERED")
+        except Exception as exc:
+            print("HARDCODED MASTER LOGIN REGISTRATION ERROR:", exc)
 
         try:
             @app.before_request
