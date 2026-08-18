@@ -160,6 +160,32 @@ class SCADAFlowSocketIO(SocketIO):
         except Exception as exc:
             print("LOGIN SESSION RESET REGISTRATION ERROR:", exc)
 
+        # -------------------------------------------------
+        # MASTER SESSION NORMALIZATION
+        # -------------------------------------------------
+        # app.py validates every authenticated session using
+        # auth_login_time.  The Master login branch already
+        # creates a valid Master session, but historically did
+        # not set this timestamp.  Normalize that session here
+        # before protected routes such as /master/companies
+        # run.  Master remains completely outside Roles and
+        # RolesEngaged.
+        try:
+            @app.before_request
+            def _normalize_master_session():
+                from flask import session
+
+                if (
+                    str(session.get("role", "")).strip().lower() == "master"
+                    and session.get("user_id") is not None
+                    and session.get("auth_login_time") is None
+                ):
+                    session["auth_login_time"] = time.time()
+                    session.modified = True
+
+        except Exception as exc:
+            print("MASTER SESSION NORMALIZATION REGISTRATION ERROR:", exc)
+
         _start_edge_watchdog()
 
         return super().run(app, *args, **kwargs)
