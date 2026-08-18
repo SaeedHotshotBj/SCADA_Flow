@@ -845,6 +845,12 @@ def login():
     # POST LOGIN
     # =================================================
 
+    # A failed login attempt must never inherit a previous
+    # authenticated session (for example manager -> logout -> a/1).
+    # Start every POST authentication attempt from a clean session.
+    session.clear()
+    session.modified = True
+
     company_id = request.form.get(
         "company_id",
         type=int
@@ -1312,18 +1318,43 @@ def logout():
         "username"
     )
 
+    # Completely invalidate the Flask session.
     session.clear()
+    session.modified = True
+    session.permanent = False
 
     print(
         "USER LOGOUT:",
         username
     )
 
-    return redirect(
+    response = redirect(
         url_for(
             "login"
         )
     )
+
+    # Explicitly expire the session cookie as an additional safeguard
+    # against a browser retaining an old authenticated cookie.
+    response.delete_cookie(
+        app.config.get(
+            "SESSION_COOKIE_NAME",
+            "session"
+        ),
+        path=app.config.get(
+            "SESSION_COOKIE_PATH",
+            "/"
+        ),
+        domain=app.config.get(
+            "SESSION_COOKIE_DOMAIN"
+        )
+    )
+
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+
+    return response
 
 
 # =====================================================
