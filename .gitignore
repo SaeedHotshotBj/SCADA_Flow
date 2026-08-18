@@ -9,3 +9,6 @@ data/
 .env
 /tmp/
 deploy.bundle
+data/scada_flow.db
+__pycache__/
+*.pyc
