@@ -1,14 +1,14 @@
 # =====================================================
 # SCADA_FLOW SOCKET MANAGER
-# DASHBOARD REALTIME DATA
+# DASHBOARD REALTIME DATA + FLOW AUTHENTICATION
 # =====================================================
 
 import json
 
-from flask import request
-from werkzeug.security import check_password_hash, generate_password_hash
+from flask import request, redirect, url_for
+from werkzeug.security import check_password_hash
 
-from database import get_connection, get_company_flow
+from database import get_company_flow
 
 
 socketio_instance = None
@@ -16,361 +16,218 @@ _auth_guard_registered = False
 
 
 # =====================================================
-# AUTHENTICATION GUARD
+# FLOW AUTHENTICATION
 # =====================================================
+
+def _flow_nodes(company_id):
+    if company_id is None:
+        return {}
+
+    flow_json = get_company_flow(company_id)
+
+    if not flow_json:
+        return {}
+
+    try:
+        flow = json.loads(flow_json)
+    except Exception as exc:
+        print("FLOW AUTH JSON ERROR:", exc)
+        return {}
+
+    return (
+        flow.get("drawflow", {})
+        .get("Home", {})
+        .get("data", {})
+    )
+
+
+def _read_roles(nodes):
+    """Roles node is the only place where users are defined."""
+    users = []
+
+    for node in nodes.values():
+        if not isinstance(node, dict) or node.get("name") != "Roles":
+            continue
+
+        items = node.get("data", {}).get("roles", [])
+        if not isinstance(items, list):
+            continue
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            username = str(item.get("username", "")).strip()
+            role = str(item.get("role", item.get("name", ""))).strip()
+            password = str(item.get("password", ""))
+            enabled = bool(item.get("enabled", True))
+
+            if username and role:
+                users.append({
+                    "username": username,
+                    "role": role,
+                    "password": password,
+                    "enabled": enabled,
+                })
+
+    return users
+
+
+def _read_engaged_roles(nodes):
+    """RolesEngaged is the only source for login permission."""
+    roles = []
+    found_node = False
+
+    for node in nodes.values():
+        if not isinstance(node, dict) or node.get("name") != "RolesEngaged":
+            continue
+
+        found_node = True
+        items = node.get("data", {}).get("roles", [])
+
+        if isinstance(items, str):
+            items = [items]
+
+        if not isinstance(items, list):
+            continue
+
+        for item in items:
+            if isinstance(item, dict):
+                role = str(item.get("role", "")).strip()
+            else:
+                role = str(item).strip()
+
+            if role:
+                roles.append(role.lower())
+
+    return found_node, set(roles)
+
 
 def _validate_flow_login(company_id, username, password):
     """
-    Validate company users directly from the saved flow.
+    Authentication source of truth:
 
-    Roles is the source of truth for:
-        username -> password -> role
+        Roles       -> defines username/password/role
+        RolesEngaged -> explicitly permits the role to log in
 
-    RolesEngaged is the source of truth for whether that role
-    is allowed to authenticate.
+    Users table is NOT consulted to decide whether authentication
+    succeeds.
     """
 
     if company_id is None or not username or not password:
         return None
 
-    flow_json = get_company_flow(company_id)
+    nodes = _flow_nodes(company_id)
 
-    if not flow_json:
+    if not nodes:
+        print("FLOW LOGIN REJECTED: NO FLOW", company_id)
         return None
 
-    try:
-        flow = json.loads(flow_json)
-    except Exception:
-        return None
-
-    nodes = (
-        flow
-        .get("drawflow", {})
-        .get("Home", {})
-        .get("data", {})
-    )
-
-    if not isinstance(nodes, dict):
-        return None
-
-    username_key = str(username).strip().lower()
+    username_key = username.strip().lower()
     matched = None
 
-    # -------------------------------------------------
-    # ROLES = USER DEFINITIONS
-    # -------------------------------------------------
-
-    for node in nodes.values():
-
-        if not isinstance(node, dict):
-            continue
-
-        if node.get("name") != "Roles":
-            continue
-
-        role_list = (
-            node
-            .get("data", {})
-            .get("roles", [])
-        )
-
-        if not isinstance(role_list, list):
-            continue
-
-        for item in role_list:
-
-            if not isinstance(item, dict):
-                continue
-
-            item_username = str(
-                item.get("username", "")
-            ).strip()
-
-            if item_username.lower() != username_key:
-                continue
-
-            matched = {
-                "username": item_username,
-                "role": str(
-                    item.get(
-                        "role",
-                        item.get("name", "")
-                    )
-                ).strip(),
-                "password": str(
-                    item.get("password", "")
-                ),
-                "enabled": bool(
-                    item.get("enabled", True)
-                )
-            }
+    for user in _read_roles(nodes):
+        if user["username"].lower() == username_key:
+            matched = user
             break
 
-        if matched is not None:
-            break
-
-    if not matched:
+    if matched is None:
+        print("FLOW LOGIN REJECTED: USER NOT IN ROLES", username)
         return None
 
-    if not matched["role"] or not matched["enabled"]:
+    if not matched["enabled"]:
+        print("FLOW LOGIN REJECTED: USER DISABLED", username)
         return None
 
-    # -------------------------------------------------
-    # PASSWORD = MUST MATCH ROLES BLOCK
-    # -------------------------------------------------
-
-    password_ok = (
-        password == matched["password"]
-    )
+    stored_password = matched["password"]
+    password_ok = password == stored_password
 
     if not password_ok:
         try:
-            password_ok = check_password_hash(
-                matched["password"],
-                password
-            )
+            password_ok = check_password_hash(stored_password, password)
         except Exception:
             password_ok = False
 
     if not password_ok:
+        print("FLOW LOGIN REJECTED: WRONG PASSWORD", username)
         return None
 
-    # -------------------------------------------------
-    # ROLES ENGAGED = ALLOWED ROLES
-    # -------------------------------------------------
+    found_engaged, engaged_roles = _read_engaged_roles(nodes)
 
-    engaged_roles = []
+    # There must be a RolesEngaged node and the user's role must
+    # explicitly be selected in it. No RolesEngaged = no login.
+    if not found_engaged:
+        print("FLOW LOGIN REJECTED: NO ROLES ENGAGED", username)
+        return None
 
-    for node in nodes.values():
-
-        if not isinstance(node, dict):
-            continue
-
-        if node.get("name") != "RolesEngaged":
-            continue
-
-        role_list = (
-            node
-            .get("data", {})
-            .get("roles", [])
+    if matched["role"].strip().lower() not in engaged_roles:
+        print(
+            "FLOW LOGIN REJECTED: ROLE NOT ENGAGED",
+            username,
+            matched["role"],
         )
-
-        if isinstance(role_list, str):
-            role_list = [role_list]
-
-        if not isinstance(role_list, list):
-            continue
-
-        for item in role_list:
-
-            if isinstance(item, dict):
-                role_name = str(
-                    item.get("role", "")
-                ).strip()
-            else:
-                role_name = str(item).strip()
-
-            if role_name:
-                engaged_roles.append(role_name)
-
-    # A company user can authenticate only if their role is
-    # explicitly present in at least one RolesEngaged node.
-    if not any(
-        matched["role"].lower() == role.lower()
-        for role in engaged_roles
-    ):
         return None
 
     return matched
 
 
-def _sync_authenticated_flow_user(company_id, user):
-    """
-    Synchronize the validated Roles user into Users so the
-    existing application login/session code can continue to
-    operate without changing unrelated routes.
-
-    Authentication has already been decided from the flow.
-    Users is only a session/application compatibility store.
-    """
-
-    conn = None
-    cursor = None
-
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            SELECT UserID
-            FROM Users
-            WHERE Username = ?
-              AND CompanyID = ?
-            LIMIT 1
-            """,
-            (
-                user["username"],
-                company_id
-            )
-        )
-
-        existing = cursor.fetchone()
-        password_hash = generate_password_hash(
-            user["password"]
-        )
-
-        if existing:
-            cursor.execute(
-                """
-                UPDATE Users
-                SET
-                    PasswordHash = ?,
-                    Role = ?,
-                    Enabled = 1
-                WHERE UserID = ?
-                """,
-                (
-                    password_hash,
-                    user["role"],
-                    existing["UserID"]
-                )
-            )
-        else:
-            cursor.execute(
-                """
-                INSERT INTO Users
-                (
-                    Username,
-                    PasswordHash,
-                    CompanyID,
-                    Role,
-                    Enabled
-                )
-                VALUES
-                (
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    1
-                )
-                """,
-                (
-                    user["username"],
-                    password_hash,
-                    company_id,
-                    user["role"]
-                )
-            )
-
-        conn.commit()
-
-    except Exception as e:
-        if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-        print("FLOW USER SYNC ERROR:", e)
-
-    finally:
-        if cursor is not None:
-            try:
-                cursor.close()
-            except Exception:
-                pass
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
+# =====================================================
+# AUTHENTICATION GUARD
+# =====================================================
 
 def _install_authentication_guard(socketio):
-    """
-    Install the authentication guard after the Flask app has
-    been created and the /login route has been registered.
-    """
-
     global _auth_guard_registered
 
     if _auth_guard_registered:
-        return
+        return True
 
     flask_app = getattr(socketio, "app", None)
 
     if flask_app is None:
-        print("AUTH GUARD: Flask app not available")
-        return
+        print("FLOW AUTH GUARD: Flask app is not available yet")
+        return False
 
     @flask_app.before_request
     def flow_authentication_guard():
-
-        # Only intercept company login submissions.
-        if request.path != "/login":
+        if request.path != "/login" or request.method != "POST":
             return None
 
-        if request.method != "POST":
-            return None
+        company_id = request.form.get("company_id", type=int)
+        username = str(request.form.get("username", "")).strip()
+        password = request.form.get("password", "")
 
-        company_id = request.form.get(
-            "company_id",
-            type=int
-        )
-
-        username = str(
-            request.form.get("username", "")
-        ).strip()
-
-        password = request.form.get(
-            "password",
-            ""
-        )
-
-        # Master is global and remains handled by the existing
-        # dedicated master account in Users.
+        # Company authentication is controlled by Roles/RolesEngaged.
+        # The global master account remains handled by app.py.
         if company_id is None:
             return None
 
-        validated_user = _validate_flow_login(
+        user = _validate_flow_login(
             company_id,
             username,
-            password
+            password,
         )
 
-        if validated_user is None:
-            print(
-                "FLOW LOGIN REJECTED:",
-                username,
-                "COMPANY:",
-                company_id
+        if user is None:
+            # Do not let app.py fall through to the legacy Users-table
+            # authentication. Return to the login page with an error.
+            return redirect(
+                url_for(
+                    "login",
+                    auth_error=(
+                        "Invalid username, password, or the user's role "
+                        "is not enabled in RolesEngaged."
+                    ),
+                )
             )
-            return (
-                "Invalid company, username, password, or the "
-                "user role is not enabled in RolesEngaged.",
-                401
-            )
 
-        # Keep the existing login route/session behavior working,
-        # but make sure its Users record exactly matches the flow.
-        _sync_authenticated_flow_user(
-            company_id,
-            validated_user
-        )
-
-        print(
-            "FLOW LOGIN ACCEPTED:",
-            validated_user["username"],
-            "ROLE:",
-            validated_user["role"],
-            "COMPANY:",
-            company_id
-        )
-
+        # Mark the request as flow-authenticated so the normal login
+        # route can create the existing Flask session.
+        request.flow_authenticated_user = user
         return None
 
     _auth_guard_registered = True
+    print("FLOW AUTHENTICATION GUARD REGISTERED")
+    return True
 
 
 # =====================================================
@@ -378,15 +235,8 @@ def _install_authentication_guard(socketio):
 # =====================================================
 
 def init_socketio(socketio):
-
     global socketio_instance
-
-    # Keep the SocketIO instance for realtime emits.
-    # Flask routes are registered by SCADAFlowSocketIO.run()
-    # after the real Flask app object exists.
     socketio_instance = socketio
-
-    # app.py calls this after the Flask login route exists.
     _install_authentication_guard(socketio)
 
 
@@ -395,32 +245,15 @@ def init_socketio(socketio):
 # =====================================================
 
 def send_dashboard_data(data):
-
     if socketio_instance is None:
-
-        print(
-            "SOCKET.IO NOT INITIALIZED"
-        )
-
+        print("SOCKET.IO NOT INITIALIZED")
         return
 
     try:
-
-        socketio_instance.emit(
-            "tag_update",
-            data
-        )
-
-        print(
-            "SOCKET DATA SENT"
-        )
-
+        socketio_instance.emit("tag_update", data)
+        print("SOCKET DATA SENT")
     except Exception as e:
-
-        print(
-            "SOCKET SEND ERROR:",
-            e
-        )
+        print("SOCKET SEND ERROR:", e)
 
 
 # =====================================================
@@ -428,7 +261,6 @@ def send_dashboard_data(data):
 # =====================================================
 
 def send_tag_data(tags, online=True):
-
     send_dashboard_data({
         "Online": online,
         "Tags": tags,
