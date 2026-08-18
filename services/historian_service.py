@@ -11,11 +11,17 @@ from database import insert_tag_value, get_latest_tag_values
 from services.report_service import save_report_snapshot
 
 
+ZERO_DEBOUNCE_SECONDS = 2.0
+
+
 class HistorianService:
 
     def __init__(self):
         self.time_memory = {}
         self.trigger_memory = {}
+        # First time a zero is observed for a tag. A zero must remain
+        # present for 2 seconds before it is accepted by the historian.
+        self.zero_memory = {}
 
     def check_time(self, definition):
         name = definition.get("name")
@@ -126,8 +132,65 @@ class HistorianService:
             print("HISTORIAN CHANGE CHECK ERROR:", name, exc)
             return True
 
+    def _is_zero(self, value):
+        try:
+            return float(value) == 0.0
+        except (TypeError, ValueError):
+            return False
+
+    def _zero_debounced(self, company_id, name, value):
+        """
+        Ignore a zero transition for the first 2 seconds.
+
+        A genuine zero is accepted only if zero remains the observed value
+        for at least ZERO_DEBOUNCE_SECONDS. This prevents short zero glitches
+        from being stored in the historian and prevents dashboard flicker.
+        """
+        key = (int(company_id), str(name).strip().lower())
+        now = time.monotonic()
+
+        if not self._is_zero(value):
+            self.zero_memory.pop(key, None)
+            return False
+
+        first_zero = self.zero_memory.get(key)
+
+        if first_zero is None:
+            self.zero_memory[key] = now
+            print(
+                "HISTORIAN ZERO DEBOUNCE START:",
+                name,
+                "WAIT:",
+                ZERO_DEBOUNCE_SECONDS,
+                "seconds"
+            )
+            return True
+
+        if now - first_zero < ZERO_DEBOUNCE_SECONDS:
+            print(
+                "HISTORIAN ZERO IGNORED:",
+                name,
+                "AGE:",
+                round(now - first_zero, 2),
+                "seconds"
+            )
+            return True
+
+        # Zero has remained continuously long enough to be a real value.
+        self.zero_memory.pop(key, None)
+        print(
+            "HISTORIAN ZERO ACCEPTED:",
+            name
+        )
+        return False
+
     def _insert_changed(self, company_id, name, value, storage_type, timestamp=None):
-        """Insert only on a real value transition."""
+        """Insert only on a real value transition, with 2-second zero debounce."""
+
+        # A short zero glitch must not reach the historian/database.
+        if self._zero_debounced(company_id, name, value):
+            return False
+
         if not self._value_changed(company_id, name, value):
             print("HISTORIAN SKIP - VALUE UNCHANGED:", name, "=", value)
             return False
@@ -180,12 +243,6 @@ class HistorianService:
             for name, value in tags.items()
         }
 
-        # -------------------------------------------------
-        # REPORT DATABASE
-        # -------------------------------------------------
-        # Save one complete report snapshot independently
-        # from the normal historian. This preserves the
-        # report event even when a value has not changed.
         snapshot_id = save_report_snapshot(
             company_id,
             tags,
@@ -197,13 +254,6 @@ class HistorianService:
             print("REPORT SNAPSHOT SKIPPED - NO VALUES")
             return 0
 
-        # -------------------------------------------------
-        # KEEP EXISTING PLC HISTORIAN STORAGE
-        # -------------------------------------------------
-        # The existing PLC_Data REPORT_TRIGGER records remain
-        # available for backward compatibility. The new
-        # ReportHistory/ReportValues tables are the reporting
-        # source used by ReportOutput.
         written = 0
 
         for tag in report_tags:
