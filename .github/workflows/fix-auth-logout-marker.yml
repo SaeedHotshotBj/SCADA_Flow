@@ -1,0 +1,71 @@
+name: Fix auth logout marker
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix-auth:
+    if: github.actor == 'SaeedHotshotBj'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch app.py
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app.py")
+          text = path.read_text(encoding="utf-8")
+
+          anchor = '''app.config["PERMANENT_SESSION_LIFETIME"] = 86400\n\n\n# =====================================================\n# AUTHENTICATION / PAGE CACHE PROTECTION\n# =====================================================\n'''
+
+          replacement = '''app.config["PERMANENT_SESSION_LIFETIME"] = 86400\n\n\n# =====================================================\n# AUTHENTICATION / PAGE CACHE PROTECTION\n# =====================================================\n\n@app.before_request\ndef _reject_stale_logout_session():\n    """Reject an old authenticated session after an explicit logout.\n\n    Flask sessions are client-side signed cookies.  A browser can retain an\n    old cookie if cookie deletion is blocked or cached.  The logout marker\n    gives the server a second, explicit signal that the browser has logged\n    out and must authenticate again.\n    """\n\n    if request.path in ("/login", "/logout"):\n        return None\n\n    if request.path.startswith("/static/"):\n        return None\n\n    if request.cookies.get("scada_logout_marker") == "1":\n        session.clear()\n        session.modified = True\n        return redirect(url_for("login", next=request.path))\n\n    return None\n'''
+
+          if "def _reject_stale_logout_session" not in text:
+              if anchor not in text:
+                  raise SystemExit("Authentication anchor not found; refusing to modify app.py")
+              text = text.replace(anchor, replacement, 1)
+
+          logout_anchor = '''    response = redirect(\n        url_for(\n            "login"\n        )\n    )\n\n    # Explicitly expire the session cookie as an additional safeguard\n'''
+
+          logout_replacement = '''    response = redirect(\n        url_for(\n            "login"\n        )\n    )\n\n    # Explicit logout marker prevents a browser-retained old session cookie\n    # from authenticating again after logout.  It is removed after a real\n    # successful login.\n    response.set_cookie(\n        "scada_logout_marker",\n        "1",\n        max_age=3600,\n        httponly=True,\n        samesite="Lax",\n        secure=False,\n        path="/"\n    )\n\n    # Explicitly expire the session cookie as an additional safeguard\n'''
+
+          if "scada_logout_marker" not in text:
+              if logout_anchor not in text:
+                  raise SystemExit("Logout anchor not found; refusing to modify app.py")
+              text = text.replace(logout_anchor, logout_replacement, 1)
+
+          after_anchor = '''@app.after_request\ndef _auth_no_cache(response):\n'''
+          if "response.delete_cookie(\"scada_logout_marker\"" not in text:
+              marker_insert = '''@app.after_request\ndef _auth_no_cache(response):\n    if request.path == "/login" and request.method == "POST" and session.get("user_id") is not None:\n        response.delete_cookie("scada_logout_marker", path="/")\n\n'''
+              if after_anchor not in text:
+                  raise SystemExit("after_request anchor not found; refusing to modify app.py")
+              text = text.replace(after_anchor, marker_insert, 1)
+
+          path.write_text(text, encoding="utf-8")
+
+      - name: Commit authentication fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git diff --cached --quiet && echo "No changes needed" && exit 0
+          git commit -m "Fix logout invalidation for stale session cookies"
+          git push origin main
+
+      - name: Remove one-time workflow
+        if: success()
+        run: |
+          rm -f .github/workflows/fix-auth-logout-marker.yml
+          git add .github/workflows/fix-auth-logout-marker.yml
+          git commit -m "Remove one-time authentication fix workflow"
+          git push origin main
