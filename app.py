@@ -134,6 +134,41 @@ init_database()
 
 
 # =====================================================
+# SERVER-SIDE AUTH SESSION REVOCATION
+# =====================================================
+
+def _init_auth_session_revocations():
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS AuthSessionRevocations (
+                UserID INTEGER PRIMARY KEY,
+                RevokedAt REAL NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+_init_auth_session_revocations()
+
+
+# =====================================================
 # GLOBAL FLOW STATE
 # =====================================================
 
@@ -158,6 +193,12 @@ def is_logged_in():
     if user_id is None:
         return False
 
+    login_time = session.get("auth_login_time")
+    if login_time is None:
+        session.clear()
+        session.modified = True
+        return False
+
     conn = None
     cursor = None
 
@@ -176,6 +217,17 @@ def is_logged_in():
         )
 
         user = cursor.fetchone()
+
+        cursor.execute(
+            "SELECT RevokedAt FROM AuthSessionRevocations WHERE UserID = ?",
+            (user_id,)
+        )
+        revocation = cursor.fetchone()
+
+        if revocation is not None and float(revocation["RevokedAt"]) >= float(login_time):
+            session.clear()
+            session.modified = True
+            return False
 
         if not user or not user["Enabled"]:
             session.clear()
@@ -1356,6 +1408,8 @@ def login():
             user["CompanyID"]
         )
 
+        session["auth_login_time"] = time.time()
+
         session.permanent = True
 
         print()
@@ -1446,6 +1500,35 @@ def logout():
     username = session.get(
         "username"
     )
+    user_id = session.get("user_id")
+
+    # Revoke this user's current authenticated session on the server.
+    if user_id is not None:
+        conn = None
+        cursor = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO AuthSessionRevocations (UserID, RevokedAt)
+                VALUES (?, ?)
+                ON CONFLICT(UserID) DO UPDATE SET RevokedAt = excluded.RevokedAt
+                """,
+                (user_id, time.time())
+            )
+            conn.commit()
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     # Completely invalidate the Flask session.
     session.clear()
