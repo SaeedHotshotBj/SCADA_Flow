@@ -94,6 +94,12 @@ NODE_REGISTRY = {
                     {"name": "title", "label": "Title", "type": "text"},
                     {"name": "unit", "label": "Unit", "type": "text"}
                 ]
+            },
+            {
+                "name": "timeout",
+                "label": "Edge Timeout (sec)",
+                "type": "number",
+                "default": 10
             }
         ]
     },
