@@ -8,7 +8,7 @@ import json
 from flask import request, redirect, url_for
 from werkzeug.security import check_password_hash
 
-from database import get_company_flow
+from database import get_company_flow, get_connection
 
 
 socketio_instance = None
@@ -42,7 +42,7 @@ def _flow_nodes(company_id):
 
 
 def _read_roles(nodes):
-    """Roles node is the only place where users are defined."""
+    """Roles node is the only place where company users are defined."""
     users = []
 
     for node in nodes.values():
@@ -74,7 +74,7 @@ def _read_roles(nodes):
 
 
 def _read_engaged_roles(nodes):
-    """RolesEngaged is the only source for login permission."""
+    """RolesEngaged is the only source for company-user login permission."""
     roles = []
     found_node = False
 
@@ -105,13 +105,12 @@ def _read_engaged_roles(nodes):
 
 def _validate_flow_login(company_id, username, password):
     """
-    Authentication source of truth:
+    Authentication source of truth for normal company users:
 
-        Roles       -> defines username/password/role
+        Roles        -> defines username/password/role
         RolesEngaged -> explicitly permits the role to log in
 
-    Users table is NOT consulted to decide whether authentication
-    succeeds.
+    The global Master account is intentionally NOT checked here.
     """
 
     if company_id is None or not username or not password:
@@ -155,7 +154,7 @@ def _validate_flow_login(company_id, username, password):
     found_engaged, engaged_roles = _read_engaged_roles(nodes)
 
     # There must be a RolesEngaged node and the user's role must
-    # explicitly be selected in it. No RolesEngaged = no login.
+    # explicitly be selected in it. No RolesEngaged = no company login.
     if not found_engaged:
         print("FLOW LOGIN REJECTED: NO ROLES ENGAGED", username)
         return None
@@ -169,6 +168,59 @@ def _validate_flow_login(company_id, username, password):
         return None
 
     return matched
+
+
+def _is_global_master_login(username):
+    """
+    Identify the global Master account without consulting Roles or
+    RolesEngaged. Master is a system account and must remain outside
+    company flow role configuration.
+
+    Password validation is intentionally left to app.py.
+    """
+
+    username_key = str(username or "").strip()
+
+    if not username_key:
+        return False
+
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT UserID
+            FROM Users
+            WHERE Username = ?
+              AND CompanyID IS NULL
+              AND LOWER(Role) = 'master'
+              AND Enabled = 1
+            LIMIT 1
+            """,
+            (username_key,),
+        )
+
+        return cursor.fetchone() is not None
+
+    except Exception as exc:
+        print("MASTER LOGIN DETECTION ERROR:", exc)
+        return False
+
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 # =====================================================
@@ -196,8 +248,17 @@ def _install_authentication_guard(socketio):
         username = str(request.form.get("username", "")).strip()
         password = request.form.get("password", "")
 
+        # =================================================
+        # GLOBAL MASTER
+        # =================================================
+        # Master is a system account. It is authenticated by
+        # app.py against Users and must NEVER be required to
+        # exist in Roles or RolesEngaged.
+        if _is_global_master_login(username):
+            print("FLOW AUTH: MASTER BYPASS", username)
+            return None
+
         # Company authentication is controlled by Roles/RolesEngaged.
-        # The global master account remains handled by app.py.
         if company_id is None:
             return None
 
@@ -209,7 +270,7 @@ def _install_authentication_guard(socketio):
 
         if user is None:
             # Do not let app.py fall through to the legacy Users-table
-            # authentication. Return to the login page with an error.
+            # authentication for normal company users.
             return redirect(
                 url_for(
                     "login",
