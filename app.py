@@ -71,6 +71,36 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 86400
 
 
 # =====================================================
+# AUTHENTICATION / PAGE CACHE PROTECTION
+# =====================================================
+
+@app.after_request
+def _auth_no_cache(response):
+    """Prevent browsers/proxies from showing authenticated pages after logout."""
+
+    protected_paths = (
+        "/dashboard",
+        "/dashboard/latest",
+        "/home",
+    )
+
+    if (
+        request.path in protected_paths
+        or request.path.startswith("/dashboard/")
+    ):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+
+    if request.path in ("/login", "/logout"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+
+    return response
+
+
+# =====================================================
 # DATABASE INITIALIZATION
 # =====================================================
 
