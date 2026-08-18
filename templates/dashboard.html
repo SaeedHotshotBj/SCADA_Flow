@@ -154,27 +154,13 @@
 // LIVE DATA POLICY
 // =====================================================
 //
-// The dashboard keeps the LAST VALID VALUE for every tag.
+// DashboardOutput controls the Edge timeout on the server.
+// Between Edge transmissions the last value is preserved.
+// When the configured timeout expires, the server returns
+// zero for the stale Edge parameters.
 //
-// Missing data / temporary communication gaps do NOT mean
-// that the PLC value is zero.
-//
-// A real PLC value of zero is accepted and displayed when
-// EDGE actually sends zero.
-//
-// Online/Offline is handled separately from the card value.
+// The browser has no fixed value timeout anymore.
 // =====================================================
-
-const LIVE_TIMEOUT_MS = 5000;
-
-// Last time a real value was received from EDGE for each tag.
-const lastTagReceiveTime = {};
-
-// Last valid value received for each tag.
-const lastTagValue = {};
-
-// Last time ANY real EDGE value was received.
-let lastAnyReceiveTime = 0;
 
 // =====================================================
 // SOCKET.IO
@@ -205,8 +191,8 @@ function updateCard(tag, value) {
         return;
     }
 
-    // null/undefined means no new value. It must NEVER replace
-    // an existing valid card value with zero.
+    // null/undefined means no value. It must never replace
+    // an existing valid value with zero.
     if (value === null || value === undefined) {
         return;
     }
@@ -216,10 +202,21 @@ function updateCard(tag, value) {
     if (element.textContent !== newValue) {
         element.textContent = newValue;
     }
+}
 
-    lastTagValue[tag] = value;
-    lastTagReceiveTime[tag] = Date.now();
-    lastAnyReceiveTime = Date.now();
+// =====================================================
+// CLEAR ALL VALUES
+// =====================================================
+
+function clearDashboardValues() {
+
+    document.querySelectorAll(".widget-value").forEach(function (element) {
+
+        if (element.id.startsWith("value_")) {
+            element.textContent = "0";
+        }
+
+    });
 }
 
 // =====================================================
@@ -255,10 +252,7 @@ function setOffline() {
     status.classList.remove("online");
     status.classList.add("offline");
 
-    // IMPORTANT:
-    // Do NOT clear dashboard cards here.
-    // Offline means communication is currently unavailable,
-    // not that the PLC values became zero.
+    // IMPORTANT: offline status alone never clears cards.
 }
 
 // =====================================================
@@ -273,33 +267,17 @@ function applyLatestData(data) {
     }
 
     const tags = data.Tags || {};
-    const timestamps = data.Timestamps || {};
-
-    let foundFreshServerData = false;
 
     Object.keys(tags).forEach(function (tag) {
 
-        if (!document.getElementById("value_" + tag)) {
-            return;
-        }
-
-        const value = tags[tag];
-
-        // A value returned by /dashboard/latest is already the
-        // latest stored value. It is valid even when it is zero.
-        // We only update the card when the server actually gives
-        // us a value; missing tags are left untouched.
-        if (value !== null && value !== undefined) {
-
-            updateCard(tag, value);
-            foundFreshServerData = true;
-
-        }
+        updateCard(tag, tags[tag]);
 
     });
 
-    if (foundFreshServerData) {
+    if (data.Online === true) {
         setOnline();
+    } else {
+        setOffline();
     }
 }
 
@@ -321,6 +299,7 @@ socket.on("disconnect", function () {
 
     console.log("Dashboard Socket.IO disconnected");
 
+    // Browser Socket.IO disconnect does not mean Edge is offline.
     // Keep the last values visible.
     setOffline();
 
@@ -344,9 +323,7 @@ socket.on("tag_update", function (data) {
         return;
     }
 
-    // IMPORTANT:
-    // Zero is a valid PLC value and must be accepted.
-    // Only null/undefined is considered missing.
+    // Zero is a valid PLC value and must be displayed.
     if (data.Value === null || data.Value === undefined) {
         return;
     }
@@ -401,7 +378,7 @@ async function loadLatestValues() {
 
         console.error("DASHBOARD DATA ERROR:", error);
 
-        // Keep the last values. Only communication status changes.
+        // Keep last values when the dashboard request itself fails.
         setOffline();
 
     }
@@ -415,40 +392,13 @@ async function loadLatestValues() {
 loadLatestValues();
 
 // =====================================================
-// COMMUNICATION STATUS WATCHDOG
+// SERVER TIMEOUT CHECK
 // =====================================================
 //
-// This timer only changes ONLINE/OFFLINE status.
-// It NEVER changes the value displayed on the cards.
-//
-// Therefore:
-//
-//     EDGE sends 125 -> card = 125
-//     EDGE stops     -> card remains 125, status OFFLINE
-//     EDGE sends 130 -> card = 130, status ONLINE
-//     EDGE sends 0   -> card = 0,   status ONLINE
-// =====================================================
-
-setInterval(function () {
-
-    if (!lastAnyReceiveTime) {
-        return;
-    }
-
-    const age = Date.now() - lastAnyReceiveTime;
-
-    if (age > LIVE_TIMEOUT_MS) {
-        setOffline();
-    }
-
-}, 1000);
-
-// =====================================================
-// PERIODIC SERVER REFRESH
-// =====================================================
-//
-// Keep the latest stored values synchronized with the browser.
-// This does not reset missing/stale values.
+// The server evaluates DashboardOutput.timeout on every
+// request. Polling once per second makes the zero appear
+// within approximately one second after the configured
+// timeout expires.
 //
 
 setInterval(loadLatestValues, 1000);
