@@ -1,13 +1,15 @@
 name: Fix login session handling
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   fix-login:
+    if: github.event.head_commit.message == 'Temporary workflow to fix login session handling'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
