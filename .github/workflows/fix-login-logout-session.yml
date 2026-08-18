@@ -1,0 +1,63 @@
+name: Fix login logout session reuse
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  fix-auth:
+    if: github.actor == 'SaeedHotshotBj'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch authentication session handling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_login = '''    # =================================================\n    # POST LOGIN\n    # =================================================\n\n    company_id = request.form.get(\n'''
+
+          new_login = '''    # =================================================\n    # POST LOGIN\n    # =================================================\n\n    # A failed login attempt must never inherit a previous\n    # authenticated session (for example manager -> logout -> a/1).\n    # Start every POST authentication attempt from a clean session.\n    session.clear()\n    session.modified = True\n\n    company_id = request.form.get(\n'''
+
+          if old_login not in text:
+              raise SystemExit('POST LOGIN marker not found')
+          text = text.replace(old_login, new_login, 1)
+
+          old_logout = '''    session.clear()\n\n    print(\n        "USER LOGOUT:",\n        username\n    )\n\n    return redirect(\n        url_for(\n            "login"\n        )\n    )\n'''
+
+          new_logout = '''    # Completely invalidate the Flask session.\n    session.clear()\n    session.modified = True\n    session.permanent = False\n\n    print(\n        "USER LOGOUT:",\n        username\n    )\n\n    response = redirect(\n        url_for(\n            "login"\n        )\n    )\n\n    # Explicitly expire the session cookie as an additional safeguard\n    # against a browser retaining an old authenticated cookie.\n    response.delete_cookie(\n        app.config.get(\n            "SESSION_COOKIE_NAME",\n            "session"\n        ),\n        path=app.config.get(\n            "SESSION_COOKIE_PATH",\n            "/"\n        ),\n        domain=app.config.get(\n            "SESSION_COOKIE_DOMAIN"\n        )\n    )\n\n    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"\n    response.headers["Pragma"] = "no-cache"\n    response.headers["Expires"] = "0"\n\n    return response\n'''
+
+          if old_logout not in text:
+              raise SystemExit('LOGOUT block not found')
+          text = text.replace(old_logout, new_logout, 1)
+
+          path.write_text(text, encoding='utf-8')
+          print('Authentication session handling patched successfully.')
+          PY
+
+      - name: Commit authentication fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git diff --cached --quiet && echo "No changes needed" && exit 0
+          git commit -m "Fix logout and failed login session reuse"
+          git push
+
+      - name: Remove one-time workflow
+        if: success()
+        run: |
+          rm -f .github/workflows/fix-login-logout-session.yml
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Remove one-time authentication fix workflow"
+          git push
