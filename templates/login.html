@@ -81,6 +81,18 @@
             company.focus();
         }
     });
+
+    // Authentication failures are redirected back to /login with
+    // auth_error. Show the popup and remove the query from the URL.
+    const params = new URLSearchParams(window.location.search);
+    const authError = params.get("auth_error");
+
+    if (authError) {
+        window.addEventListener("DOMContentLoaded", function () {
+            alert(authError);
+            window.history.replaceState({}, document.title, window.location.pathname);
+        });
+    }
 </script>
 </body>
 </html>
