@@ -1,12 +1,15 @@
 # =====================================================
 # SCADA_FLOW DASHBOARD OUTPUT NODE
 # ROLE-AWARE LIVE DASHBOARD OUTPUT
+# EDGE TIMEOUT CONFIGURATION
 # =====================================================
 
 from socket_manager import send_dashboard_data
 
 
 class DashboardOutput:
+
+    DEFAULT_TIMEOUT_SECONDS = 10
 
     def __init__(self, config):
 
@@ -16,6 +19,19 @@ class DashboardOutput:
             "widgets",
             []
         )
+
+        try:
+            self.timeout = float(
+                self.config.get(
+                    "timeout",
+                    self.DEFAULT_TIMEOUT_SECONDS
+                )
+            )
+        except (TypeError, ValueError):
+            self.timeout = float(self.DEFAULT_TIMEOUT_SECONDS)
+
+        if self.timeout < 0:
+            self.timeout = 0.0
 
     # =================================================
     # EXECUTE
@@ -50,7 +66,9 @@ class DashboardOutput:
 
             "Tags": {},
 
-            "Roles": engaged_roles
+            "Roles": engaged_roles,
+
+            "EdgeTimeout": self.timeout
 
         }
 
