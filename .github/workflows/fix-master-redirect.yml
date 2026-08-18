@@ -1,6 +1,9 @@
-name: Fix master login redirect
+name: Fix master login session and redirect
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -12,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fix master redirect
+      - name: Fix master login session and redirect
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -20,7 +23,24 @@ jobs:
           p = Path("app.py")
           s = p.read_text(encoding="utf-8")
 
-          old = '''                next_url = request.form.get(
+          # Master sessions must contain auth_login_time because is_logged_in()
+          # validates it for every authenticated request.
+          old_session = '''                session["company_id"] = None
+
+                session.permanent = True'''
+
+          new_session = '''                session["company_id"] = None
+                session["auth_login_time"] = time.time()
+
+                session.permanent = True'''
+
+          if old_session in s and 'session["auth_login_time"] = time.time()' not in s[s.index(old_session):s.index(old_session) + 250]:
+              s = s.replace(old_session, new_session, 1)
+          elif 'session["auth_login_time"] = time.time()' not in s:
+              raise SystemExit("Master session block was not found; no changes made.")
+
+          # Master users always go to the Master Panel after successful login.
+          old_redirect = '''                next_url = request.form.get(
                     "next"
                 )
 
@@ -39,18 +59,16 @@ jobs:
                     )
                 )'''
 
-          new = '''                # Master users always go to the Master Panel after login.
-                # Do not redirect a master user to a requested company page.
-                return redirect(
+          new_redirect = '''                return redirect(
                     url_for(
                         "master_companies"
                     )
                 )'''
 
-          if old not in s:
-              raise SystemExit("Expected master redirect block was not found; no changes made.")
+          if old_redirect in s:
+              s = s.replace(old_redirect, new_redirect, 1)
 
-          p.write_text(s.replace(old, new, 1), encoding="utf-8")
+          p.write_text(s, encoding="utf-8")
           PY
 
       - name: Commit and push fix
@@ -58,13 +76,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app.py
-          git commit -m "Redirect master users to master panel" || exit 0
+          git commit -m "Fix master session authentication and redirect" || exit 0
           git push
 
-      - name: Remove workflow
+      - name: Remove one-time workflow
         if: success()
         run: |
           rm -f .github/workflows/fix-master-redirect.yml
           git add .github/workflows/fix-master-redirect.yml
-          git commit -m "Remove one-time master redirect workflow" || exit 0
+          git commit -m "Remove one-time master login fix workflow" || exit 0
           git push
