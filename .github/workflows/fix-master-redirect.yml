@@ -1,0 +1,70 @@
+name: Fix master login redirect
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fix master redirect
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path("app.py")
+          s = p.read_text(encoding="utf-8")
+
+          old = '''                next_url = request.form.get(
+                    "next"
+                )
+
+                if (
+                    next_url
+                    and next_url.startswith("/")
+                ):
+
+                    return redirect(
+                        next_url
+                    )
+
+                return redirect(
+                    url_for(
+                        "master_companies"
+                    )
+                )'''
+
+          new = '''                # Master users always go to the Master Panel after login.
+                # Do not redirect a master user to a requested company page.
+                return redirect(
+                    url_for(
+                        "master_companies"
+                    )
+                )'''
+
+          if old not in s:
+              raise SystemExit("Expected master redirect block was not found; no changes made.")
+
+          p.write_text(s.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Commit and push fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git commit -m "Redirect master users to master panel" || exit 0
+          git push
+
+      - name: Remove workflow
+        if: success()
+        run: |
+          rm -f .github/workflows/fix-master-redirect.yml
+          git add .github/workflows/fix-master-redirect.yml
+          git commit -m "Remove one-time master redirect workflow" || exit 0
+          git push
