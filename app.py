@@ -90,6 +90,8 @@ trend_runtime_tags = []
 # =====================================================
 
 def is_logged_in():
+    """Validate that the current session belongs to a real enabled user."""
+
     user_id = session.get("user_id")
 
     print(
@@ -97,7 +99,78 @@ def is_logged_in():
         dict(session)
     )
 
-    return user_id is not None
+    if user_id is None:
+        return False
+
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT UserID, Username, CompanyID, Role, Enabled
+            FROM Users
+            WHERE UserID = ?
+            LIMIT 1
+            """,
+            (user_id,)
+        )
+
+        user = cursor.fetchone()
+
+        if not user or not user["Enabled"]:
+            session.clear()
+            session.modified = True
+            return False
+
+        if str(session.get("username", "")).strip() != str(user["Username"]).strip():
+            session.clear()
+            session.modified = True
+            return False
+
+        if str(session.get("role", "")).strip().lower() != str(user["Role"]).strip().lower():
+            session.clear()
+            session.modified = True
+            return False
+
+        session_company = session.get("company_id")
+        db_company = user["CompanyID"]
+
+        if session_company != db_company:
+            try:
+                if session_company is not None and int(session_company) == int(db_company):
+                    pass
+                else:
+                    session.clear()
+                    session.modified = True
+                    return False
+            except (TypeError, ValueError):
+                session.clear()
+                session.modified = True
+                return False
+
+        return True
+
+    except Exception as e:
+        print("SESSION VALIDATION ERROR:", e)
+        session.clear()
+        session.modified = True
+        return False
+
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def is_master():
