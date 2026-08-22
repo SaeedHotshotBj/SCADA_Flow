@@ -56,7 +56,7 @@ function jalaliNow(){return new persianDate().format('YYYY/MM/DD HH:mm')}
 function jalaliMinutesAgo(minutes){return new persianDate().subtract('minutes',minutes).format('YYYY/MM/DD HH:mm')}
 
 async function requestTrend(start,end){
-    const payload={tag:el('tag').value,start:start||null,end:end||null,calendar:'Jalali',TimezoneOffset:new Date().getTimezoneOffset()};
+    const payload={tag:el('tag').value,start:start||null,end:end||null,calendar:'Jalali'};
     const r=await fetch('/trend_request?_='+Date.now(),{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},credentials:'same-origin',cache:'no-store',body:JSON.stringify(payload)});
     const d=await r.json();
     if(!r.ok)throw Error(d.error||('HTTP '+r.status));
@@ -64,17 +64,25 @@ async function requestTrend(start,end){
 }
 
 function normalizePoints(ds){
-    return (ds?.data||[]).map(p=>({x:Number(p.x),y:Number(p.y)})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);
+    return (ds?.data||[]).map(p=>({x:Number(p.x),y:Number(p.y),label:p.label||''})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);
+}
+
+function nearestLabel(ms){
+    if(!chart||!chart.data.datasets.length)return '';
+    const points=chart.data.datasets[0].data||[];
+    if(!points.length)return '';
+    let best=points[0],distance=Math.abs(Number(best.x)-Number(ms));
+    for(const p of points){const d=Math.abs(Number(p.x)-Number(ms));if(d<distance){best=p;distance=d}}
+    return best.label||'';
 }
 
 function draw(d){
     const ds=(d.datasets||[]).find(x=>x.tag===el('tag').value)||(d.datasets||[])[0];
     const points=normalizePoints(ds);
     if(chart)chart.destroy();
-    chart=new Chart(el('trendChart'),{type:'line',data:{datasets:[{label:ds?.title||el('tag').value,data:points,borderWidth:3,tension:0,stepped:ds?.stepped||'after',pointRadius:2,pointHoverRadius:7,fill:false,borderColor:'#2563eb',backgroundColor:'#2563eb'}]},options:{responsive:true,maintainAspectRatio:false,animation:false,parsing:false,spanGaps:false,interaction:{mode:'nearest',intersect:false},scales:{x:{type:'linear',ticks:{maxTicksLimit:14,callback:v=>formatTime(v)},title:{display:true,text:'زمان'}},y:{beginAtZero:false,title:{display:true,text:ds?.title||el('tag').value}}},plugins:{legend:{position:'top'},tooltip:{rtl:true,callbacks:{title:items=>items.length?formatTime(items[0].parsed.x):'',label:item=>' '+item.parsed.y}},zoom:{pan:{enabled:true,mode:'x'},zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}}}}});
+    chart=new Chart(el('trendChart'),{type:'line',data:{datasets:[{label:ds?.title||el('tag').value,data:points,borderWidth:3,tension:0,stepped:ds?.stepped||'after',pointRadius:2,pointHoverRadius:7,fill:false,borderColor:'#2563eb',backgroundColor:'#2563eb'}]},options:{responsive:true,maintainAspectRatio:false,animation:false,parsing:false,spanGaps:false,interaction:{mode:'nearest',intersect:false},scales:{x:{type:'linear',ticks:{maxTicksLimit:14,callback:v=>nearestLabel(v)},title:{display:true,text:'زمان'}},y:{beginAtZero:false,title:{display:true,text:ds?.title||el('tag').value}}},plugins:{legend:{position:'top'},tooltip:{rtl:true,callbacks:{title:items=>items.length?(items[0].raw?.label||nearestLabel(items[0].parsed.x)):'',label:item=>' '+item.parsed.y}},zoom:{pan:{enabled:true,mode:'x'},zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}}}}});
     updateStats(points);
 }
-function formatTime(ms){try{return new persianDate(new Date(ms)).format('YYYY/MM/DD HH:mm:ss')}catch(e){return new Date(ms).toLocaleString()}}
 function updateStats(points){const v=points.map(p=>p.y);if(!v.length){el('current').textContent='-';el('min').textContent='-';el('max').textContent='-';el('avg').textContent='-';return}el('current').textContent=v[v.length-1];el('min').textContent=Math.min(...v);el('max').textContent=Math.max(...v);el('avg').textContent=(v.reduce((a,b)=>a+b,0)/v.length).toFixed(2)}
 
 async function loadGraph(){
