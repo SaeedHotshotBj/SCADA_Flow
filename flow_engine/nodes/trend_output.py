@@ -2,7 +2,7 @@
 # SCADA_FLOW TREND OUTPUT NODE
 # =====================================================
 
-from datetime import datetime, timezone
+from datetime import datetime
 import calendar
 import jdatetime
 
@@ -12,86 +12,81 @@ class TrendOutput:
     def __init__(self, config):
         self.config = config or {}
 
-    def convert_time(self, value):
-        """Return epoch milliseconds for a historian timestamp."""
-        try:
-            if value is None:
-                return None
+    def _parse_timestamp(self, value):
+        if value is None:
+            return None
 
-            if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
-                dt = value
-                if getattr(dt, "tzinfo", None) is not None:
-                    return int(dt.timestamp() * 1000)
-                return int(calendar.timegm(dt.timetuple()) * 1000 + getattr(dt, "microsecond", 0) // 1000)
+        if (
+            hasattr(value, "year")
+            and hasattr(value, "month")
+            and hasattr(value, "day")
+        ):
+            dt = value
+            if getattr(dt, "tzinfo", None) is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt
 
-            text = str(value).strip().replace("T", " ")
-            if text.endswith("Z"):
-                text = text[:-1]
+        text = str(value).strip().replace("T", " ")
+        if text.endswith("Z"):
+            text = text[:-1]
 
-            if "/" in text:
-                for fmt in (
-                    "%Y/%m/%d %H:%M:%S.%f",
-                    "%Y/%m/%d %H:%M:%S",
-                    "%Y/%m/%d %H:%M",
-                ):
-                    try:
-                        jalali = jdatetime.datetime.strptime(text, fmt)
-                        gregorian = jalali.togregorian()
-                        return int(calendar.timegm(gregorian.timetuple()) * 1000 + gregorian.microsecond // 1000)
-                    except Exception:
-                        pass
-
+        if "/" in text:
             for fmt in (
-                "%Y-%m-%d %H:%M:%S.%f",
-                "%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%d %H:%M",
+                "%Y/%m/%d %H:%M:%S.%f",
+                "%Y/%m/%d %H:%M:%S",
+                "%Y/%m/%d %H:%M",
             ):
                 try:
-                    dt = datetime.strptime(text, fmt)
-                    return int(calendar.timegm(dt.timetuple()) * 1000 + dt.microsecond // 1000)
+                    return jdatetime.datetime.strptime(
+                        text,
+                        fmt
+                    ).togregorian()
                 except Exception:
                     pass
 
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+        ):
+            try:
+                return datetime.strptime(text, fmt)
+            except Exception:
+                pass
+
+        try:
             dt = datetime.fromisoformat(text)
-            if dt.tzinfo is not None:
-                return int(dt.timestamp() * 1000)
-
-            return int(calendar.timegm(dt.timetuple()) * 1000 + dt.microsecond // 1000)
-
+            return dt.replace(tzinfo=None)
         except Exception:
             return None
 
+    def convert_time(self, value):
+        """Encode the historian wall-clock time without applying any timezone."""
+        dt = self._parse_timestamp(value)
+        if dt is None:
+            return None
+
+        return int(
+            calendar.timegm(
+                dt.timetuple()
+            ) * 1000
+            + dt.microsecond // 1000
+        )
+
     def jalali_label(self, value):
-        """Create an exact visible Jalali label from the historian timestamp."""
+        """Create the exact Jalali wall-clock label from the historian timestamp."""
         try:
-            if value is None:
-                return ""
+            dt = self._parse_timestamp(value)
+            if dt is None:
+                return str(value)
 
-            if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
-                dt = value
-            else:
-                text = str(value).strip().replace("T", " ")
-                if text.endswith("Z"):
-                    text = text[:-1]
-                dt = None
-                for fmt in (
-                    "%Y-%m-%d %H:%M:%S.%f",
-                    "%Y-%m-%d %H:%M:%S",
-                    "%Y-%m-%d %H:%M",
-                ):
-                    try:
-                        dt = datetime.strptime(text, fmt)
-                        break
-                    except Exception:
-                        pass
-                if dt is None:
-                    dt = datetime.fromisoformat(text)
+            jdt = jdatetime.datetime.fromgregorian(
+                datetime=dt
+            )
 
-            if getattr(dt, "tzinfo", None) is not None:
-                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-
-            jdt = jdatetime.datetime.fromgregorian(datetime=dt)
-            return jdt.strftime("%Y/%m/%d %H:%M:%S")
+            return jdt.strftime(
+                "%Y/%m/%d %H:%M:%S"
+            )
 
         except Exception:
             return str(value)
@@ -119,16 +114,17 @@ class TrendOutput:
         if "ReportRequest" in data:
             return data
 
-        trend_data = data.get("TrendData", [])
-        request = data.get("TrendRequest", {})
+        trend_data = data.get("TrendData", []) or []
+        request = data.get("TrendRequest", {}) or {}
         selected_tag = request.get("Tag")
 
         if not selected_tag:
-            tags = request.get("Tags", [])
+            tags = request.get("Tags", []) or []
             if len(tags) == 1:
                 selected_tag = tags[0]
 
         grouped = {}
+
         for item in trend_data:
             tag = item.get("Tag")
             if not tag:
@@ -138,16 +134,26 @@ class TrendOutput:
                 item.get("Timestamp"),
                 item.get("Value", 0)
             )
+
             if point is None:
                 continue
 
-            grouped.setdefault(tag, []).append(point)
+            grouped.setdefault(
+                tag,
+                []
+            ).append(point)
 
         output = []
 
         if selected_tag:
-            points = grouped.get(selected_tag, [])
-            points.sort(key=lambda p: p["x"])
+            points = grouped.get(
+                selected_tag,
+                []
+            )
+
+            points.sort(
+                key=lambda p: p["x"]
+            )
 
             output.append({
                 "tag": selected_tag,
@@ -155,9 +161,13 @@ class TrendOutput:
                 "data": points,
                 "stepped": "after",
             })
+
         else:
             for tag, tag_points in grouped.items():
-                tag_points.sort(key=lambda p: p["x"])
+                tag_points.sort(
+                    key=lambda p: p["x"]
+                )
+
                 output.append({
                     "tag": tag,
                     "title": tag,
@@ -165,5 +175,8 @@ class TrendOutput:
                     "stepped": "after",
                 })
 
-        data["ChartData"] = {"datasets": output}
+        data["ChartData"] = {
+            "datasets": output
+        }
+
         return data
