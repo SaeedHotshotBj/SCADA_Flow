@@ -6,6 +6,13 @@ from flow_engine.registry import get_node_class
 from flow_status import flow_status
 
 
+REALTIME_SKIP_NODE_TYPES = {
+    "TrendReader",
+    "TrendDatabaseReader",
+    "TrendOutput",
+}
+
+
 class FlowRunner:
 
     # =====================================================
@@ -68,16 +75,7 @@ class FlowRunner:
         flow = self.flow_data
 
         if not flow or "drawflow" not in flow:
-
-            print(
-                "Invalid flow format"
-            )
-
             return
-
-        print(
-            "Loading Drawflow format"
-        )
 
         home = (
             flow
@@ -105,33 +103,13 @@ class FlowRunner:
             )
 
             if not node_class:
-
-                print(
-                    "UNKNOWN NODE:",
-                    node_type
-                )
-
                 continue
 
             self.nodes[str(node_id)] = {
-
-                "instance":
-                    node_class(config),
-
-                "type":
-                    node_type,
-
-                "config":
-                    config
-
+                "instance": node_class(config),
+                "type": node_type,
+                "config": config
             }
-
-            print(
-                "Loaded Node:",
-                node_type,
-                "CompanyID:",
-                self.company_id
-            )
 
         # =================================================
         # CONNECT ROLE DEFINITIONS TO ROLES ENGAGED
@@ -174,16 +152,11 @@ class FlowRunner:
                     )
                 ).strip()
 
-                if not role_name:
-                    continue
+                if role_name:
+                    role_definitions.append(role)
 
-                role_definitions.append(
-                    role
-                )
-
-        # Remove duplicate roles
+        # Remove duplicate roles.
         unique_roles = []
-
         seen_roles = set()
 
         for role in role_definitions:
@@ -201,17 +174,9 @@ class FlowRunner:
                 continue
 
             seen_roles.add(key)
-
-            unique_roles.append(
-                role
-            )
+            unique_roles.append(role)
 
         role_definitions = unique_roles
-
-        print(
-            "FLOW ROLE DEFINITIONS:",
-            role_definitions
-        )
 
         # =================================================
         # APPLY ROLES TO ALL ROLES ENGAGED NODES
@@ -222,9 +187,7 @@ class FlowRunner:
             if node.get("name") != "RolesEngaged":
                 continue
 
-            engaged_id = str(
-                node_id
-            )
+            engaged_id = str(node_id)
 
             if engaged_id not in self.nodes:
                 continue
@@ -233,23 +196,13 @@ class FlowRunner:
                 engaged_id
             ]["config"]
 
-            engaged_config["roles"] = (
-                role_definitions
-            )
+            engaged_config["roles"] = role_definitions
 
             instance = self.nodes[
                 engaged_id
             ]["instance"]
 
-            instance.roles = (
-                role_definitions
-            )
-
-            print(
-                "ROLES CONNECTED:",
-                engaged_id,
-                role_definitions
-            )
+            instance.roles = role_definitions
 
         # =================================================
         # LOAD CONNECTIONS
@@ -257,9 +210,7 @@ class FlowRunner:
 
         for node_id, node in home.items():
 
-            self.connections[
-                str(node_id)
-            ] = []
+            self.connections[str(node_id)] = []
 
             outputs = node.get(
                 "outputs",
@@ -278,7 +229,6 @@ class FlowRunner:
                     )
 
                     if target is not None:
-
                         self.connections[
                             str(node_id)
                         ].append(
@@ -289,7 +239,7 @@ class FlowRunner:
     # START NODES
     # =====================================================
 
-    def get_start_nodes(self):
+    def get_start_nodes(self, realtime=False):
 
         ignored_types = {
             "Roles",
@@ -300,6 +250,10 @@ class FlowRunner:
             node_id
             for node_id, node in self.nodes.items()
             if node["type"] not in ignored_types
+            and not (
+                realtime
+                and node["type"] in REALTIME_SKIP_NODE_TYPES
+            )
         }
 
         targets = set()
@@ -316,15 +270,18 @@ class FlowRunner:
             if source_node["type"] in ignored_types:
                 continue
 
+            if (
+                realtime
+                and source_node["type"] in REALTIME_SKIP_NODE_TYPES
+            ):
+                continue
+
             for node in nodes:
 
                 if node in all_nodes:
+                    targets.add(node)
 
-                    targets.add(
-                        node
-                    )
-
-        return list(
+        return sorted(
             all_nodes - targets
         )
 
@@ -347,82 +304,66 @@ class FlowRunner:
         self,
         node_id,
         data,
-        visited=None
+        visited=None,
+        realtime=False
     ):
 
         if visited is None:
-
             visited = set()
 
-        node_id = str(
-            node_id
-        )
+        node_id = str(node_id)
 
         if node_id in visited:
-
             return data
 
-        visited.add(
-            node_id
-        )
+        visited.add(node_id)
 
         if node_id not in self.nodes:
-
             return data
 
-        node = self.nodes[
-            node_id
-        ]["instance"]
+        node_info = self.nodes[node_id]
+
+        if (
+            realtime
+            and node_info["type"] in REALTIME_SKIP_NODE_TYPES
+        ):
+            return data
+
+        node = node_info["instance"]
 
         try:
 
-            result = node.execute(
-                data
-            )
+            result = node.execute(data)
 
             if result is not None:
-
                 data = result
 
-            flow_status.node_ok(
-                node_id
-            )
+            flow_status.node_ok(node_id)
 
         except Exception as e:
-
-            print()
-
-            print(
-                "NODE ERROR:",
-                self.nodes[node_id]["type"]
-            )
-
-            print(
-                "CompanyID:",
-                self.company_id
-            )
-
-            print(
-                e
-            )
-
-            traceback.print_exc()
 
             flow_status.node_error(
                 node_id,
                 e
             )
 
-        children = self.next_nodes(
-            node_id
-        )
+        children = self.next_nodes(node_id)
 
         for child in children:
+
+            if (
+                realtime
+                and self.nodes.get(
+                    str(child), {}
+                ).get("type") in REALTIME_SKIP_NODE_TYPES
+            ):
+                continue
 
             data = self.execute_node(
                 child,
                 data,
-                visited.copy()
+                visited.copy(),
+                realtime=realtime
             )
 
         return data
@@ -433,29 +374,28 @@ class FlowRunner:
 
     def run(self):
 
-        print()
-
-        print(
-            "FLOW ENGINE RUNNING"
-        )
-
-        print(
-            "COMPANY ID:",
-            self.company_id
-        )
-
-        print()
-
         flow_status.start()
 
-        start_nodes = self.get_start_nodes()
-
-        print(
-            "START NODES:",
-            start_nodes
+        start_nodes = self.get_start_nodes(
+            realtime=True
         )
 
+        # A configurable scan interval prevents every company from
+        # being forced into a fixed 1-second database workload.
+        try:
+            scan_interval = max(
+                0.25,
+                float(
+                    self.flow_data
+                    .get("scan_interval", 1)
+                )
+            )
+        except (TypeError, ValueError):
+            scan_interval = 1.0
+
         while self.running:
+
+            scan_started = time.monotonic()
 
             try:
 
@@ -466,52 +406,41 @@ class FlowRunner:
                     self.execute_node(
                         node,
                         {},
-                        set()
+                        set(),
+                        realtime=True
                     )
 
             except Exception as e:
 
-                print(
-                    "FLOW ENGINE ERROR:",
+                flow_status.node_error(
+                    "__engine__",
                     e
                 )
 
-                traceback.print_exc()
+            elapsed = time.monotonic() - scan_started
+            remaining = scan_interval - elapsed
 
-            time.sleep(1)
+            if remaining > 0:
+                time.sleep(remaining)
+            else:
+                time.sleep(0.01)
 
     # =====================================================
     # TREND REQUEST ENGINE
     # =====================================================
 
-    def execute_request(
-        self,
-        request
-    ):
+    def execute_request(self, request):
 
-        print()
-
-        print(
-            "TREND REQUEST:",
-            request
+        start_nodes = self.get_start_nodes(
+            realtime=False
         )
 
-        print(
-            "COMPANY ID:",
-            self.company_id
-        )
-
-        print()
-
-        start_nodes = self.get_start_nodes()
         fallback_result = None
         requested_tag = (
             request.get("TrendRequest", {})
             .get("Tag")
         )
 
-        # Each start node is an independent branch. Do not let a later
-        # branch (for example ReportOutput) overwrite TrendOutput data.
         for node in start_nodes:
 
             branch_request = copy.deepcopy(request)
@@ -519,12 +448,15 @@ class FlowRunner:
             result = self.execute_node(
                 node,
                 branch_request,
-                set()
+                set(),
+                realtime=False
             )
 
-            chart_data = result.get(
-                "ChartData"
-            ) if isinstance(result, dict) else None
+            chart_data = (
+                result.get("ChartData")
+                if isinstance(result, dict)
+                else None
+            )
 
             if not isinstance(chart_data, dict):
                 continue
@@ -540,7 +472,6 @@ class FlowRunner:
             if fallback_result is None:
                 fallback_result = result
 
-            # Prefer the ChartData produced for the requested Trend tag.
             for dataset in datasets:
 
                 if not isinstance(dataset, dict):
@@ -558,18 +489,9 @@ class FlowRunner:
                     str(dataset_tag).strip().lower()
                     == str(requested_tag).strip().lower()
                 ):
-                    print(
-                        "TREND OUTPUT SELECTED:",
-                        dataset_tag,
-                        "POINTS:",
-                        len(dataset.get("data", []))
-                    )
                     return result
 
         if fallback_result is not None:
-            print(
-                "TREND FALLBACK CHART DATA SELECTED"
-            )
             return fallback_result
 
         return request
@@ -581,7 +503,6 @@ class FlowRunner:
     def stop(self):
 
         self.running = False
-
         flow_status.stop()
 
     # =====================================================
@@ -599,21 +520,12 @@ class FlowRunner:
 
             instance = node["instance"]
 
-            if hasattr(
-                instance,
-                "get_roles"
-            ):
+            if hasattr(instance, "get_roles"):
 
                 node_roles = instance.get_roles()
 
-                if isinstance(
-                    node_roles,
-                    list
-                ):
-
-                    roles.extend(
-                        node_roles
-                    )
+                if isinstance(node_roles, list):
+                    roles.extend(node_roles)
 
         return roles
 
@@ -640,10 +552,7 @@ class FlowRunner:
 
             roles = instance.get_allowed_roles()
 
-            if not isinstance(
-                roles,
-                list
-            ):
+            if not isinstance(roles, list):
                 roles = []
 
             roles = [
@@ -652,30 +561,20 @@ class FlowRunner:
                 if str(role).strip()
             ]
 
-            # ---------------------------------------------
-            # RolesEngaged -> target page
-            # ---------------------------------------------
-
             for target in self.connections.get(
                 str(node_id),
                 []
             ):
 
-                target = str(
-                    target
-                )
+                target = str(target)
 
                 if target not in access:
-
                     access[target] = []
 
                 for role in roles:
 
                     if role not in access[target]:
-
-                        access[target].append(
-                            role
-                        )
+                        access[target].append(role)
 
         return access
 
@@ -691,14 +590,9 @@ class FlowRunner:
 
         access = self.get_page_access()
 
-        node_id = str(
-            node_id
-        )
+        node_id = str(node_id)
 
-        # Page has no RolesEngaged.
-        # Keep existing behavior.
         if node_id not in access:
-
             return True
 
         return (
