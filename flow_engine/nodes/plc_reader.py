@@ -19,6 +19,7 @@ from database import get_connection
 
 
 ZERO_DEBOUNCE_SECONDS = 2.0
+MAPPING_CACHE_SECONDS = 30.0
 
 
 class PLCReader:
@@ -27,6 +28,9 @@ class PLCReader:
         self.config = config or {}
         self._watchdog_zero_memory = set()
         self._zero_memory = {}
+        self._mapping_cache = None
+        self._mapping_cache_time = 0.0
+        self._mapping_cache_company_id = None
 
     # ========================================================
     # CONFIG
@@ -39,7 +43,6 @@ class PLCReader:
         return value
 
     def _edge_timeout(self):
-        """Maximum age of Edge data considered live, in seconds."""
         value = os.environ.get("SCADA_EDGE_TIMEOUT", "2")
         try:
             return max(0.1, float(value))
@@ -50,13 +53,23 @@ class PLCReader:
     # DRAWFLOW TAG MAPPINGS
     # ========================================================
 
-    def _get_edge_mappings(self):
+    def _get_edge_mappings(self, force=False):
         company_id = self._get_config("company_id")
 
         try:
             company_id = int(company_id)
         except (TypeError, ValueError):
             return []
+
+        now = time.monotonic()
+
+        if (
+            not force
+            and self._mapping_cache is not None
+            and self._mapping_cache_company_id == company_id
+            and now - self._mapping_cache_time < MAPPING_CACHE_SECONDS
+        ):
+            return self._mapping_cache
 
         conn = None
         cursor = None
@@ -78,7 +91,7 @@ class PLCReader:
 
             row = cursor.fetchone()
             if not row:
-                return []
+                return self._mapping_cache or []
 
             flow_json = row[0]
             if isinstance(flow_json, str):
@@ -129,17 +142,23 @@ class PLCReader:
             seen = set()
 
             for mapping in mappings:
-                key = (mapping["register"], mapping["name"])
+                key = (
+                    mapping["register"],
+                    mapping["name"]
+                )
                 if key in seen:
                     continue
                 seen.add(key)
                 result.append(mapping)
 
+            self._mapping_cache = result
+            self._mapping_cache_time = now
+            self._mapping_cache_company_id = company_id
+
             return result
 
-        except Exception as exc:
-            print("EDGE MAPPING LOAD ERROR:", exc)
-            return []
+        except Exception:
+            return self._mapping_cache or []
 
         finally:
             if cursor is not None:
@@ -159,11 +178,13 @@ class PLCReader:
     # ========================================================
 
     def _write_watchdog_zero(self, company_id, tag_name):
-        """Disabled: stale Edge data must never overwrite a live value with zero."""
         return False
 
     def _clear_watchdog_zero(self, company_id, tag_name):
-        key = (int(company_id), str(tag_name).strip().lower())
+        key = (
+            int(company_id),
+            str(tag_name).strip().lower()
+        )
         self._watchdog_zero_memory.discard(key)
 
     # ========================================================
@@ -177,16 +198,16 @@ class PLCReader:
             return False
 
     def _zero_key(self, company_id, tag_name):
-        return (int(company_id), str(tag_name).strip().lower())
+        return (
+            int(company_id),
+            str(tag_name).strip().lower()
+        )
 
     def _handle_zero(self, company_id, tag_name, value):
-        """
-        Return the action for an observed zero.
-
-        True  -> accept zero.
-        False -> ignore zero temporarily and keep previous value.
-        """
-        key = self._zero_key(company_id, tag_name)
+        key = self._zero_key(
+            company_id,
+            tag_name
+        )
         now = time.monotonic()
 
         if not self._is_zero(value):
@@ -197,27 +218,12 @@ class PLCReader:
 
         if first_zero is None:
             self._zero_memory[key] = now
-            print(
-                "PLC READER ZERO DEBOUNCE START:",
-                tag_name,
-                "WAIT:",
-                ZERO_DEBOUNCE_SECONDS,
-                "seconds"
-            )
             return False
 
         if now - first_zero < ZERO_DEBOUNCE_SECONDS:
-            print(
-                "PLC READER ZERO IGNORED:",
-                tag_name,
-                "AGE:",
-                round(now - first_zero, 2),
-                "seconds"
-            )
             return False
 
         self._zero_memory.pop(key, None)
-        print("PLC READER ZERO ACCEPTED:", tag_name)
         return True
 
     # ========================================================
@@ -225,14 +231,6 @@ class PLCReader:
     # ========================================================
 
     def _read_edge_registers(self, register, count):
-        """
-        Read the latest Edge values.
-
-        A zero is treated as a transient communication glitch for the
-        first 2 seconds. During that period the previous non-zero value
-        is returned. If zero remains continuously for 2 seconds, zero is
-        accepted as the real PLC value.
-        """
         company_id = self._get_config("company_id")
 
         try:
@@ -243,6 +241,7 @@ class PLCReader:
             return {}
 
         mappings = self._get_edge_mappings()
+
         mappings = [
             mapping
             for mapping in mappings
@@ -252,6 +251,11 @@ class PLCReader:
         if not mappings:
             return {}
 
+        tag_names = [
+            mapping["name"]
+            for mapping in mappings
+        ]
+
         conn = None
         cursor = None
 
@@ -259,27 +263,46 @@ class PLCReader:
             conn = get_connection()
             cursor = conn.cursor()
 
-            registers = {}
             timeout = self._edge_timeout()
             now = time.time()
+
+            # -------------------------------------------------
+            # ONE QUERY FOR ALL TAGS
+            # -------------------------------------------------
+            placeholders = ",".join(
+                "?" for _ in tag_names
+            )
+
+            cursor.execute(
+                f"""
+                SELECT TagName, Value, Timestamp
+                FROM TagHistory AS H
+                WHERE H.CompanyID = ?
+                  AND H.TagName IN ({placeholders})
+                  AND H.ID = (
+                      SELECT H2.ID
+                      FROM TagHistory AS H2
+                      WHERE H2.CompanyID = H.CompanyID
+                        AND H2.TagName = H.TagName
+                      ORDER BY H2.Timestamp DESC, H2.ID DESC
+                      LIMIT 1
+                  )
+                """,
+                [company_id] + tag_names
+            )
+
+            latest_rows = {
+                row["TagName"]: row
+                for row in cursor.fetchall()
+            }
+
+            registers = {}
 
             for mapping in mappings:
                 tag_name = mapping["name"]
                 register_address = mapping["register"]
 
-                cursor.execute(
-                    """
-                    SELECT Value, Timestamp
-                    FROM TagHistory
-                    WHERE CompanyID = ?
-                      AND TagName = ?
-                    ORDER BY Timestamp DESC, ID DESC
-                    LIMIT 1
-                    """,
-                    (company_id, tag_name)
-                )
-
-                row = cursor.fetchone()
+                row = latest_rows.get(tag_name)
 
                 if not row:
                     continue
@@ -288,20 +311,33 @@ class PLCReader:
                 timestamp = row["Timestamp"]
 
                 try:
-                    timestamp_text = str(timestamp).replace("T", " ").strip()
+                    timestamp_text = (
+                        str(timestamp)
+                        .replace("T", " ")
+                        .strip()
+                    )
+
                     if timestamp_text.endswith("Z"):
                         timestamp_text = timestamp_text[:-1]
 
-                    edge_time = datetime.fromisoformat(timestamp_text).timestamp()
+                    edge_time = datetime.fromisoformat(
+                        timestamp_text
+                    ).timestamp()
+
                     age = now - edge_time
+
                 except Exception:
                     age = timeout + 1
 
-                # -------------------------------------------------
-                # TEMPORARY ZERO
-                # -------------------------------------------------
                 if self._is_zero(value):
-                    if not self._handle_zero(company_id, tag_name, value):
+
+                    if not self._handle_zero(
+                        company_id,
+                        tag_name,
+                        value
+                    ):
+
+                        # Fetch latest known non-zero value for this tag.
                         cursor.execute(
                             """
                             SELECT Value
@@ -313,7 +349,10 @@ class PLCReader:
                             ORDER BY Timestamp DESC, ID DESC
                             LIMIT 1
                             """,
-                            (company_id, tag_name)
+                            (
+                                company_id,
+                                tag_name
+                            )
                         )
 
                         previous_row = cursor.fetchone()
@@ -321,35 +360,32 @@ class PLCReader:
                         if previous_row:
                             value = previous_row["Value"]
                         else:
-                            # No previous real value exists, so do not
-                            # manufacture a dashboard value.
                             continue
 
                 else:
                     self._zero_memory.pop(
-                        self._zero_key(company_id, tag_name),
+                        self._zero_key(
+                            company_id,
+                            tag_name
+                        ),
                         None
                     )
 
                 registers[str(register_address)] = value
 
-                if age <= timeout and value not in (None, 0, 0.0):
-                    self._clear_watchdog_zero(company_id, tag_name)
-
-                if age > timeout:
-                    print(
-                        "PLC READER: EDGE DATA STALE - KEEPING LAST VALUE:",
-                        tag_name,
-                        "AGE:",
-                        round(age, 2),
-                        "VALUE:",
-                        value
+                if age <= timeout and value not in (
+                    None,
+                    0,
+                    0.0
+                ):
+                    self._clear_watchdog_zero(
+                        company_id,
+                        tag_name
                     )
 
             return registers
 
-        except Exception as exc:
-            print("EDGE HISTORIAN READ ERROR:", exc)
+        except Exception:
             return {}
 
         finally:
@@ -369,7 +405,14 @@ class PLCReader:
     # DIRECT MODBUS
     # ========================================================
 
-    def _read_direct_modbus(self, ip, port, slave, register, count):
+    def _read_direct_modbus(
+        self,
+        ip,
+        port,
+        slave,
+        register,
+        count
+    ):
         raw_registers = read_registers(
             ip=ip,
             port=port,
@@ -383,14 +426,6 @@ class PLCReader:
         for index, value in enumerate(raw_registers):
             address = register + index
             registers[str(address)] = value
-
-        print()
-        print("PLC READER: DIRECT MODBUS")
-        print(f"PLC: {ip}:{port}")
-        print(f"Slave: {slave}")
-        print(f"Start Register: {register}")
-        print(f"Count: {len(raw_registers)}")
-        print()
 
         return registers
 
@@ -417,7 +452,8 @@ class PLCReader:
         }
 
         missing = [
-            name for name, value in required.items()
+            name
+            for name, value in required.items()
             if value is None or value == ""
         ]
 
@@ -438,38 +474,46 @@ class PLCReader:
             ) from exc
 
         if port <= 0:
-            raise ValueError("PLC port must be greater than zero.")
-        if slave < 0:
-            raise ValueError("PLC slave ID cannot be negative.")
-        if register < 0:
-            raise ValueError("PLC start register cannot be negative.")
-        if count <= 0:
-            raise ValueError("PLC register count must be greater than zero.")
-
-        registers = self._read_edge_registers(register, count)
-
-        if registers:
-            print()
-            print("PLC READER: EDGE DATA")
-            print(f"Company: {self._get_config('company_id')}")
-            print(f"Registers Available: {len(registers)}")
-            print(f"EDGE TIMEOUT: {self._edge_timeout()} seconds")
-            print(f"ZERO DEBOUNCE: {ZERO_DEBOUNCE_SECONDS} seconds")
-            print()
-
-        elif os.environ.get(
-            "SCADA_DIRECT_MODBUS", "0"
-        ).strip().lower() in {"1", "true", "yes", "on"}:
-            registers = self._read_direct_modbus(
-                ip, port, slave, register, count
+            raise ValueError(
+                "PLC port must be greater than zero."
             )
 
-        else:
-            print()
-            print("PLC READER: WAITING FOR EDGE DATA")
-            print(f"Company: {self._get_config('company_id')}")
-            print(f"Register Range: {register}-{register + count - 1}")
-            print()
+        if slave < 0:
+            raise ValueError(
+                "PLC slave ID cannot be negative."
+            )
+
+        if register < 0:
+            raise ValueError(
+                "PLC start register cannot be negative."
+            )
+
+        if count <= 0:
+            raise ValueError(
+                "PLC register count must be greater than zero."
+            )
+
+        registers = self._read_edge_registers(
+            register,
+            count
+        )
+
+        if not registers and os.environ.get(
+            "SCADA_DIRECT_MODBUS",
+            "0"
+        ).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on"
+        }:
+            registers = self._read_direct_modbus(
+                ip,
+                port,
+                slave,
+                register,
+                count
+            )
 
         result = dict(data)
 
