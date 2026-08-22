@@ -172,8 +172,6 @@ def master_database():
             cursor.execute(f'SELECT COUNT(*) AS row_count FROM "{safe_table}"')
             total_rows = int(cursor.fetchone()["row_count"])
 
-            # Database Viewer must show newest records first.
-            # Timestamp is preferred; ID is used as a deterministic tie-breaker.
             cursor.execute(f'PRAGMA table_info("{safe_table}")')
             table_info = cursor.fetchall()
             column_names = [row["name"] for row in table_info]
@@ -214,18 +212,130 @@ def master_database():
 
                     rows.append(display_row)
 
+        protected_tables = {
+            "Companies",
+            "Users",
+            "PLCs",
+            "Tags",
+            "Flows",
+            "AuthSessionRevocations",
+        }
+
+        table_info_for_ui = [
+            {
+                "name": table,
+                "protected": table in protected_tables,
+            }
+            for table in tables
+        ]
+
         return render_template(
             "database_viewer.html",
             tables=tables,
+            table_info=table_info_for_ui,
             selected_table=selected_table,
             columns=columns,
             rows=rows,
             total_rows=total_rows,
             limit=limit,
             offset=offset,
+            selected_table_protected=selected_table in protected_tables,
         )
 
     except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# =====================================================
+# MASTER DATABASE TABLE CLEAR
+# =====================================================
+
+@flow_company_bp.post("/master/database/clear")
+def master_database_clear():
+    """Delete all rows from a selected non-system data table.
+
+    The schema is preserved. Critical configuration/authentication tables
+    are intentionally protected because clearing them would make the
+    application unable to authenticate or load company flows.
+    """
+    if not _is_master():
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    selected_table = str(payload.get("table", "")).strip()
+
+    if not selected_table:
+        return jsonify({"status": "error", "message": "Table is required"}), 400
+
+    conn = None
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name NOT LIKE 'sqlite_%'
+        """)
+
+        tables = {row["name"] for row in cursor.fetchall()}
+
+        if selected_table not in tables:
+            return jsonify({"status": "error", "message": "Invalid table"}), 400
+
+        protected_tables = {
+            "Companies",
+            "Users",
+            "PLCs",
+            "Tags",
+            "Flows",
+            "AuthSessionRevocations",
+        }
+
+        if selected_table in protected_tables:
+            return jsonify({
+                "status": "error",
+                "message": "This table is protected and cannot be cleared from the Database Viewer."
+            }), 403
+
+        safe_table = selected_table.replace('"', '""')
+
+        cursor.execute(
+            f'SELECT COUNT(*) AS row_count FROM "{safe_table}"'
+        )
+        before = int(cursor.fetchone()["row_count"])
+
+        cursor.execute(
+            f'DELETE FROM "{safe_table}"'
+        )
+
+        deleted = int(cursor.rowcount)
+        conn.commit()
+
+        return jsonify({
+            "status": "ok",
+            "table": selected_table,
+            "before": before,
+            "deleted": deleted,
+            "remaining": 0,
+            "message": f"{deleted} rows cleared from {selected_table}."
+        })
+
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         return jsonify({"status": "error", "message": str(e)}), 500
 
     finally:
