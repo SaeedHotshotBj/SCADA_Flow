@@ -3,7 +3,6 @@
 # =====================================================
 
 from datetime import datetime
-import calendar
 import jdatetime
 
 
@@ -61,17 +60,28 @@ class TrendOutput:
             return None
 
     def convert_time(self, value):
-        """Encode the historian wall-clock time without applying any timezone."""
+        """
+        Convert a historian timestamp to a timezone-independent numeric
+        wall-clock coordinate.
+
+        IMPORTANT:
+        This is NOT Unix time and must never be passed through Date() on the
+        browser. It preserves the exact stored local date/time, including
+        hour, minute, second and millisecond, without applying UTC offsets.
+        """
         dt = self._parse_timestamp(value)
         if dt is None:
             return None
 
-        return int(
-            calendar.timegm(
-                dt.timetuple()
-            ) * 1000
-            + dt.microsecond // 1000
+        day_ms = dt.toordinal() * 86_400_000
+        time_ms = (
+            dt.hour * 3_600_000
+            + dt.minute * 60_000
+            + dt.second * 1_000
+            + dt.microsecond // 1_000
         )
+
+        return day_ms + time_ms
 
     def jalali_label(self, value):
         """Create the exact Jalali wall-clock label from the historian timestamp."""
