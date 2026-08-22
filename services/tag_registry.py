@@ -5,22 +5,57 @@
 # tag definitions coming from the Flow Designer.
 # =====================================================
 
+import json
+import hashlib
+
 from database import get_connection
 
 
 class TagRegistry:
+
+    _signature_cache = {}
+
+    @staticmethod
+    def _signature(definitions):
+        try:
+            payload = json.dumps(
+                definitions,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False
+            )
+        except (TypeError, ValueError):
+            payload = repr(definitions)
+
+        return hashlib.sha1(
+            payload.encode("utf-8")
+        ).hexdigest()
 
     @staticmethod
     def sync(company_id, definitions):
         """
         Register/update tags defined by TagMapper.
 
-        TagMapper is the source of truth for runtime tag
-        definitions. This does not insert historian values;
-        SQLWriter/HistorianService still controls storage.
+        The database is synchronized only when the definitions actually
+        change. This avoids repeated SELECT/UPDATE/COMMIT work on every
+        realtime Flow scan while keeping the Flow Designer as source of truth.
         """
 
         if company_id is None or not definitions:
+            return 0
+
+        try:
+            company_id = int(company_id)
+        except (TypeError, ValueError):
+            return 0
+
+        signature = TagRegistry._signature(
+            definitions
+        )
+
+        cache_key = company_id
+
+        if TagRegistry._signature_cache.get(cache_key) == signature:
             return 0
 
         conn = get_connection()
@@ -102,6 +137,7 @@ class TagRegistry:
                 changed += 1
 
             conn.commit()
+            TagRegistry._signature_cache[cache_key] = signature
 
         finally:
             cursor.close()
