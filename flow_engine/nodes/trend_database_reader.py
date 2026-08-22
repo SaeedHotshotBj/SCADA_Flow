@@ -2,7 +2,7 @@
 # SCADA_FLOW TREND DATABASE READER NODE
 # =====================================================
 
-from datetime import datetime, timedelta
+from datetime import datetime
 import jdatetime
 
 from database import get_trend_data, row_value
@@ -15,84 +15,60 @@ class TrendDatabaseReader:
         self.company_id = self.config.get("company_id")
 
     def normalize_date(self, value, calendar, timezone_offset=None):
+        """
+        Convert the user's date/time to the same naive wall-clock time used
+        by the historian database.
+
+        IMPORTANT:
+        The historian stores timestamps without timezone information, so the
+        browser timezone offset must NOT be added or subtracted here.
+        """
         if not value:
             return None
 
         try:
             if calendar == "Jalali":
-                value = str(value).replace("-", "/")
-                jalali = jdatetime.datetime.strptime(value, "%Y/%m/%d %H:%M")
-                result = jalali.togregorian()
-            else:
-                value = str(value).replace("T", " ")
-                result = datetime.strptime(value, "%Y-%m-%d %H:%M")
+                text = str(value).strip().replace("-", "/").replace("T", " ")
+                jalali = jdatetime.datetime.strptime(
+                    text,
+                    "%Y/%m/%d %H:%M"
+                )
+                return jalali.togregorian()
 
-            # Browser date/time is local time. Historian timestamps are stored
-            # in the server clock. Use the browser offset when supplied.
-            if timezone_offset is not None:
-                result += timedelta(minutes=float(timezone_offset))
+            text = str(value).strip().replace("T", " ")
+            return datetime.strptime(
+                text,
+                "%Y-%m-%d %H:%M"
+            )
 
-            return result
-
-        except Exception as e:
-            print("DATE NORMALIZE ERROR:", e)
+        except Exception:
             return None
 
     def execute(self, data=None):
         if data is None:
             data = {}
 
-        request = data.get("TrendRequest", {})
+        request = data.get("TrendRequest", {}) or {}
 
         selected_tag = request.get("Tag")
-        tags = request.get("Tags", [])
+        tags = request.get("Tags", []) or []
 
         if selected_tag:
             tags = [selected_tag]
         elif len(tags) == 1:
             selected_tag = tags[0]
 
+        # Kept only for compatibility with older callers.
+        # It is intentionally NOT used for timestamp arithmetic.
         timezone_offset = request.get("TimezoneOffset")
         try:
-            timezone_offset = float(timezone_offset) if timezone_offset is not None else None
+            timezone_offset = (
+                float(timezone_offset)
+                if timezone_offset is not None
+                else None
+            )
         except (TypeError, ValueError):
             timezone_offset = None
-
-        # Some SCADA_FLOW app versions do not forward the browser timezone
-        # offset. Infer it from the requested local end time when that time is
-        # close to the server's current time. This keeps recent trend data
-        # aligned with the browser without hardcoding a timezone.
-        if timezone_offset is None and request.get("End"):
-            try:
-                end_value = str(request.get("End"))
-
-                if request.get("Calendar", "Gregorian") == "Jalali":
-                    end_value = end_value.replace("-", "/")
-                    local_end = jdatetime.datetime.strptime(
-                        end_value,
-                        "%Y/%m/%d %H:%M"
-                    ).togregorian()
-                else:
-                    end_value = end_value.replace("T", " ")
-                    local_end = datetime.strptime(
-                        end_value,
-                        "%Y-%m-%d %H:%M"
-                    )
-
-                difference_minutes = (
-                    local_end - datetime.now()
-                ).total_seconds() / 60.0
-
-                # Only infer a normal timezone difference.
-                if abs(difference_minutes) <= 16 * 60:
-                    timezone_offset = -difference_minutes
-                    print(
-                        "TREND TIMEZONE OFFSET INFERRED:",
-                        timezone_offset
-                    )
-
-            except Exception as e:
-                print("TREND TIMEZONE INFERENCE ERROR:", e)
 
         start = self.normalize_date(
             request.get("Start"),
@@ -114,19 +90,10 @@ class TrendDatabaseReader:
         try:
             company_id = int(company_id)
         except (TypeError, ValueError):
-            print("TREND DATABASE ERROR: invalid CompanyID")
             data["TrendData"] = []
             return data
 
         trend = []
-
-        print("TREND DATABASE READER")
-        print("Company:", company_id)
-        print("Selected:", selected_tag)
-        print("Tags:", tags)
-        print("Start:", start)
-        print("End:", end)
-        print("Timezone Offset:", timezone_offset)
 
         for tag in tags:
             if not tag:
@@ -139,7 +106,6 @@ class TrendDatabaseReader:
                     start,
                     end
                 )
-                print(tag, "->", len(rows), "rows")
 
                 for row in rows:
                     trend.append({
@@ -148,39 +114,29 @@ class TrendDatabaseReader:
                         "Value": row_value(row, "Value", 1)
                     })
 
-            except Exception as e:
-                print("TREND DATABASE ERROR:", e)
+            except Exception:
+                continue
 
-        # -------------------------------------------------
-        # NEWEST DATA FIRST
-        # -------------------------------------------------
-        # Keep the database-reader output deterministic and make the newest
-        # historian record the first item. This is especially useful for the
-        # trend engine when inspecting recent data and for multiple tags.
         def _trend_timestamp(item):
             value = item.get("Timestamp")
 
             if value is None:
                 return datetime.min
 
-            try:
-                if hasattr(value, "timestamp"):
-                    return value
+            if hasattr(value, "timestamp"):
+                return value
 
-                text = str(value).replace("T", " ")
+            text = str(value).replace("T", " ")
 
-                for fmt in (
-                    "%Y-%m-%d %H:%M:%S.%f",
-                    "%Y-%m-%d %H:%M:%S",
-                    "%Y-%m-%d %H:%M"
-                ):
-                    try:
-                        return datetime.strptime(text, fmt)
-                    except ValueError:
-                        pass
-
-            except Exception:
-                pass
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M"
+            ):
+                try:
+                    return datetime.strptime(text, fmt)
+                except ValueError:
+                    pass
 
             return datetime.min
 
@@ -189,18 +145,6 @@ class TrendDatabaseReader:
             reverse=True
         )
 
-        if trend:
-            print(
-                "NEWEST TREND POINT:",
-                trend[0].get("Timestamp"),
-                trend[0].get("Value")
-            )
-            print(
-                "OLDEST TREND POINT:",
-                trend[-1].get("Timestamp"),
-                trend[-1].get("Value")
-            )
-
         data["TrendRequest"] = {
             "Tag": selected_tag,
             "Tags": tags,
@@ -208,9 +152,8 @@ class TrendDatabaseReader:
             "End": end,
             "Calendar": request.get("Calendar", "Gregorian"),
             "CompanyID": company_id,
-            "TimezoneOffset": timezone_offset
+            "TimezoneOffset": None
         }
         data["TrendData"] = trend
 
-        print("TOTAL TREND POINTS:", len(trend))
         return data
