@@ -17,6 +17,7 @@ MINUTE_RETENTION_HOURS = int(os.environ.get("SCADA_TREND_MINUTE_RETENTION_HOURS"
 HOUR_RETENTION_DAYS = int(os.environ.get("SCADA_TREND_HOUR_RETENTION_DAYS", "2"))
 DAY_RETENTION_DAYS = int(os.environ.get("SCADA_TREND_DAY_RETENTION_DAYS", "3650"))
 WORKER_INTERVAL_SECONDS = 30
+LEASE_SECONDS = max(WORKER_INTERVAL_SECONDS * 2, 90)
 _ALLOWED_STORAGE = ("EDGE", "TIME")
 _worker_started = False
 _worker_lock = threading.Lock()
@@ -128,8 +129,45 @@ def _ensure_tables():
         ON TrendDay(CompanyID, TagName, PeriodStart);
         CREATE INDEX IF NOT EXISTS idx_trend_day_company_tag_time
         ON TrendDay(CompanyID, TagName, PeriodStart);
+
+        CREATE TABLE IF NOT EXISTS TrendAggregationLock (
+            LockID INTEGER PRIMARY KEY CHECK (LockID = 1),
+            LeaseUntil REAL NOT NULL
+        );
         """)
         conn.commit()
+    finally:
+        conn.close()
+
+
+def _try_acquire_lease():
+    now = time.time()
+    lease_until = now + LEASE_SECONDS
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT LeaseUntil FROM TrendAggregationLock WHERE LockID = 1"
+        ).fetchone()
+        if row is not None and float(row["LeaseUntil"]) > now:
+            conn.rollback()
+            return False
+        conn.execute(
+            """
+            INSERT INTO TrendAggregationLock(LockID, LeaseUntil)
+            VALUES (1, ?)
+            ON CONFLICT(LockID) DO UPDATE SET LeaseUntil = excluded.LeaseUntil
+            """,
+            (lease_until,),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
     finally:
         conn.close()
 
@@ -264,7 +302,6 @@ def _aggregate_children(conn, source, target, start, end):
             "duration": total_duration,
             "count": sum(int(row["SampleCount"] or 0) for row in group),
         }
-
         _write_aggregate(conn, target, company_id, tag, start, end, stats)
         written += 1
 
@@ -273,6 +310,9 @@ def _aggregate_children(conn, source, target, start, end):
 
 def aggregate_once():
     _ensure_tables()
+    if not _try_acquire_lease():
+        return
+
     conn = _connect()
     try:
         now = datetime.now().replace(microsecond=0)
