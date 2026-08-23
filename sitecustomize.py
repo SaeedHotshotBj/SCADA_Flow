@@ -18,14 +18,20 @@ builtins.print = _quiet_print
 
 def _is_scada_server_process():
     executable = os.path.basename(sys.argv[0] or "").lower()
-    args = " ".join(sys.argv[1:]).lower()
+    args = [os.path.basename(str(item)).lower() for item in sys.argv[1:]]
 
     if executable == "app.py":
         return True
+
+    if "app.py" in args:
+        return True
+
     if "gunicorn" in executable:
         return True
+
     if executable in {"flask", "flask.exe"} and "run" in args:
         return True
+
     return False
 
 
@@ -33,5 +39,6 @@ if _is_scada_server_process():
     try:
         from services.trend_aggregation import start_aggregation_worker
         start_aggregation_worker()
+        _original_print("TREND AGGREGATION WORKER STARTED")
     except Exception as exc:
         _original_print("TREND AGGREGATION START ERROR:", exc)
