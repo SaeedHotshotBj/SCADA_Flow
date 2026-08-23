@@ -8,18 +8,13 @@ import paramiko
 
 SERVER_IP = "77.104.95.230"
 USERNAME = "root"
-PASSWORD = os.environ.get("SCADA_SSH_PASSWORD", "").strip()
+PASSWORD = "I4Ql50K7KKIkZnhG"
 
 REMOTE_PATH = "/var/www/scada"
 
 LOCAL_PATH = os.path.dirname(
     os.path.abspath(__file__)
 )
-
-if not PASSWORD:
-    raise RuntimeError(
-        "SCADA_SSH_PASSWORD environment variable is not set."
-    )
 
 
 # ============================================================
@@ -50,7 +45,6 @@ print("Connected")
 # ============================================================
 # CREATE REMOTE DIRECTORY
 # ============================================================
-
 def mkdir_recursive(path):
 
     folders = path.split("/")
@@ -95,7 +89,6 @@ IGNORED_ITEMS = {
 # ============================================================
 # UPLOAD FILES
 # ============================================================
-
 def upload_folder(local, remote):
 
     for item in os.listdir(local):
