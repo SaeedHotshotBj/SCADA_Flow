@@ -8,6 +8,21 @@ _started = False
 _lock = threading.Lock()
 
 
+def _latest_raw_timestamp(conn):
+    allowed = ",".join("?" for _ in ta._ALLOWED_STORAGE)
+    row = conn.execute(
+        f"""
+        SELECT MAX(Timestamp) AS LatestTimestamp
+        FROM PLC_Data
+        WHERE (StorageType IS NULL OR UPPER(StorageType) IN ({allowed}))
+        """,
+        ta._ALLOWED_STORAGE,
+    ).fetchone()
+    if not row:
+        return None
+    return ta._parse_ts(row["LatestTimestamp"])
+
+
 def aggregate_once_local_time():
     ta._ensure_tables()
     if not ta._try_acquire_lease():
@@ -15,17 +30,11 @@ def aggregate_once_local_time():
 
     conn = ta._connect()
     try:
-        now = datetime.now().replace(microsecond=0)
-        latest_raw = ta._latest_raw_timestamp(conn) if hasattr(ta, "_latest_raw_timestamp") else None
-
-        if latest_raw is not None:
-            anchor = latest_raw
-        else:
-            anchor = now
+        latest_raw = _latest_raw_timestamp(conn)
+        anchor = latest_raw or datetime.now().replace(microsecond=0)
 
         minute_end = ta._minute_start(anchor)
         minute_start = minute_end - timedelta(minutes=1)
-
         written = ta._aggregate_raw_bucket(conn, minute_start, minute_end)
 
         hour_end = ta._hour_start(anchor)
@@ -36,7 +45,6 @@ def aggregate_once_local_time():
         day_start = day_end - timedelta(days=1)
         ta._aggregate_children(conn, "TrendHour", "TrendDay", day_start, day_end)
 
-        # Keep the existing retention policy exactly as-is.
         raw_cutoff = ta._ts(anchor - timedelta(minutes=ta.RAW_RETENTION_MINUTES))
         conn.execute(
             "DELETE FROM PLC_Data WHERE Timestamp < ? AND (StorageType IS NULL OR UPPER(StorageType) IN ('EDGE','TIME'))",
@@ -81,7 +89,7 @@ def start():
         _started = True
         threading.Thread(
             target=_worker,
-            name="SCADA-Trend-Aggregator-LocalTime",
+            name="SCADA-Trend-Aggregator-PLC-Time",
             daemon=True,
         ).start()
         print("TREND AGGREGATION WORKER STARTED (PLC TIMESTAMP ANCHOR)")
