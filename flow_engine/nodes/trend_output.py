@@ -36,10 +36,7 @@ class TrendOutput:
                 "%Y/%m/%d %H:%M",
             ):
                 try:
-                    return jdatetime.datetime.strptime(
-                        text,
-                        fmt
-                    ).togregorian()
+                    return jdatetime.datetime.strptime(text, fmt).togregorian()
                 except Exception:
                     pass
 
@@ -54,21 +51,11 @@ class TrendOutput:
                 pass
 
         try:
-            dt = datetime.fromisoformat(text)
-            return dt.replace(tzinfo=None)
+            return datetime.fromisoformat(text).replace(tzinfo=None)
         except Exception:
             return None
 
     def convert_time(self, value):
-        """
-        Convert a historian timestamp to a timezone-independent numeric
-        wall-clock coordinate.
-
-        IMPORTANT:
-        This is NOT Unix time and must never be passed through Date() on the
-        browser. It preserves the exact stored local date/time, including
-        hour, minute, second and millisecond, without applying UTC offsets.
-        """
         dt = self._parse_timestamp(value)
         if dt is None:
             return None
@@ -80,24 +67,16 @@ class TrendOutput:
             + dt.second * 1_000
             + dt.microsecond // 1_000
         )
-
         return day_ms + time_ms
 
     def jalali_label(self, value):
-        """Create the exact Jalali wall-clock label from the historian timestamp."""
         try:
             dt = self._parse_timestamp(value)
             if dt is None:
                 return str(value)
 
-            jdt = jdatetime.datetime.fromgregorian(
-                datetime=dt
-            )
-
-            return jdt.strftime(
-                "%Y/%m/%d %H:%M:%S"
-            )
-
+            jdt = jdatetime.datetime.fromgregorian(datetime=dt)
+            return jdt.strftime("%Y/%m/%d %H:%M:%S")
         except Exception:
             return str(value)
 
@@ -148,36 +127,22 @@ class TrendOutput:
             if point is None:
                 continue
 
-            grouped.setdefault(
-                tag,
-                []
-            ).append(point)
+            grouped.setdefault(tag, []).append(point)
 
         output = []
 
         if selected_tag:
-            points = grouped.get(
-                selected_tag,
-                []
-            )
-
-            points.sort(
-                key=lambda p: p["x"]
-            )
-
+            points = grouped.get(selected_tag, [])
+            points.sort(key=lambda p: p["x"])
             output.append({
                 "tag": selected_tag,
                 "title": selected_tag,
                 "data": points,
                 "stepped": "after",
             })
-
         else:
             for tag, tag_points in grouped.items():
-                tag_points.sort(
-                    key=lambda p: p["x"]
-                )
-
+                tag_points.sort(key=lambda p: p["x"])
                 output.append({
                     "tag": tag,
                     "title": tag,
@@ -185,8 +150,13 @@ class TrendOutput:
                     "stepped": "after",
                 })
 
+        stats = data.get("TrendStats", {}) or {}
+        selected_stats = stats.get(selected_tag, {}) if selected_tag else {}
+
         data["ChartData"] = {
-            "datasets": output
+            "datasets": output,
+            "stats": selected_stats,
+            "resolution": selected_stats.get("resolution"),
         }
 
         return data
