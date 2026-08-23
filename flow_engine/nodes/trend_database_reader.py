@@ -5,7 +5,11 @@
 from datetime import datetime
 import jdatetime
 
-from database import get_trend_data, row_value
+from services.trend_aggregation import (
+    get_trend_series,
+    get_trend_stats,
+)
+from database import row_value
 
 
 class TrendDatabaseReader:
@@ -15,41 +19,38 @@ class TrendDatabaseReader:
         self.company_id = self.config.get("company_id")
 
     def normalize_date(self, value, calendar, timezone_offset=None):
-        """
-        Convert the user's date/time to the same naive wall-clock time used
-        by the historian database.
-
-        IMPORTANT:
-        The historian stores timestamps without timezone information, so the
-        browser timezone offset must NOT be added or subtracted here.
-        """
+        """Convert user wall-clock date/time to historian naive datetime."""
         if not value:
             return None
-
         try:
             if calendar == "Jalali":
                 text = str(value).strip().replace("-", "/").replace("T", " ")
-                jalali = jdatetime.datetime.strptime(
+                return jdatetime.datetime.strptime(
                     text,
                     "%Y/%m/%d %H:%M"
-                )
-                return jalali.togregorian()
+                ).togregorian()
 
             text = str(value).strip().replace("T", " ")
             return datetime.strptime(
                 text,
                 "%Y-%m-%d %H:%M"
             )
-
         except Exception:
             return None
+
+    @staticmethod
+    def _row_timestamp(row):
+        return row_value(row, "Timestamp", 0)
+
+    @staticmethod
+    def _row_value(row):
+        return row_value(row, "Value", 1)
 
     def execute(self, data=None):
         if data is None:
             data = {}
 
         request = data.get("TrendRequest", {}) or {}
-
         selected_tag = request.get("Tag")
         tags = request.get("Tags", []) or []
 
@@ -58,27 +59,13 @@ class TrendDatabaseReader:
         elif len(tags) == 1:
             selected_tag = tags[0]
 
-        # Kept only for compatibility with older callers.
-        # It is intentionally NOT used for timestamp arithmetic.
-        timezone_offset = request.get("TimezoneOffset")
-        try:
-            timezone_offset = (
-                float(timezone_offset)
-                if timezone_offset is not None
-                else None
-            )
-        except (TypeError, ValueError):
-            timezone_offset = None
-
         start = self.normalize_date(
             request.get("Start"),
-            request.get("Calendar", "Gregorian"),
-            timezone_offset
+            request.get("Calendar", "Gregorian")
         )
         end = self.normalize_date(
             request.get("End"),
-            request.get("Calendar", "Gregorian"),
-            timezone_offset
+            request.get("Calendar", "Gregorian")
         )
 
         company_id = data.get("CompanyID")
@@ -91,43 +78,69 @@ class TrendDatabaseReader:
             company_id = int(company_id)
         except (TypeError, ValueError):
             data["TrendData"] = []
+            data["TrendStats"] = {}
             return data
 
         trend = []
+        stats_by_tag = {}
+        resolutions = {}
+
+        if start is None or end is None:
+            end = datetime.now()
+            start = end.replace(microsecond=0)
+            start = start.fromtimestamp(start.timestamp() - 7200)
 
         for tag in tags:
             if not tag:
                 continue
 
             try:
-                rows = get_trend_data(
+                resolution, rows = get_trend_series(
                     company_id,
                     tag,
                     start,
                     end
                 )
+                resolutions[tag] = resolution
 
-                for row in rows:
-                    trend.append({
-                        "Tag": tag,
-                        "Timestamp": row_value(row, "Timestamp", 0),
-                        "Value": row_value(row, "Value", 1)
-                    })
+                if resolution == "raw":
+                    for row in rows:
+                        trend.append({
+                            "Tag": tag,
+                            "Timestamp": row["Timestamp"],
+                            "Value": row["Value"]
+                        })
+                else:
+                    for row in rows:
+                        trend.append({
+                            "Tag": tag,
+                            "Timestamp": self._row_timestamp(row),
+                            "Value": self._row_value(row)
+                        })
 
+                stats_by_tag[tag] = get_trend_stats(
+                    company_id,
+                    tag,
+                    start,
+                    end
+                )
             except Exception:
-                continue
+                resolutions[tag] = "error"
+                stats_by_tag[tag] = {
+                    "resolution": "error",
+                    "min": None,
+                    "max": None,
+                    "weighted_average": None,
+                    "sample_count": 0,
+                }
 
         def _trend_timestamp(item):
             value = item.get("Timestamp")
-
             if value is None:
                 return datetime.min
-
             if hasattr(value, "timestamp"):
                 return value
-
             text = str(value).replace("T", " ")
-
             for fmt in (
                 "%Y-%m-%d %H:%M:%S.%f",
                 "%Y-%m-%d %H:%M:%S",
@@ -137,12 +150,10 @@ class TrendDatabaseReader:
                     return datetime.strptime(text, fmt)
                 except ValueError:
                     pass
-
             return datetime.min
 
         trend.sort(
-            key=_trend_timestamp,
-            reverse=True
+            key=_trend_timestamp
         )
 
         data["TrendRequest"] = {
@@ -155,5 +166,7 @@ class TrendDatabaseReader:
             "TimezoneOffset": None
         }
         data["TrendData"] = trend
+        data["TrendStats"] = stats_by_tag
+        data["TrendResolution"] = resolutions
 
         return data
