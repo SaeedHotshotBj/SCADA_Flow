@@ -37,8 +37,7 @@ def _is_scada_server_process():
 
 if _is_scada_server_process():
     try:
-        from services.trend_aggregation import start_aggregation_worker
-        start_aggregation_worker()
-        _original_print("TREND AGGREGATION WORKER STARTED")
+        from services.trend_runtime_fix import start
+        start()
     except Exception as exc:
         _original_print("TREND AGGREGATION START ERROR:", exc)
