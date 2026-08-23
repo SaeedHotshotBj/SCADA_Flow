@@ -27,6 +27,7 @@ from flow_engine.nodes.roles_engaged import RolesEngaged
 from flow_engine.nodes.trend_reader import TrendReader
 from flow_engine.nodes.trend_output import TrendOutput
 from flow_engine.nodes.trend_database_reader import TrendDatabaseReader
+from services.trend_aggregation import start_aggregation_worker
 
 # =====================================================
 # REPORT NODES
@@ -91,6 +92,17 @@ NODE_CLASSES = {
     "DateConverter":
         DateConverterNode
 }
+
+
+# =====================================================
+# START TREND AGGREGATION
+# =====================================================
+
+try:
+    start_aggregation_worker()
+    print("TREND AGGREGATION WORKER STARTED FROM REGISTRY")
+except Exception as exc:
+    print("TREND AGGREGATION START ERROR:", exc)
 
 
 # =====================================================
