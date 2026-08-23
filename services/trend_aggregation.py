@@ -152,7 +152,10 @@ def _aggregate_step_rows(rows, start, end):
 
     weighted_sum = 0.0
     duration = 0.0
-    values = []
+    first_value = parsed[0][1]
+    last_value = parsed[-1][1]
+    minimum = min(item[1] for item in parsed)
+    maximum = max(item[1] for item in parsed)
 
     for index, (dt, value) in enumerate(parsed):
         next_dt = parsed[index + 1][0] if index + 1 < len(parsed) else end
@@ -163,16 +166,15 @@ def _aggregate_step_rows(rows, start, end):
             continue
         weighted_sum += value * seconds
         duration += seconds
-        values.append(value)
 
-    if duration <= 0 or not values:
+    if duration <= 0:
         return None
 
     return {
-        "first": values[0],
-        "last": values[-1],
-        "min": min(values),
-        "max": max(values),
+        "first": first_value,
+        "last": last_value,
+        "min": minimum,
+        "max": maximum,
         "weighted": weighted_sum / duration,
         "duration": duration,
         "count": len(parsed),
@@ -230,8 +232,9 @@ def _aggregate_raw_bucket(conn, start, end):
 
 def _aggregate_children(conn, source, target, start, end):
     rows = conn.execute(f"""
-        SELECT CompanyID, TagName, PeriodStart AS ts,
-               WeightedAverage AS value, DurationSeconds
+        SELECT CompanyID, TagName, PeriodStart, PeriodEnd,
+               FirstValue, LastValue, MinValue, MaxValue,
+               WeightedAverage, DurationSeconds, SampleCount
         FROM {source}
         WHERE PeriodStart >= ? AND PeriodStart < ?
         ORDER BY CompanyID, TagName, PeriodStart
@@ -251,22 +254,20 @@ def _aggregate_children(conn, source, target, start, end):
             float(row["WeightedAverage"] or 0) * float(row["DurationSeconds"] or 0)
             for row in group
         )
-        first = float(group[0]["value"])
-        last = float(group[-1]["value"])
-        minimum = min(float(row["value"]) for row in group)
-        maximum = max(float(row["value"]) for row in group)
 
         stats = {
-            "first": first,
-            "last": last,
-            "min": minimum,
-            "max": maximum,
+            "first": float(group[0]["FirstValue"]),
+            "last": float(group[-1]["LastValue"]),
+            "min": min(float(row["MinValue"]) for row in group if row["MinValue"] is not None),
+            "max": max(float(row["MaxValue"]) for row in group if row["MaxValue"] is not None),
             "weighted": weighted_sum / total_duration,
             "duration": total_duration,
-            "count": sum(int(row["SampleCount"] or 0) for row in group) if "SampleCount" in group[0].keys() else len(group),
+            "count": sum(int(row["SampleCount"] or 0) for row in group),
         }
+
         _write_aggregate(conn, target, company_id, tag, start, end, stats)
         written += 1
+
     return written
 
 
@@ -276,33 +277,27 @@ def aggregate_once():
     try:
         now = datetime.now().replace(microsecond=0)
 
-        # Complete minute -> TrendMinute.
         minute_end = _minute_start(now)
         minute_start = minute_end - timedelta(minutes=1)
         _aggregate_raw_bucket(conn, minute_start, minute_end)
 
-        # Complete hour -> TrendHour.
         hour_end = _hour_start(now)
         hour_start = hour_end - timedelta(hours=1)
         _aggregate_children(conn, "TrendMinute", "TrendHour", hour_start, hour_end)
 
-        # Complete day -> TrendDay.
         day_end = _day_start(now)
         day_start = day_end - timedelta(days=1)
         _aggregate_children(conn, "TrendHour", "TrendDay", day_start, day_end)
 
-        # Delete raw seconds only after they have had time to be aggregated.
         raw_cutoff = _ts(now - timedelta(minutes=RAW_RETENTION_MINUTES))
         conn.execute(
             "DELETE FROM PLC_Data WHERE Timestamp < ? AND (StorageType IS NULL OR UPPER(StorageType) IN ('EDGE','TIME'))",
             (raw_cutoff,),
         )
 
-        # TagHistory is a runtime buffer used by PLCReader; keep a short safety window.
         history_cutoff = _ts(now - timedelta(hours=2))
         conn.execute("DELETE FROM TagHistory WHERE Timestamp < ?", (history_cutoff,))
 
-        # Minute/hour grace windows prevent boundary holes in recent trends.
         minute_cutoff = _ts(now - timedelta(hours=MINUTE_RETENTION_HOURS))
         conn.execute("DELETE FROM TrendMinute WHERE PeriodStart < ?", (minute_cutoff,))
 
@@ -361,7 +356,6 @@ def get_trend_series(company_id, tag_name, start=None, end=None):
         if rows:
             return resolution, rows
 
-        # New database / very recent fallback: read raw without writing anything.
         raw = conn.execute("""
             SELECT Timestamp, Value
             FROM PLC_Data
