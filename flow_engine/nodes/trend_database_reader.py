@@ -8,8 +8,18 @@ import jdatetime
 from services.trend_aggregation import (
     get_trend_series,
     get_trend_stats,
+    start_aggregation_worker,
 )
 from database import row_value
+
+
+# Start the single coordinated trend aggregation worker as soon as the
+# Trend database reader is loaded by the SCADA application. The underlying
+# lease prevents multiple server processes from aggregating simultaneously.
+try:
+    start_aggregation_worker()
+except Exception as exc:
+    print("TREND AGGREGATION START ERROR:", exc)
 
 
 class TrendDatabaseReader:
@@ -18,23 +28,52 @@ class TrendDatabaseReader:
         self.config = config or {}
         self.company_id = self.config.get("company_id")
 
+    @staticmethod
+    def _normalize_digits(text):
+        if text is None:
+            return text
+
+        return str(text).translate(str.maketrans(
+            "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+            "01234567890123456789"
+        ))
+
     def normalize_date(self, value, calendar, timezone_offset=None):
         """Convert user wall-clock date/time to historian naive datetime."""
         if not value:
             return None
-        try:
-            if calendar == "Jalali":
-                text = str(value).strip().replace("-", "/").replace("T", " ")
-                return jdatetime.datetime.strptime(
-                    text,
-                    "%Y/%m/%d %H:%M"
-                ).togregorian()
 
-            text = str(value).strip().replace("T", " ")
-            return datetime.strptime(
-                text,
-                "%Y-%m-%d %H:%M"
-            )
+        try:
+            text = self._normalize_digits(value)
+            text = text.strip().replace("-", "/").replace("T", " ")
+
+            if calendar == "Jalali":
+                for fmt in (
+                    "%Y/%m/%d %H:%M:%S",
+                    "%Y/%m/%d %H:%M",
+                ):
+                    try:
+                        return jdatetime.datetime.strptime(
+                            text,
+                            fmt
+                        ).togregorian()
+                    except ValueError:
+                        pass
+                return None
+
+            for fmt in (
+                "%Y/%m/%d %H:%M:%S",
+                "%Y/%m/%d %H:%M",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+            ):
+                try:
+                    return datetime.strptime(text, fmt)
+                except ValueError:
+                    pass
+
+            return None
+
         except Exception:
             return None
 
