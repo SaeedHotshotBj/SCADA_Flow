@@ -248,17 +248,10 @@ def _install_authentication_guard(socketio):
         username = str(request.form.get("username", "")).strip()
         password = request.form.get("password", "")
 
-        # =================================================
-        # GLOBAL MASTER
-        # =================================================
-        # Master is a system account. It is authenticated by
-        # app.py against Users and must NEVER be required to
-        # exist in Roles or RolesEngaged.
         if _is_global_master_login(username):
             print("FLOW AUTH: MASTER BYPASS", username)
             return None
 
-        # Company authentication is controlled by Roles/RolesEngaged.
         if company_id is None:
             return None
 
@@ -269,8 +262,6 @@ def _install_authentication_guard(socketio):
         )
 
         if user is None:
-            # Do not let app.py fall through to the legacy Users-table
-            # authentication for normal company users.
             return redirect(
                 url_for(
                     "login",
@@ -281,8 +272,6 @@ def _install_authentication_guard(socketio):
                 )
             )
 
-        # Mark the request as flow-authenticated so the normal login
-        # route can create the existing Flask session.
         request.flow_authenticated_user = user
         return None
 
@@ -312,6 +301,25 @@ def send_dashboard_data(data):
 
     try:
         socketio_instance.emit("tag_update", data)
+
+        # Trend page consumes a normalized per-tag live event.
+        # Keep the original dashboard payload untouched for existing clients.
+        tags = data.get("Tags", {}) if isinstance(data, dict) else {}
+        company_id = data.get("CompanyID") if isinstance(data, dict) else None
+        timestamp = data.get("Timestamp") if isinstance(data, dict) else None
+
+        if isinstance(tags, dict):
+            for tag, value in tags.items():
+                socketio_instance.emit(
+                    "tag_update",
+                    {
+                        "CompanyID": company_id,
+                        "Tag": tag,
+                        "Value": value,
+                        "Timestamp": timestamp,
+                    }
+                )
+
         print("SOCKET DATA SENT")
     except Exception as e:
         print("SOCKET SEND ERROR:", e)
