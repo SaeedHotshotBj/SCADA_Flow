@@ -1,5 +1,6 @@
 import threading
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from . import trend_aggregation as ta
@@ -43,8 +44,6 @@ def _aggregate_raw_bucket_normalized(conn, start, end):
         (ta._ts(start), ta._ts(end), *_ALLOWED_STORAGE),
     ).fetchall()
 
-    from collections import defaultdict
-
     grouped = defaultdict(list)
     for row in rows:
         grouped[(int(row["CompanyID"]), row["TagName"])].append(row)
@@ -68,9 +67,9 @@ def _aggregate_raw_bucket_normalized(conn, start, end):
     return written
 
 
-def aggregate_once_local_time():
+def aggregate_once_local_time(force=False):
     ta._ensure_tables()
-    if not ta._try_acquire_lease():
+    if not force and not ta._try_acquire_lease():
         return 0
 
     conn = ta._connect()
@@ -104,6 +103,43 @@ def aggregate_once_local_time():
             "TrendDay",
             day_start,
             day_end,
+        )
+
+        raw_cutoff = ta._ts(anchor - timedelta(minutes=ta.RAW_RETENTION_MINUTES))
+        conn.execute(
+            """
+            DELETE FROM PLC_Data
+            WHERE datetime(replace(Timestamp, 'T', ' ')) < datetime(?)
+              AND (StorageType IS NULL OR UPPER(StorageType) IN ('EDGE','TIME'))
+            """,
+            (raw_cutoff,),
+        )
+
+        history_cutoff = ta._ts(anchor - timedelta(hours=2))
+        conn.execute(
+            """
+            DELETE FROM TagHistory
+            WHERE datetime(replace(Timestamp, 'T', ' ')) < datetime(?)
+            """,
+            (history_cutoff,),
+        )
+
+        minute_cutoff = ta._ts(anchor - timedelta(hours=ta.MINUTE_RETENTION_HOURS))
+        conn.execute(
+            "DELETE FROM TrendMinute WHERE PeriodStart < ?",
+            (minute_cutoff,),
+        )
+
+        hour_cutoff = ta._ts(anchor - timedelta(days=ta.HOUR_RETENTION_DAYS))
+        conn.execute(
+            "DELETE FROM TrendHour WHERE PeriodStart < ?",
+            (hour_cutoff,),
+        )
+
+        day_cutoff = ta._ts(anchor - timedelta(days=ta.DAY_RETENTION_DAYS))
+        conn.execute(
+            "DELETE FROM TrendDay WHERE PeriodStart < ?",
+            (day_cutoff,),
         )
 
         conn.commit()
