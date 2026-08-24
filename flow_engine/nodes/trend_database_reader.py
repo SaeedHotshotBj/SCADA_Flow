@@ -38,6 +38,27 @@ class TrendDatabaseReader:
     def _normalize_tag(value):
         return str(value or "").strip().lower()
 
+    @classmethod
+    def _split_tags(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple, set)):
+            values = value
+        else:
+            values = str(value).replace(";", ",").split(",")
+        result = []
+        seen = set()
+        for item in values:
+            tag = str(item).strip()
+            if not tag:
+                continue
+            key = cls._normalize_tag(tag)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(tag)
+        return result
+
     def normalize_date(self, value, calendar, timezone_offset=None):
         if not value:
             return None
@@ -108,37 +129,19 @@ class TrendDatabaseReader:
         request = data.get("TrendRequest", {}) or {}
 
         selected_tag = request.get("Tag")
-        tags = request.get("Tags", []) or []
+        tags = self._split_tags(request.get("Tags"))
+        if not tags:
+            tags = self._split_tags(selected_tag)
 
-        if isinstance(tags, str):
-            tags = [tags]
-
-        if selected_tag:
-            tags = [selected_tag]
-        else:
-            tags = [tag for tag in tags if str(tag).strip()]
-            if len(tags) == 1:
-                selected_tag = tags[0]
-
-        normalized_tags = []
-        for tag in tags:
-            tag = str(tag).strip()
-            if tag and self._normalize_tag(tag) not in {
-                self._normalize_tag(x) for x in normalized_tags
-            }:
-                normalized_tags.append(tag)
-        tags = normalized_tags
+        if selected_tag and len(tags) <= 1:
+            selected_tag = tags[0] if tags else str(selected_tag).strip()
+        elif len(tags) != 1:
+            selected_tag = None
 
         calendar = request.get("Calendar", "Gregorian")
 
-        start = self.normalize_date(
-            request.get("Start"),
-            calendar
-        )
-        end = self.normalize_date(
-            request.get("End"),
-            calendar
-        )
+        start = self.normalize_date(request.get("Start"), calendar)
+        end = self.normalize_date(request.get("End"), calendar)
 
         if start is None and end is None:
             end = datetime.now().replace(microsecond=0)
@@ -182,9 +185,7 @@ class TrendDatabaseReader:
                     end
                 )
 
-                normalized_key = self._normalize_tag(tag)
                 resolutions[tag] = resolution
-
                 matched_rows = rows or []
 
                 for row in matched_rows:
@@ -210,7 +211,6 @@ class TrendDatabaseReader:
                     "TREND DATABASE READER:",
                     "Company=", company_id,
                     "Tag=", tag,
-                    "Key=", normalized_key,
                     "Start=", start,
                     "End=", end,
                     "Resolution=", resolution,
@@ -231,8 +231,6 @@ class TrendDatabaseReader:
                     "TREND DATABASE READER ERROR:",
                     "Company=", company_id,
                     "Tag=", tag,
-                    "Start=", start,
-                    "End=", end,
                     "Error=", repr(exc),
                 )
 
