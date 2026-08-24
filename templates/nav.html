@@ -1,41 +1,87 @@
 <div class="top-nav">
-
     <a href="/dashboard">Dashboard</a>
-
     <a href="/trend">Trend</a>
-
     <a href="/date_filter">Report</a>
-
     <a href="/plc_control">PLC Control</a>
-
     <a href="/logout">Logout</a>
-
 </div>
 
 <style>
+.top-nav{height:58px;background:#0f172a;display:flex;align-items:center;gap:6px;padding:0 28px;box-sizing:border-box;border-bottom:1px solid #cbd5e1;box-shadow:0 3px 14px rgba(15,23,42,.12);position:relative;z-index:2000}
+.top-nav a{color:#cbd5e1;text-decoration:none;padding:10px 18px;border-radius:9px;font-size:14px;font-weight:600;transition:background .15s ease,color .15s ease}
+.top-nav a:hover{background:#1e293b;color:#fff}
 
-.top-nav {
-    height: 52px;
-    background: #111827;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 20px;
-    box-sizing: border-box;
-    border-bottom: 1px solid #374151;
+/* =========================================================
+   TREND / REPORT ONLY
+   Scoped with :has() so dashboard and other pages are untouched.
+   ========================================================= */
+
+body:has(#trendChart),body:has(#reportTable){background:#f4f7fb!important;color:#172033!important}
+body:has(#trendChart) .header,body:has(#reportTable) .header{background:#ffffff!important;color:#172033!important;padding:20px 28px!important;text-align:right!important;border-bottom:1px solid #e2e8f0!important;box-shadow:0 2px 12px rgba(15,23,42,.05)!important}
+body:has(#trendChart) .header .title,body:has(#trendChart) .header .subtitle,body:has(#reportTable) .header .title,body:has(#reportTable) .header .subtitle{display:none!important}
+body:has(#trendChart) .container,body:has(#reportTable) .container{width:min(1440px,calc(100% - 40px))!important;max-width:none!important;margin:22px auto 34px!important}
+body:has(#trendChart) .card,body:has(#reportTable) .card{background:#ffffff!important;border:1px solid #e3e9f1!important;border-radius:16px!important;padding:20px!important;margin-bottom:18px!important;box-shadow:0 8px 24px rgba(15,23,42,.06)!important}
+
+/* Trend */
+body:has(#trendChart) .card:first-child{display:flex!important;align-items:center!important;justify-content:flex-end!important;min-height:64px!important;padding:14px 18px!important}
+body:has(#trendChart) .card:first-child .filter-title{display:none!important}
+body:has(#trendChart) #liveSummary{margin:0!important;justify-content:flex-start!important;width:100%!important}
+body:has(#trendChart) .parameter-summary{display:flex!important;flex-wrap:wrap!important;gap:8px!important;justify-content:flex-start!important}
+body:has(#trendChart) .live-pill{background:#eff8ff!important;border:1px solid #cfe2f4!important;color:#135b8a!important;border-radius:999px!important;padding:7px 13px!important;font-size:13px!important;font-weight:700!important}
+body:has(#trendChart) .filter-container{display:grid!important;grid-template-columns:minmax(260px,1.2fr) minmax(220px,1fr) minmax(220px,1fr) auto auto auto!important;gap:14px!important;align-items:end!important;justify-content:stretch!important}
+body:has(#trendChart) .filter-item{background:#f8fafc!important;border:1px solid #e5ebf2!important;padding:14px!important;border-radius:12px!important;min-width:0!important}
+body:has(#trendChart) .filter-item label{font-size:13px!important;color:#5d6b7b!important;font-weight:700!important;margin-bottom:7px!important}
+body:has(#trendChart) input{width:100%!important;min-width:0!important;background:#fff!important;border:1px solid #cfd8e3!important;color:#172033!important;border-radius:9px!important;height:46px!important}
+body:has(#trendChart) input:focus{border-color:#2b7bbb!important;box-shadow:0 0 0 3px rgba(43,123,187,.10)!important;outline:none!important}
+body:has(#trendChart) .multi-select{width:100%!important;min-width:0!important}
+body:has(#trendChart) .multi-select-trigger{height:46px!important;background:#fff!important;border:1px solid #cfd8e3!important;color:#172033!important;border-radius:9px!important}
+body:has(#trendChart) .multi-select-menu{border:1px solid #d7e0ea!important;background:#fff!important;box-shadow:0 14px 30px rgba(15,23,42,.12)!important}
+body:has(#trendChart) .multi-select-option{color:#273444!important}
+body:has(#trendChart) .multi-select-option:hover{background:#f3f7fb!important}
+body:has(#trendChart) button{height:46px!important;padding:0 18px!important;border-radius:9px!important;background:#1d6fa5!important;border:1px solid #1d6fa5!important;box-shadow:none!important;font-size:14px!important;white-space:nowrap!important}
+body:has(#trendChart) button:hover{background:#155a88!important}
+body:has(#trendChart) .status{margin-top:12px!important;color:#687789!important;font-size:13px!important}
+body:has(#trendChart) .badge{background:#f0f6fb!important;color:#3a6685!important;border:1px solid #d7e7f2!important;margin-top:10px!important}
+body:has(#trendChart) #statsContainer{display:grid!important;grid-template-columns:1fr!important;gap:12px!important}
+body:has(#trendChart) .stat-group{background:#fbfcfe!important;border:1px solid #e2e8f0!important;border-radius:13px!important;padding:14px!important}
+body:has(#trendChart) .stat-group-title{font-size:16px!important;color:#1f5f88!important;margin-bottom:10px!important}
+body:has(#trendChart) .stat-grid{gap:10px!important}
+body:has(#trendChart) .stat{background:#fff!important;border:1px solid #e7edf3!important;border-radius:10px!important;padding:12px!important}
+body:has(#trendChart) .stat-title{color:#708090!important;font-size:12px!important}
+body:has(#trendChart) .stat-value{color:#1d3348!important;font-size:22px!important}
+body:has(#trendChart) .chart-card{height:600px!important;padding:14px!important}
+body:has(#trendChart) .chart-wrap{background:#fff!important;border:1px solid #e7edf3!important;border-radius:12px!important;padding:10px!important}
+
+/* Report */
+body:has(#reportTable) .filter{display:grid!important;grid-template-columns:minmax(250px,1fr) minmax(250px,1fr) auto!important;gap:14px!important;align-items:end!important;justify-content:stretch!important}
+body:has(#reportTable) .item{background:#f8fafc!important;border:1px solid #e5ebf2!important;padding:14px!important;border-radius:12px!important}
+body:has(#reportTable) .item label{font-size:13px!important;color:#5d6b7b!important;margin-bottom:7px!important}
+body:has(#reportTable) input{width:100%!important;min-width:0!important;height:46px!important;background:#fff!important;border:1px solid #cfd8e3!important;border-radius:9px!important;color:#172033!important}
+body:has(#reportTable) button{height:46px!important;padding:0 22px!important;background:#1d6fa5!important;border:1px solid #1d6fa5!important;border-radius:9px!important;box-shadow:none!important;font-size:14px!important;white-space:nowrap!important}
+body:has(#reportTable) button:hover{background:#155a88!important}
+body:has(#reportTable) .status{color:#687789!important;font-size:13px!important}
+body:has(#reportTable) .card h3{margin:0 0 14px!important;color:#1b2d3d!important;font-size:17px!important;border-right:3px solid #1d6fa5!important;padding-right:9px!important}
+body:has(#reportTable) .table-wrap{border:1px solid #e4eaf1!important;border-radius:12px!important;overflow:auto!important}
+body:has(#reportTable) table{min-width:850px!important;background:#fff!important;border-collapse:separate!important;border-spacing:0!important}
+body:has(#reportTable) th{background:#f3f6fa!important;color:#34495a!important;border:0!important;border-bottom:1px solid #dfe6ee!important;padding:13px 12px!important;font-size:13px!important}
+body:has(#reportTable) td{border:0!important;border-bottom:1px solid #edf1f5!important;color:#334155!important;padding:12px!important;font-size:13px!important}
+body:has(#reportTable) tbody tr:hover td{background:#f8fbfd!important}
+body:has(#reportTable) .total-cell{background:#eef6fb!important;color:#1d5f84!important;font-weight:800!important}
+body:has(#reportTable) .total-row td{background:#f4f7fa!important;color:#24384a!important;font-weight:800!important}
+body:has(#reportTable) .chart-box{height:500px!important;padding:14px!important}
+body:has(#reportTable) .chart-box canvas{background:#fff!important;border:1px solid #e7edf3!important;border-radius:12px!important;padding:10px!important}
+
+@media(max-width:1100px){
+  body:has(#trendChart) .filter-container{grid-template-columns:1fr 1fr!important}
+  body:has(#trendChart) .filter-container button{width:100%!important}
+  body:has(#reportTable) .filter{grid-template-columns:1fr 1fr!important}
+  body:has(#reportTable) .filter button{width:100%!important}
 }
-
-.top-nav a {
-    color: #d1d5db;
-    text-decoration: none;
-    padding: 9px 16px;
-    border-radius: 7px;
-    font-size: 14px;
+@media(max-width:700px){
+  body:has(#trendChart) .container,body:has(#reportTable) .container{width:calc(100% - 20px)!important;margin:12px auto 22px!important}
+  body:has(#trendChart) .filter-container,body:has(#reportTable) .filter{grid-template-columns:1fr!important}
+  body:has(#trendChart) .card,body:has(#reportTable) .card{padding:14px!important}
+  body:has(#trendChart) .chart-card{height:430px!important}
+  body:has(#reportTable) .chart-box{height:390px!important}
 }
-
-.top-nav a:hover {
-    background: #374151;
-    color: white;
-}
-
 </style>
