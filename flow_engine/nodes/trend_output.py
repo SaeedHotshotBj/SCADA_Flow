@@ -14,7 +14,6 @@ class TrendOutput:
     def _parse_timestamp(self, value):
         if value is None:
             return None
-
         if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
             dt = value
             if getattr(dt, "tzinfo", None) is not None:
@@ -60,17 +59,13 @@ class TrendOutput:
         dt = self._parse_timestamp(value)
         if dt is None:
             return None
-
-        return int(
-            dt.replace(tzinfo=timezone.utc).timestamp() * 1000
-        )
+        return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
 
     def jalali_label(self, value):
         try:
             dt = self._parse_timestamp(value)
             if dt is None:
                 return str(value)
-
             jdt = jdatetime.datetime.fromgregorian(datetime=dt)
             return jdt.strftime("%Y/%m/%d %H:%M:%S")
         except Exception:
@@ -80,12 +75,10 @@ class TrendOutput:
         x = self.convert_time(timestamp)
         if x is None:
             return None
-
         try:
             y = float(value)
         except (TypeError, ValueError):
             return None
-
         return {
             "x": x,
             "y": y,
@@ -97,127 +90,86 @@ class TrendOutput:
         return str(value or "").strip().lower()
 
     @staticmethod
-    def _stats_from_points(points):
-        values = [
-            float(point["y"])
-            for point in points
-            if point.get("y") is not None
-        ]
-
-        if not values:
-            return {
-                "resolution": None,
-                "min": None,
-                "max": None,
-                "weighted_average": None,
-                "sample_count": 0,
-            }
-
-        return {
-            "resolution": "minute",
-            "min": min(values),
-            "max": max(values),
-            "weighted_average": sum(values) / len(values),
-            "sample_count": len(values),
-        }
+    def _stats_for_tag(stats, tag):
+        if not isinstance(stats, dict):
+            return {}
+        direct = stats.get(tag)
+        if isinstance(direct, dict):
+            return direct
+        wanted = str(tag or "").strip().lower()
+        for key, value in stats.items():
+            if str(key).strip().lower() == wanted and isinstance(value, dict):
+                return value
+        return {}
 
     def execute(self, data=None):
         if data is None:
             data = {}
-
         if "ReportRequest" in data:
             return data
 
         trend_data = data.get("TrendData", []) or []
         request = data.get("TrendRequest", {}) or {}
         selected_tag = request.get("Tag")
-
-        if not selected_tag:
-            tags = request.get("Tags", []) or []
-            if isinstance(tags, str):
-                tags = [tags]
-            if len(tags) == 1:
-                selected_tag = tags[0]
-
         selected_key = self._normalize_tag(selected_tag)
-        grouped = {}
 
+        grouped = {}
         for item in trend_data:
             tag = item.get("Tag")
             if not tag:
                 continue
-
-            point = self._point(
-                item.get("Timestamp"),
-                item.get("Value")
-            )
+            point = self._point(item.get("Timestamp"), item.get("Value"))
             if point is None:
                 continue
-
             key = self._normalize_tag(tag)
-            group = grouped.setdefault(key, {
+            grouped.setdefault(key, {
                 "tag": tag,
                 "title": tag,
                 "data": [],
                 "stepped": "after",
-            })
-            group["data"].append(point)
+            })["data"].append(point)
 
         for group in grouped.values():
             group["data"].sort(key=lambda p: p["x"])
 
-        output = []
-
         if selected_key:
-            group = grouped.get(selected_key)
-
-            # The requested tag is allowed to differ only by case/whitespace.
-            # If the node chain returned exactly one tag, use that group as a
-            # compatibility fallback rather than producing an empty chart.
-            if group is None and len(grouped) == 1:
-                group = next(iter(grouped.values()))
-
-            if group is not None:
-                output.append(group)
+            output = [grouped[selected_key]] if selected_key in grouped else []
         else:
-            output = list(grouped.values())
+            requested_tags = request.get("Tags", []) or []
+            output = []
+            seen = set()
+            for tag in requested_tags:
+                key = self._normalize_tag(tag)
+                if key in grouped and key not in seen:
+                    output.append(grouped[key])
+                    seen.add(key)
+            for key, group in grouped.items():
+                if key not in seen:
+                    output.append(group)
 
         stats = data.get("TrendStats", {}) or {}
-        selected_stats = stats.get(selected_tag, {}) if selected_tag else {}
+        resolutions = data.get("TrendResolution", {}) or {}
 
-        if not selected_stats and selected_key:
-            for key, value in stats.items():
-                if self._normalize_tag(key) == selected_key:
-                    selected_stats = value or {}
-                    break
-
-        if not selected_stats or selected_stats.get("min") is None:
-            if output:
-                selected_stats = self._stats_from_points(
-                    output[0].get("data", [])
-                )
-            else:
-                selected_stats = {
-                    "resolution": None,
-                    "min": None,
-                    "max": None,
-                    "weighted_average": None,
-                    "sample_count": 0,
-                }
+        selected_stats = self._stats_for_tag(stats, selected_tag) if selected_tag else {}
+        result_stats = selected_stats if selected_tag else stats
+        resolution = selected_stats.get("resolution") if selected_stats else None
+        if not resolution and selected_tag:
+            resolution = resolutions.get(selected_tag)
 
         data["ChartData"] = {
             "datasets": output,
-            "stats": selected_stats,
-            "resolution": selected_stats.get("resolution"),
+            "stats": result_stats,
+            "resolutions": resolutions,
+            "multi": len(output) > 1,
+            "selected": selected_tag,
         }
 
         print(
             "TREND OUTPUT:",
-            "Tag=", selected_tag,
-            "InputRecords=", len(trend_data),
+            "Selected=", selected_tag,
             "Datasets=", len(output),
             "Points=", sum(len(ds.get("data", [])) for ds in output),
-            "Stats=", selected_stats,
+            "Stats=", result_stats,
         )
 
         return data
