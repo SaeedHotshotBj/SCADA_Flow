@@ -12,8 +12,13 @@ class TrendReader:
     def _split_tags(value):
         if value is None:
             return []
+
         if isinstance(value, (list, tuple, set)):
-            values = value
+            values = []
+            for item in value:
+                values.extend(
+                    str(item).replace(";", ",").split(",")
+                )
         else:
             values = str(value).replace(";", ",").split(",")
 
