@@ -41,10 +41,3 @@ if _is_scada_server_process():
         start()
     except Exception as exc:
         _original_print("TREND AGGREGATION START ERROR:", exc)
-
-    try:
-        from flow_runner import FlowRunner
-        from trend_response_fix import install as install_trend_response_fix
-        install_trend_response_fix(FlowRunner)
-    except Exception as exc:
-        _original_print("TREND RESPONSE FIX ERROR:", exc)
