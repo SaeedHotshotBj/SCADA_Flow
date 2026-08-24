@@ -1,6 +1,7 @@
 import os
 import paramiko
 
+
 # ============================================================
 # SERVER SETTINGS
 # ============================================================
@@ -8,13 +9,26 @@ import paramiko
 SERVER_IP = "77.104.95.230"
 USERNAME = "root"
 PASSWORD = "I4Ql50K7KKIkZnhG"
+
 REMOTE_PATH = "/var/www/scada"
-LOCAL_PATH = os.path.dirname(os.path.abspath(__file__))
+
+LOCAL_PATH = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+
+# ============================================================
+# CONNECT
+# ============================================================
 
 print("Connecting to server...")
 
 ssh = paramiko.SSHClient()
-ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+ssh.set_missing_host_key_policy(
+    paramiko.AutoAddPolicy()
+)
+
 ssh.connect(
     SERVER_IP,
     username=USERNAME,
@@ -24,24 +38,32 @@ ssh.connect(
 )
 
 sftp = ssh.open_sftp()
+
 print("Connected")
 
+
+# ============================================================
+# REMOTE COMMAND HELPER
+# ============================================================
 
 def run_remote(command, title=None):
     if title:
         print()
         print(title)
-        print("-" * 60)
+        print("------------------------------------------------------------")
+
     stdin, stdout, stderr = ssh.exec_command(command)
     output = stdout.read().decode(errors="replace")
-    error = stderr.read().decode(errors="replace")
+    error_output = stderr.read().decode(errors="replace")
     exit_code = stdout.channel.recv_exit_status()
+
     if output:
         print(output)
-    if error:
-        print(error)
+    if error_output:
+        print(error_output)
+
     print("EXIT:", exit_code)
-    return exit_code, output, error
+    return exit_code, output, error_output
 
 
 # ============================================================
@@ -51,10 +73,13 @@ def run_remote(command, title=None):
 def mkdir_recursive(path):
     folders = path.split("/")
     current = ""
+
     for folder in folders:
         if not folder:
             continue
+
         current += "/" + folder
+
         try:
             sftp.mkdir(current)
         except Exception:
@@ -62,6 +87,7 @@ def mkdir_recursive(path):
 
 
 mkdir_recursive(REMOTE_PATH)
+
 
 # ============================================================
 # FILES / DIRECTORIES TO NEVER DEPLOY
@@ -101,11 +127,12 @@ def upload_folder(local, remote):
 
 upload_folder(LOCAL_PATH, REMOTE_PATH)
 
+
 # ============================================================
 # FIX DATABASE DIRECTORY PERMISSIONS
 # ============================================================
 
-permission_command = r'''
+permission_command = r"""
 SERVICE_USER=$(systemctl show -p User --value scada)
 if [ -z "$SERVICE_USER" ]; then SERVICE_USER=root; fi
 
@@ -124,9 +151,10 @@ echo "SERVICE_USER=$SERVICE_USER"
 echo "SERVICE_GROUP=$SERVICE_GROUP"
 echo "DATABASE PERMISSIONS:"
 ls -la /var/www/scada/data
-'''
+"""
 
 run_remote(permission_command, "Fixing SQLite database permissions...")
+
 
 # ============================================================
 # CHECK PYTHON SYNTAX
@@ -134,10 +162,11 @@ run_remote(permission_command, "Fixing SQLite database permissions...")
 
 run_remote(
     "cd /var/www/scada && .venv/bin/python -m py_compile "
-    "database.py app.py flow_runner.py services/trend_aggregation.py "
-    "services/trend_runtime_fix.py",
+    "database.py app.py flow_runner.py "
+    "services/trend_aggregation.py services/trend_runtime_fix.py",
     "Checking Python syntax...",
 )
+
 
 # ============================================================
 # RESTART SCADA
@@ -145,11 +174,13 @@ run_remote(
 
 run_remote("systemctl restart scada", "Restarting SCADA service...")
 
+
 # ============================================================
 # CHECK SERVICE STATUS
 # ============================================================
 
 run_remote("systemctl status scada --no-pager -l", "Checking SCADA service...")
+
 
 # ============================================================
 # FORCE ONE TREND AGGREGATION PASS
@@ -162,11 +193,11 @@ from services.trend_runtime_fix import aggregate_once_local_time
 
 conn = sqlite3.connect(DB_CONFIG['path'])
 conn.row_factory = sqlite3.Row
-latest = conn.execute(\"SELECT MAX(Timestamp) AS LatestTimestamp FROM PLC_Data WHERE (StorageType IS NULL OR UPPER(StorageType) IN ('EDGE','TIME'))\").fetchone()['LatestTimestamp']
+latest = conn.execute(\"SELECT MAX(datetime(replace(Timestamp, 'T', ' '))) AS LatestTimestamp FROM PLC_Data WHERE (StorageType IS NULL OR UPPER(StorageType) IN ('EDGE','TIME'))\").fetchone()['LatestTimestamp']
 print('LATEST_PLC_TIMESTAMP=', latest)
 conn.close()
 
-written = aggregate_once_local_time()
+written = aggregate_once_local_time(force=True)
 print('TREND_FORCE_WRITE=', written)
 
 conn = sqlite3.connect(DB_CONFIG['path'])
@@ -178,6 +209,7 @@ conn.close()
 
 run_remote(trend_command, "Forcing one Trend aggregation pass...")
 
+
 # ============================================================
 # SHOW TREND LOGS
 # ============================================================
@@ -186,6 +218,7 @@ run_remote(
     "journalctl -u scada -n 120 --no-pager -o cat | grep -i 'TREND AGGREGATION' || true",
     "Recent Trend aggregation logs...",
 )
+
 
 # ============================================================
 # TEST FLASK LOCALLY
@@ -196,6 +229,7 @@ run_remote(
     "Testing Flask locally...",
 )
 
+
 # ============================================================
 # TEST PUBLIC DOMAIN
 # ============================================================
@@ -205,6 +239,7 @@ run_remote(
     "Testing public domain...",
 )
 
+
 # ============================================================
 # SHOW RECENT SCADA LOGS
 # ============================================================
@@ -213,6 +248,7 @@ run_remote(
     "journalctl -u scada -n 80 --no-pager -o cat",
     "Recent SCADA logs...",
 )
+
 
 sftp.close()
 ssh.close()
