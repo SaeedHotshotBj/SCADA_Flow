@@ -4,6 +4,8 @@
 # EDGE TIMEOUT CONFIGURATION
 # =====================================================
 
+from datetime import datetime
+
 from socket_manager import send_dashboard_data
 
 
@@ -68,7 +70,14 @@ class DashboardOutput:
 
             "Roles": engaged_roles,
 
-            "EdgeTimeout": self.timeout
+            "EdgeTimeout": self.timeout,
+
+            "CompanyID": data.get("CompanyID"),
+
+            "Timestamp": data.get(
+                "Timestamp",
+                datetime.now().isoformat()
+            )
 
         }
 
