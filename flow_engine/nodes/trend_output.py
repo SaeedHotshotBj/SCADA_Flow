@@ -61,10 +61,6 @@ class TrendOutput:
         if dt is None:
             return None
 
-        # Historian timestamps are naive local wall-clock timestamps.
-        # Treat them as wall-clock UTC for a stable axis shared with the
-        # browser's wallClockX() implementation. This does not alter the
-        # displayed Jalali label.
         return int(
             dt.replace(tzinfo=timezone.utc).timestamp() * 1000
         )
@@ -100,6 +96,31 @@ class TrendOutput:
     def _normalize_tag(value):
         return str(value or "").strip().lower()
 
+    @staticmethod
+    def _stats_from_points(points):
+        values = [
+            float(point["y"])
+            for point in points
+            if point.get("y") is not None
+        ]
+
+        if not values:
+            return {
+                "resolution": None,
+                "min": None,
+                "max": None,
+                "weighted_average": None,
+                "sample_count": 0,
+            }
+
+        return {
+            "resolution": "minute",
+            "min": min(values),
+            "max": max(values),
+            "weighted_average": sum(values) / len(values),
+            "sample_count": len(values),
+        }
+
     def execute(self, data=None):
         if data is None:
             data = {}
@@ -113,6 +134,8 @@ class TrendOutput:
 
         if not selected_tag:
             tags = request.get("Tags", []) or []
+            if isinstance(tags, str):
+                tags = [tags]
             if len(tags) == 1:
                 selected_tag = tags[0]
 
@@ -132,24 +155,32 @@ class TrendOutput:
                 continue
 
             key = self._normalize_tag(tag)
-            grouped.setdefault(key, {
+            group = grouped.setdefault(key, {
                 "tag": tag,
                 "title": tag,
                 "data": [],
                 "stepped": "after",
-            })["data"].append(point)
+            })
+            group["data"].append(point)
+
+        for group in grouped.values():
+            group["data"].sort(key=lambda p: p["x"])
 
         output = []
 
         if selected_key:
             group = grouped.get(selected_key)
+
+            # The requested tag is allowed to differ only by case/whitespace.
+            # If the node chain returned exactly one tag, use that group as a
+            # compatibility fallback rather than producing an empty chart.
+            if group is None and len(grouped) == 1:
+                group = next(iter(grouped.values()))
+
             if group is not None:
-                group["data"].sort(key=lambda p: p["x"])
                 output.append(group)
         else:
-            for group in grouped.values():
-                group["data"].sort(key=lambda p: p["x"])
-                output.append(group)
+            output = list(grouped.values())
 
         stats = data.get("TrendStats", {}) or {}
         selected_stats = stats.get(selected_tag, {}) if selected_tag else {}
@@ -160,6 +191,20 @@ class TrendOutput:
                     selected_stats = value or {}
                     break
 
+        if not selected_stats or selected_stats.get("min") is None:
+            if output:
+                selected_stats = self._stats_from_points(
+                    output[0].get("data", [])
+                )
+            else:
+                selected_stats = {
+                    "resolution": None,
+                    "min": None,
+                    "max": None,
+                    "weighted_average": None,
+                    "sample_count": 0,
+                }
+
         data["ChartData"] = {
             "datasets": output,
             "stats": selected_stats,
@@ -169,6 +214,7 @@ class TrendOutput:
         print(
             "TREND OUTPUT:",
             "Tag=", selected_tag,
+            "InputRecords=", len(trend_data),
             "Datasets=", len(output),
             "Points=", sum(len(ds.get("data", [])) for ds in output),
             "Stats=", selected_stats,
