@@ -19,28 +19,14 @@ class TrendReader:
         # =================================================
         # HISTORICAL TREND REQUEST
         # =================================================
-        # The Trend HTTP request already contains the complete
-        # request. Build the database/output branch here so the
-        # result does not depend on the realtime PLC branch.
+        # The request is already present when FlowRunner reaches
+        # this node. TrendReader must NOT execute downstream nodes
+        # itself. FlowRunner follows the Drawflow connections:
+        # TrendReader -> SQLWriter -> TrendDatabaseReader -> TrendOutput.
+        # Keeping the payload unchanged preserves the user's
+        # connection-driven flow architecture.
         if "TrendRequest" in data:
-            try:
-                from flow_engine.nodes.trend_database_reader import TrendDatabaseReader
-                from flow_engine.nodes.trend_output import TrendOutput
-
-                reader = TrendDatabaseReader({
-                    "company_id": self.config.get("company_id")
-                })
-                result = reader.execute(data)
-                output = TrendOutput({})
-                return output.execute(result)
-            except Exception as exc:
-                print("TREND REQUEST ERROR:", exc)
-                data["ChartData"] = {
-                    "datasets": [],
-                    "stats": {},
-                    "resolution": None,
-                }
-                return data
+            return data
 
         # =================================================
         # OLD STYLE DIRECT REQUEST
@@ -53,7 +39,7 @@ class TrendReader:
                 "End": data.get("end"),
                 "Calendar": data.get("calendar", "Gregorian"),
             }
-            return self.execute(data)
+            return data
 
         # =================================================
         # FLOW STARTUP
