@@ -47,7 +47,7 @@ button:hover{background:#1e40af}
 {% include "nav.html" %}
 <div class="header">
     <div class="title">سامانه مانیتورینگ صنعتی SCADA</div>
-    <div class="subtitle">روند تاریخی + نمایش لحظه‌ای مستقل از ذخیره‌سازی Trend</div>
+    <div class="subtitle">روند تاریخی + مقدار Live مستقل از فیلتر تاریخی</div>
 </div>
 <div class="container">
 
@@ -81,319 +81,59 @@ button:hover{background:#1e40af}
 
 <div class="card">
     <div class="stats">
-        <div class="stat">
-            <div class="stat-title">مقدار فعلی Live</div>
-            <div class="stat-value" id="current">-</div>
-        </div>
-        <div class="stat">
-            <div class="stat-title">کمترین مقدار</div>
-            <div class="stat-value" id="min">-</div>
-        </div>
-        <div class="stat">
-            <div class="stat-title">بیشترین مقدار</div>
-            <div class="stat-value" id="max">-</div>
-        </div>
-        <div class="stat">
-            <div class="stat-title">میانگین وزنی زمانی</div>
-            <div class="stat-value" id="avg">-</div>
-        </div>
+        <div class="stat"><div class="stat-title">مقدار فعلی Live</div><div class="stat-value" id="current">-</div></div>
+        <div class="stat"><div class="stat-title">کمترین مقدار</div><div class="stat-value" id="min">-</div></div>
+        <div class="stat"><div class="stat-title">بیشترین مقدار</div><div class="stat-value" id="max">-</div></div>
+        <div class="stat"><div class="stat-title">میانگین وزنی زمانی</div><div class="stat-value" id="avg">-</div></div>
     </div>
 </div>
 
-<div class="card chart-card">
-    <div class="chart-wrap">
-        <canvas id="trendChart"></canvas>
-    </div>
-</div>
+<div class="card chart-card"><div class="chart-wrap"><canvas id="trendChart"></canvas></div></div>
 
 </div>
 <script>
-let chart=null;
-let liveMode=false;
-let busy=false;
-let livePoints=[];
-let socket=null;
+let chart=null,liveMode=false,busy=false,livePoints=[],socket=null;
 const MAX_LIVE_POINTS=7200;
 const el=id=>document.getElementById(id);
-
 const sessionCompanyId={{ (session.get('company_id') or session.get('selected_company_id'))|tojson }};
 
 function setupPicker(){
-    if(!window.jQuery || !jQuery.fn || !jQuery.fn.persianDatepicker){
-        throw new Error('Persian date picker library is not loaded');
-    }
-    const opts={
-        format:'YYYY/MM/DD HH:mm',
-        initialValue:false,
-        autoClose:false,
-        observer:true,
-        timePicker:{enabled:true,step:1,hour:{enabled:true},minute:{enabled:true},second:{enabled:false},meridian:{enabled:false}}
-    };
-    jQuery('#start_time').persianDatepicker(opts);
-    jQuery('#end_time').persianDatepicker({...opts});
+    if(!window.jQuery||!jQuery.fn||!jQuery.fn.persianDatepicker)throw new Error('Persian date picker library is not loaded');
+    const opts={format:'YYYY/MM/DD HH:mm',initialValue:false,autoClose:false,observer:true,timePicker:{enabled:true,step:1,hour:{enabled:true},minute:{enabled:true},second:{enabled:false},meridian:{enabled:false}}};
+    jQuery('#start_time').persianDatepicker(opts);jQuery('#end_time').persianDatepicker({...opts});
 }
-
-function formatNumber(value){
-    if(value===null || value===undefined || !Number.isFinite(Number(value)))return '-';
-    const n=Number(value);
-    return Number.isInteger(n)?String(n):n.toFixed(2);
-}
-
-function setStats(stats){
-    stats=stats||{};
-    el('min').textContent=formatNumber(stats.min);
-    el('max').textContent=formatNumber(stats.max);
-    el('avg').textContent=formatNumber(stats.weighted_average);
-    el('resolution').textContent=({minute:'Resolution: Minute',hour:'Resolution: Hour',day:'Resolution: Day',raw:'Resolution: Raw'})[stats.resolution]||'Historical';
-}
-
-function updateCurrent(value){
-    el('current').textContent=formatNumber(value);
-}
-
+function formatNumber(value){if(value===null||value===undefined||!Number.isFinite(Number(value)))return '-';const n=Number(value);return Number.isInteger(n)?String(n):n.toFixed(2);}
+function setStats(stats){stats=stats||{};el('min').textContent=formatNumber(stats.min);el('max').textContent=formatNumber(stats.max);el('avg').textContent=formatNumber(stats.weighted_average);el('resolution').textContent=({minute:'Resolution: Minute',hour:'Resolution: Hour',day:'Resolution: Day',raw:'Resolution: Raw'})[stats.resolution]||'Historical';}
+function updateCurrent(value){el('current').textContent=formatNumber(value);}
 async function loadTags(){
     try{
-        const r=await fetch('/trend_config?_='+Date.now(),{cache:'no-store',credentials:'same-origin'});
-        const d=await r.json();
+        const r=await fetch('/trend_config?_='+Date.now(),{cache:'no-store',credentials:'same-origin'}),d=await r.json();
         if(!r.ok)throw Error(d.message||('HTTP '+r.status));
-        const s=el('tag');
-        s.innerHTML='';
-        (d.tags||[]).forEach(x=>{
-            const o=document.createElement('option');
-            o.value=x.tag;
-            o.textContent=x.title;
-            s.appendChild(o);
-        });
+        const s=el('tag');s.innerHTML='';
+        (d.tags||[]).forEach(x=>{const o=document.createElement('option');o.value=x.tag;o.textContent=x.title;s.appendChild(o);});
         el('parameterName').textContent=s.value||'-';
-        s.onchange=()=>{
-            el('parameterName').textContent=s.value||'-';
-            livePoints=[];
-            updateCurrent(null);
-        };
-        setupPicker();
-        el('status').textContent=(d.tags||[]).length?'بازه خالی = Live. سه باکس آماری فقط از بازه تاریخی محاسبه می‌شوند.':'هیچ پارامتر TIME پیدا نشد.';
-        connectLiveSocket();
-    }catch(e){
-        console.error(e);
-        el('status').textContent='خطا در خواندن پارامترها: '+e.message;
-    }
+        s.onchange=()=>{el('parameterName').textContent=s.value||'-';livePoints=[];if(chart){chart.destroy();chart=null;}updateCurrent(null);requestLatestLive();};
+        setupPicker();el('status').textContent=(d.tags||[]).length?'Trend از مسیر نودهای متصل خوانده می‌شود.':'هیچ پارامتر TIME پیدا نشد.';connectLiveSocket();
+    }catch(e){console.error(e);el('status').textContent='خطا در خواندن پارامترها: '+e.message;}
 }
-
-function jalaliNow(){
-    return new persianDate().format('YYYY/MM/DD HH:mm');
-}
-
-function jalaliHoursAgo(hours){
-    return new persianDate().subtract('hours',hours).format('YYYY/MM/DD HH:mm');
-}
-
+function jalaliNow(){return new persianDate().format('YYYY/MM/DD HH:mm');}
 async function requestTrend(start,end){
-    const payload={
-        tag:el('tag').value,
-        start:start||null,
-        end:end||null,
-        calendar:'Jalali'
-    };
-    const r=await fetch('/trend_request?_='+Date.now(),{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},
-        credentials:'same-origin',
-        cache:'no-store',
-        body:JSON.stringify(payload)
-    });
-    const d=await r.json();
-    if(!r.ok)throw Error(d.error||('HTTP '+r.status));
-    return d;
+    const r=await fetch('/trend_request?_='+Date.now(),{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({tag:el('tag').value,start:start||null,end:end||null,calendar:'Jalali'})});
+    const d=await r.json();if(!r.ok)throw Error(d.error||('HTTP '+r.status));return d;
 }
-
-function normalizePoints(ds){
-    return (ds?.data||[])
-        .map(p=>({x:Number(p.x),y:Number(p.y),label:p.label||''}))
-        .filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y))
-        .sort((a,b)=>a.x-b.x);
-}
-
-function wallClockX(timestamp){
-    if(!timestamp)return null;
-    const text=String(timestamp).trim().replace('T',' ').replace('Z','');
-    const m=text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/);
-    if(!m)return null;
-    const year=Number(m[1]),month=Number(m[2]),day=Number(m[3]);
-    const hour=Number(m[4]),minute=Number(m[5]),second=Number(m[6]);
-    const millis=Number((m[7]||'0').padEnd(3,'0'));
-    const ordinal=Math.floor(Date.UTC(year,month-1,day)/86400000);
-    return ordinal*86400000+hour*3600000+minute*60000+second*1000+millis;
-}
-
-function labelFromTimestamp(timestamp){
-    if(!timestamp)return '';
-    const text=String(timestamp).replace('T',' ').replace('Z','');
-    const m=text.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
-    if(!m)return text;
-    try{
-        return new persianDate([Number(m[1]),Number(m[2]),Number(m[3]),Number(m[4]),Number(m[5]),Number(m[6])]).format('YYYY/MM/DD HH:mm:ss');
-    }catch(e){return text;}
-}
-
-function nearestLabel(ms){
-    if(!chart||!chart.data.datasets.length)return '';
-    const points=chart.data.datasets[0].data||[];
-    if(!points.length)return '';
-    let best=points[0];
-    let distance=Math.abs(Number(best.x)-Number(ms));
-    for(const p of points){
-        const d=Math.abs(Number(p.x)-Number(ms));
-        if(d<distance){best=p;distance=d;}
-    }
-    return best.label||'';
-}
-
-function createChart(points,title){
-    if(chart)chart.destroy();
-    chart=new Chart(el('trendChart'),{
-        type:'line',
-        data:{datasets:[{
-            label:title||el('tag').value,
-            data:points,
-            borderWidth:3,
-            tension:0,
-            stepped:'after',
-            pointRadius:2,
-            pointHoverRadius:7,
-            fill:false,
-            borderColor:'#2563eb',
-            backgroundColor:'#2563eb'
-        }]},
-        options:{
-            responsive:true,
-            maintainAspectRatio:false,
-            animation:false,
-            parsing:false,
-            spanGaps:false,
-            interaction:{mode:'nearest',intersect:false},
-            scales:{
-                x:{
-                    type:'linear',
-                    ticks:{maxTicksLimit:14,callback:v=>nearestLabel(v)},
-                    title:{display:true,text:'زمان'}
-                },
-                y:{beginAtZero:false,title:{display:true,text:title||el('tag').value}}
-            },
-            plugins:{
-                legend:{position:'top'},
-                tooltip:{
-                    rtl:true,
-                    callbacks:{
-                        title:items=>items.length?(items[0].raw?.label||nearestLabel(items[0].parsed.x)):'',
-                        label:item=>' '+item.parsed.y
-                    }
-                },
-                zoom:{
-                    pan:{enabled:true,mode:'x'},
-                    zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}
-                }
-            }
-        }
-    });
-}
-
-function drawHistorical(d){
-    const ds=(d.datasets||[]).find(x=>x.tag===el('tag').value)||(d.datasets||[])[0];
-    const points=normalizePoints(ds);
-    createChart(points,ds?.title||el('tag').value);
-    setStats(d.stats||{});
-    if(points.length)updateCurrent(points[points.length-1].y);
-}
-
-function appendLivePoint(value,timestamp){
-    const x=wallClockX(timestamp)||wallClockX(new Date().toISOString());
-    if(x===null)return;
-    const point={x:x,y:Number(value),label:labelFromTimestamp(timestamp)};
-    if(!Number.isFinite(point.y))return;
-
-    const last=livePoints[livePoints.length-1];
-    if(last && Number(last.x)===Number(point.x) && Number(last.y)===Number(point.y))return;
-
-    livePoints.push(point);
-    if(livePoints.length>MAX_LIVE_POINTS){
-        livePoints.splice(0,livePoints.length-MAX_LIVE_POINTS);
-    }
-
-    if(!chart){
-        createChart(livePoints,el('tag').value);
-        return;
-    }
-
-    chart.data.datasets[0].data=livePoints;
-    chart.update('none');
-    updateCurrent(point.y);
-}
-
-function connectLiveSocket(){
-    if(socket)socket.disconnect();
-    socket=io({transports:['websocket','polling']});
-    socket.on('connect',()=>{
-        if(liveMode){
-            el('status').textContent='Live Trend فعال است — دریافت مستقیم داده بدون Query جدید از DB';
-        }
-    });
-    socket.on('tag_update',payload=>{
-        if(!liveMode)return;
-        if(sessionCompanyId!==null && sessionCompanyId!==undefined && Number(payload.CompanyID)!==Number(sessionCompanyId))return;
-        if(String(payload.Tag||'').toLowerCase()!==String(el('tag').value||'').toLowerCase())return;
-        appendLivePoint(payload.Value,payload.Timestamp);
-    });
-}
-
-async function loadGraph(){
-    liveMode=false;
-    livePoints=[];
-    const start=el('start_time').value.trim();
-    const end=el('end_time').value.trim();
-
-    if((start&&!end)||(!start&&end)){
-        el('status').textContent='لطفاً هر دو تاریخ شروع و پایان را وارد کنید.';
-        return;
-    }
-
-    busy=true;
-    try{
-        if(!start&&!end){
-            const d=await requestTrend(jalaliHoursAgo(2),jalaliNow());
-            drawHistorical(d);
-            livePoints=normalizePoints((d.datasets||[]).find(x=>x.tag===el('tag').value)||(d.datasets||[])[0]);
-            liveMode=true;
-            el('status').textContent='Live Trend — فقط بارگذاری اولیه از DB؛ بعد از آن داده‌ها مستقیم از Socket دریافت می‌شوند.';
-        }else{
-            const d=await requestTrend(start,end);
-            drawHistorical(d);
-            liveMode=false;
-            el('status').textContent='Trend تاریخی — آمار فقط مربوط به بازه انتخاب‌شده است؛ Live به این حالت اضافه نمی‌شود.';
-        }
-    }catch(e){
-        console.error(e);
-        el('status').textContent='خطا در خواندن Trend: '+e.message;
-    }finally{
-        busy=false;
-    }
-}
-
-function resetZoom(){
-    if(chart)chart.resetZoom();
-}
-
-function saveGraph(){
-    if(!chart)return;
-    const a=document.createElement('a');
-    a.href=chart.toBase64Image();
-    a.download=(el('tag').value||'trend')+'_trend.png';
-    a.click();
-}
-
-window.addEventListener('beforeunload',()=>{
-    if(socket)socket.disconnect();
-});
-
+function normalizePoints(ds){return(ds?.data||[]).map(p=>({x:Number(p.x),y:Number(p.y),label:p.label||''})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);}
+function wallClockX(timestamp){if(!timestamp)return null;const t=String(timestamp).trim().replace('T',' ').replace('Z','');const m=t.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/);if(!m)return null;return Date.UTC(Number(m[1]),Number(m[2])-1,Number(m[3]),Number(m[4]),Number(m[5]),Number(m[6]),Number((m[7]||'0').padEnd(3,'0')));}
+function labelFromTimestamp(timestamp){if(!timestamp)return '';const t=String(timestamp).replace('T',' ').replace('Z',''),m=t.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);if(!m)return t;try{return new persianDate([Number(m[1]),Number(m[2]),Number(m[3]),Number(m[4]),Number(m[5]),Number(m[6])]).format('YYYY/MM/DD HH:mm:ss');}catch(e){return t;}}
+function nearestLabel(ms){if(!chart||!chart.data.datasets.length)return '';const points=chart.data.datasets[0].data||[];if(!points.length)return '';let best=points[0],distance=Math.abs(Number(best.x)-Number(ms));for(const p of points){const d=Math.abs(Number(p.x)-Number(ms));if(d<distance){best=p;distance=d;}}return best.label||'';}
+function createChart(points,title){if(chart)chart.destroy();chart=new Chart(el('trendChart'),{type:'line',data:{datasets:[{label:title||el('tag').value,data:points,borderWidth:3,tension:0,stepped:'after',pointRadius:2,pointHoverRadius:7,fill:false,borderColor:'#2563eb',backgroundColor:'#2563eb'}]},options:{responsive:true,maintainAspectRatio:false,animation:false,parsing:false,spanGaps:false,interaction:{mode:'nearest',intersect:false},scales:{x:{type:'linear',ticks:{maxTicksLimit:14,callback:v=>nearestLabel(v)},title:{display:true,text:'زمان'}},y:{beginAtZero:false,title:{display:true,text:title||el('tag').value}}},plugins:{legend:{position:'top'},tooltip:{rtl:true,callbacks:{title:items=>items.length?(items[0].raw?.label||nearestLabel(items[0].parsed.x)):'',label:item=>' '+item.parsed.y}},zoom:{pan:{enabled:true,mode:'x'},zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}}}}});}
+function drawHistorical(d){const wanted=String(el('tag').value||'').toLowerCase();const ds=(d.datasets||[]).find(x=>String(x.tag||'').toLowerCase()===wanted)||(d.datasets||[])[0];const points=normalizePoints(ds);createChart(points,ds?.title||el('tag').value);setStats(d.stats||{});el('status').textContent=points.length?`Trend تاریخی: ${points.length} نقطه`:'Trend تاریخی: داده‌ای برای این بازه پیدا نشد.';}
+function appendLivePoint(value,timestamp){const x=wallClockX(timestamp);if(x===null)return;const point={x:x,y:Number(value),label:labelFromTimestamp(timestamp)};if(!Number.isFinite(point.y))return;livePoints.push(point);if(livePoints.length>MAX_LIVE_POINTS)livePoints.splice(0,livePoints.length-MAX_LIVE_POINTS);updateCurrent(point.y);if(liveMode){if(!chart){createChart(livePoints,el('tag').value);return;}chart.data.datasets[0].data=livePoints;chart.update('none');}}
+async function requestLatestLive(){try{const r=await fetch('/dashboard/latest?_='+Date.now(),{cache:'no-store',credentials:'same-origin'}),d=await r.json(),tag=el('tag').value,value=d?.Tags?.[tag];if(value!==undefined)updateCurrent(value);}catch(e){console.debug('LIVE latest read failed',e);}}
+function connectLiveSocket(){if(socket)socket.disconnect();socket=io({transports:['websocket','polling']});socket.on('connect',()=>{el('status').textContent='اتصال Live برقرار است.';requestLatestLive();});socket.on('tag_update',payload=>{if(sessionCompanyId!==null&&sessionCompanyId!==undefined&&payload.CompanyID!==null&&payload.CompanyID!==undefined&&Number(payload.CompanyID)!==Number(sessionCompanyId))return;if(String(payload.Tag||'').toLowerCase()!==String(el('tag').value||'').toLowerCase())return;appendLivePoint(payload.Value,payload.Timestamp);});}
+async function loadGraph(){liveMode=false;livePoints=[];const start=el('start_time').value.trim(),end=el('end_time').value.trim();if((start&&!end)||(!start&&end)){el('status').textContent='لطفاً هر دو تاریخ شروع و پایان را وارد کنید.';return;}busy=true;try{if(!start&&!end){const d=await requestTrend(null,jalaliNow());drawHistorical(d);liveMode=true;}else{const d=await requestTrend(start,end);drawHistorical(d);liveMode=false;requestLatestLive();}}catch(e){console.error(e);el('status').textContent='خطا در خواندن Trend: '+e.message;}finally{busy=false;}}
+function resetZoom(){if(chart)chart.resetZoom();}
+function saveGraph(){if(!chart)return;const a=document.createElement('a');a.href=chart.toBase64Image();a.download=(el('tag').value||'trend')+'_trend.png';a.click();}
+window.addEventListener('beforeunload',()=>{if(socket)socket.disconnect();});
 loadTags();
 </script>
 </body>
