@@ -49,18 +49,19 @@ class DashboardOutput:
             {}
         )
 
-        # =================================================
-        # ROLE INFORMATION
-        # =================================================
-
         engaged_roles = data.get(
             "EngagedRoles",
             []
         )
 
-        # =================================================
-        # BUILD OUTPUT
-        # =================================================
+        company_id = data.get("CompanyID")
+        if company_id is None:
+            company_id = self.config.get("company_id")
+
+        timestamp = data.get(
+            "Timestamp",
+            datetime.now().isoformat()
+        )
 
         output = {
 
@@ -72,18 +73,11 @@ class DashboardOutput:
 
             "EdgeTimeout": self.timeout,
 
-            "CompanyID": data.get("CompanyID"),
+            "CompanyID": company_id,
 
-            "Timestamp": data.get(
-                "Timestamp",
-                datetime.now().isoformat()
-            )
+            "Timestamp": timestamp
 
         }
-
-        # =================================================
-        # FILTER WIDGETS
-        # =================================================
 
         if self.widgets:
 
@@ -100,10 +94,6 @@ class DashboardOutput:
         else:
 
             output["Tags"] = tags
-
-        # =================================================
-        # SEND DASHBOARD DATA
-        # =================================================
 
         try:
 
@@ -128,10 +118,6 @@ class DashboardOutput:
                 "DASHBOARD OUTPUT ERROR:",
                 e
             )
-
-        # =================================================
-        # RETURN
-        # =================================================
 
         data["DashboardData"] = output
 
