@@ -2,7 +2,7 @@
 # SCADA_FLOW TREND DATABASE READER NODE
 # =====================================================
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import jdatetime
 
 from services.trend_aggregation import (
@@ -13,9 +13,6 @@ from services.trend_aggregation import (
 from database import row_value
 
 
-# Start the single coordinated trend aggregation worker as soon as the
-# Trend database reader is loaded by the SCADA application. The underlying
-# lease prevents multiple server processes from aggregating simultaneously.
 try:
     start_aggregation_worker()
 except Exception as exc:
@@ -32,50 +29,49 @@ class TrendDatabaseReader:
     def _normalize_digits(text):
         if text is None:
             return text
-
         return str(text).translate(str.maketrans(
             "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
             "01234567890123456789"
         ))
 
+    @staticmethod
+    def _normalize_tag(value):
+        return str(value or "").strip().lower()
+
     def normalize_date(self, value, calendar, timezone_offset=None):
-        """Convert user wall-clock date/time to historian naive datetime."""
         if not value:
             return None
 
-        try:
-            text = self._normalize_digits(value)
-            text = text.strip().replace("-", "/").replace("T", " ")
+        text = self._normalize_digits(value)
+        text = text.strip().replace("T", " ")
 
-            if calendar == "Jalali":
-                for fmt in (
-                    "%Y/%m/%d %H:%M:%S",
-                    "%Y/%m/%d %H:%M",
-                ):
-                    try:
-                        return jdatetime.datetime.strptime(
-                            text,
-                            fmt
-                        ).togregorian()
-                    except ValueError:
-                        pass
-                return None
-
+        if calendar == "Jalali":
+            text = text.replace("-", "/")
             for fmt in (
+                "%Y/%m/%d %H:%M:%S.%f",
                 "%Y/%m/%d %H:%M:%S",
                 "%Y/%m/%d %H:%M",
-                "%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%d %H:%M",
             ):
                 try:
-                    return datetime.strptime(text, fmt)
+                    return jdatetime.datetime.strptime(text, fmt).togregorian()
                 except ValueError:
                     pass
-
             return None
 
-        except Exception:
-            return None
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y/%m/%d %H:%M:%S.%f",
+            "%Y/%m/%d %H:%M:%S",
+            "%Y/%m/%d %H:%M",
+        ):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                pass
+
+        return None
 
     @staticmethod
     def _row_timestamp(row):
@@ -85,27 +81,78 @@ class TrendDatabaseReader:
     def _row_value(row):
         return row_value(row, "Value", 1)
 
+    @staticmethod
+    def _sort_timestamp(item):
+        value = item.get("Timestamp")
+        if value is None:
+            return datetime.min
+        if isinstance(value, datetime):
+            return value
+
+        text = str(value).strip().replace("T", " ")
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+        ):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                pass
+        return datetime.min
+
     def execute(self, data=None):
         if data is None:
             data = {}
 
         request = data.get("TrendRequest", {}) or {}
+
         selected_tag = request.get("Tag")
         tags = request.get("Tags", []) or []
 
+        if isinstance(tags, str):
+            tags = [tags]
+
         if selected_tag:
             tags = [selected_tag]
-        elif len(tags) == 1:
-            selected_tag = tags[0]
+        else:
+            tags = [tag for tag in tags if str(tag).strip()]
+            if len(tags) == 1:
+                selected_tag = tags[0]
+
+        normalized_tags = []
+        for tag in tags:
+            tag = str(tag).strip()
+            if tag and self._normalize_tag(tag) not in {
+                self._normalize_tag(x) for x in normalized_tags
+            }:
+                normalized_tags.append(tag)
+        tags = normalized_tags
+
+        calendar = request.get("Calendar", "Gregorian")
 
         start = self.normalize_date(
             request.get("Start"),
-            request.get("Calendar", "Gregorian")
+            calendar
         )
         end = self.normalize_date(
             request.get("End"),
-            request.get("Calendar", "Gregorian")
+            calendar
         )
+
+        if start is None and end is None:
+            end = datetime.now().replace(microsecond=0)
+            start = end - timedelta(hours=2)
+        elif start is None or end is None:
+            print(
+                "TREND DATABASE READER: incomplete date range",
+                request.get("Start"),
+                request.get("End")
+            )
+            data["TrendData"] = []
+            data["TrendStats"] = {}
+            data["TrendResolution"] = {}
+            return data
 
         company_id = data.get("CompanyID")
         if company_id is None:
@@ -116,23 +163,17 @@ class TrendDatabaseReader:
         try:
             company_id = int(company_id)
         except (TypeError, ValueError):
+            print("TREND DATABASE READER: invalid CompanyID:", company_id)
             data["TrendData"] = []
             data["TrendStats"] = {}
+            data["TrendResolution"] = {}
             return data
 
         trend = []
         stats_by_tag = {}
         resolutions = {}
 
-        if start is None or end is None:
-            end = datetime.now()
-            start = end.replace(microsecond=0)
-            start = start.fromtimestamp(start.timestamp() - 7200)
-
         for tag in tags:
-            if not tag:
-                continue
-
             try:
                 resolution, rows = get_trend_series(
                     company_id,
@@ -140,30 +181,44 @@ class TrendDatabaseReader:
                     start,
                     end
                 )
+
+                normalized_key = self._normalize_tag(tag)
                 resolutions[tag] = resolution
 
-                if resolution == "raw":
-                    for row in rows:
-                        trend.append({
-                            "Tag": tag,
-                            "Timestamp": row["Timestamp"],
-                            "Value": row["Value"]
-                        })
-                else:
-                    for row in rows:
-                        trend.append({
-                            "Tag": tag,
-                            "Timestamp": self._row_timestamp(row),
-                            "Value": self._row_value(row)
-                        })
+                matched_rows = rows or []
 
-                stats_by_tag[tag] = get_trend_stats(
+                for row in matched_rows:
+                    value = self._row_value(row)
+                    timestamp = self._row_timestamp(row)
+                    if timestamp is None or value is None:
+                        continue
+                    trend.append({
+                        "Tag": tag,
+                        "Timestamp": timestamp,
+                        "Value": value,
+                    })
+
+                stats = get_trend_stats(
                     company_id,
                     tag,
                     start,
                     end
                 )
-            except Exception:
+                stats_by_tag[tag] = stats
+
+                print(
+                    "TREND DATABASE READER:",
+                    "Company=", company_id,
+                    "Tag=", tag,
+                    "Key=", normalized_key,
+                    "Start=", start,
+                    "End=", end,
+                    "Resolution=", resolution,
+                    "Rows=", len(matched_rows),
+                    "Stats=", stats,
+                )
+
+            except Exception as exc:
                 resolutions[tag] = "error"
                 stats_by_tag[tag] = {
                     "resolution": "error",
@@ -172,40 +227,37 @@ class TrendDatabaseReader:
                     "weighted_average": None,
                     "sample_count": 0,
                 }
+                print(
+                    "TREND DATABASE READER ERROR:",
+                    "Company=", company_id,
+                    "Tag=", tag,
+                    "Start=", start,
+                    "End=", end,
+                    "Error=", repr(exc),
+                )
 
-        def _trend_timestamp(item):
-            value = item.get("Timestamp")
-            if value is None:
-                return datetime.min
-            if hasattr(value, "timestamp"):
-                return value
-            text = str(value).replace("T", " ")
-            for fmt in (
-                "%Y-%m-%d %H:%M:%S.%f",
-                "%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%d %H:%M"
-            ):
-                try:
-                    return datetime.strptime(text, fmt)
-                except ValueError:
-                    pass
-            return datetime.min
+        trend.sort(key=self._sort_timestamp)
 
-        trend.sort(
-            key=_trend_timestamp
-        )
-
+        data["CompanyID"] = company_id
         data["TrendRequest"] = {
             "Tag": selected_tag,
             "Tags": tags,
             "Start": start,
             "End": end,
-            "Calendar": request.get("Calendar", "Gregorian"),
+            "Calendar": calendar,
             "CompanyID": company_id,
-            "TimezoneOffset": None
+            "TimezoneOffset": None,
         }
         data["TrendData"] = trend
         data["TrendStats"] = stats_by_tag
         data["TrendResolution"] = resolutions
+        data["TrendRecordCount"] = len(trend)
+
+        print(
+            "TREND DATABASE READER TOTAL:",
+            "Company=", company_id,
+            "Tags=", tags,
+            "Records=", len(trend),
+        )
 
         return data
