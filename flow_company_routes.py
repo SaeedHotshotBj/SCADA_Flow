@@ -54,7 +54,6 @@ def _report_flow_role_allowed(company_id):
     if company_id is None:
         return False
 
-    # Master users bypass company role restrictions.
     if _is_master():
         return True
 
@@ -76,7 +75,7 @@ def _report_flow_role_allowed(company_id):
         target_ids = {
             str(node_id)
             for node_id, node in nodes.items()
-            if node.get("name") == "ReportOutput"
+            if isinstance(node, dict) and node.get("name") == "ReportOutput"
         }
 
         if not target_ids:
@@ -86,7 +85,7 @@ def _report_flow_role_allowed(company_id):
         has_connected_roles_engaged = False
 
         for node_id, node in nodes.items():
-            if node.get("name") != "RolesEngaged":
+            if not isinstance(node, dict) or node.get("name") != "RolesEngaged":
                 continue
 
             connected_to_report = False
@@ -96,11 +95,15 @@ def _report_flow_role_allowed(company_id):
                 for output in outputs.values():
                     if not isinstance(output, dict):
                         continue
+
                     connections = output.get("connections", [])
                     if not isinstance(connections, list):
                         continue
 
                     for connection in connections:
+                        if not isinstance(connection, dict):
+                            continue
+
                         target = str(connection.get("node", ""))
                         if target in target_ids:
                             connected_to_report = True
@@ -114,8 +117,10 @@ def _report_flow_role_allowed(company_id):
 
             has_connected_roles_engaged = True
             roles = node.get("data", {}).get("roles", [])
+
             if isinstance(roles, str):
                 roles = [roles]
+
             if not isinstance(roles, list):
                 continue
 
@@ -124,15 +129,18 @@ def _report_flow_role_allowed(company_id):
                     role_name = str(role.get("role", "")).strip()
                 else:
                     role_name = str(role).strip()
+
                 if role_name:
                     selected_roles.append(role_name)
 
-        # Preserve the application's existing behavior: if no
-        # RolesEngaged node is connected to ReportOutput, access is open.
         if not has_connected_roles_engaged:
-            return True
+            return False
+
+        if not selected_roles:
+            return False
 
         user_role = str(session.get("role", "")).strip().lower()
+
         return any(
             user_role == str(role).strip().lower()
             for role in selected_roles
@@ -180,9 +188,19 @@ def report_page():
         return jsonify({"status": "error", "message": "Company is required"}), 403
 
     if not _report_flow_role_allowed(company_id):
-        return render_template("access_denied.html"), 403
+        response = render_template("access_denied.html")
+        return response, 403, {
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
 
-    return render_template("date_filter.html")
+    response = render_template("date_filter.html")
+    return response, 200, {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
 
 
 @flow_company_bp.post("/flow_report")
