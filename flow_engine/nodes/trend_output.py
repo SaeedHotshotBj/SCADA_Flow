@@ -2,24 +2,20 @@
 # SCADA_FLOW TREND OUTPUT NODE
 # =====================================================
 
-from datetime import datetime
+from datetime import datetime, timezone
 import jdatetime
 
 
 class TrendOutput:
 
-    def __init__(self, config):
+    def __init__(self, config=None):
         self.config = config or {}
 
     def _parse_timestamp(self, value):
         if value is None:
             return None
 
-        if (
-            hasattr(value, "year")
-            and hasattr(value, "month")
-            and hasattr(value, "day")
-        ):
+        if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
             dt = value
             if getattr(dt, "tzinfo", None) is not None:
                 dt = dt.replace(tzinfo=None)
@@ -28,6 +24,11 @@ class TrendOutput:
         text = str(value).strip().replace("T", " ")
         if text.endswith("Z"):
             text = text[:-1]
+
+        text = text.translate(str.maketrans(
+            "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+            "01234567890123456789"
+        ))
 
         if "/" in text:
             for fmt in (
@@ -60,14 +61,13 @@ class TrendOutput:
         if dt is None:
             return None
 
-        day_ms = dt.toordinal() * 86_400_000
-        time_ms = (
-            dt.hour * 3_600_000
-            + dt.minute * 60_000
-            + dt.second * 1_000
-            + dt.microsecond // 1_000
+        # Historian timestamps are naive local wall-clock timestamps.
+        # Treat them as wall-clock UTC for a stable axis shared with the
+        # browser's wallClockX() implementation. This does not alter the
+        # displayed Jalali label.
+        return int(
+            dt.replace(tzinfo=timezone.utc).timestamp() * 1000
         )
-        return day_ms + time_ms
 
     def jalali_label(self, value):
         try:
@@ -96,6 +96,10 @@ class TrendOutput:
             "label": self.jalali_label(timestamp),
         }
 
+    @staticmethod
+    def _normalize_tag(value):
+        return str(value or "").strip().lower()
+
     def execute(self, data=None):
         if data is None:
             data = {}
@@ -112,6 +116,7 @@ class TrendOutput:
             if len(tags) == 1:
                 selected_tag = tags[0]
 
+        selected_key = self._normalize_tag(selected_tag)
         grouped = {}
 
         for item in trend_data:
@@ -121,42 +126,52 @@ class TrendOutput:
 
             point = self._point(
                 item.get("Timestamp"),
-                item.get("Value", 0)
+                item.get("Value")
             )
-
             if point is None:
                 continue
 
-            grouped.setdefault(tag, []).append(point)
+            key = self._normalize_tag(tag)
+            grouped.setdefault(key, {
+                "tag": tag,
+                "title": tag,
+                "data": [],
+                "stepped": "after",
+            })["data"].append(point)
 
         output = []
 
-        if selected_tag:
-            points = grouped.get(selected_tag, [])
-            points.sort(key=lambda p: p["x"])
-            output.append({
-                "tag": selected_tag,
-                "title": selected_tag,
-                "data": points,
-                "stepped": "after",
-            })
+        if selected_key:
+            group = grouped.get(selected_key)
+            if group is not None:
+                group["data"].sort(key=lambda p: p["x"])
+                output.append(group)
         else:
-            for tag, tag_points in grouped.items():
-                tag_points.sort(key=lambda p: p["x"])
-                output.append({
-                    "tag": tag,
-                    "title": tag,
-                    "data": tag_points,
-                    "stepped": "after",
-                })
+            for group in grouped.values():
+                group["data"].sort(key=lambda p: p["x"])
+                output.append(group)
 
         stats = data.get("TrendStats", {}) or {}
         selected_stats = stats.get(selected_tag, {}) if selected_tag else {}
+
+        if not selected_stats and selected_key:
+            for key, value in stats.items():
+                if self._normalize_tag(key) == selected_key:
+                    selected_stats = value or {}
+                    break
 
         data["ChartData"] = {
             "datasets": output,
             "stats": selected_stats,
             "resolution": selected_stats.get("resolution"),
         }
+
+        print(
+            "TREND OUTPUT:",
+            "Tag=", selected_tag,
+            "Datasets=", len(output),
+            "Points=", sum(len(ds.get("data", [])) for ds in output),
+            "Stats=", selected_stats,
+        )
 
         return data
