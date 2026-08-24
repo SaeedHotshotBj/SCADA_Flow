@@ -41,7 +41,7 @@ def _aggregate_raw_bucket_normalized(conn, start, end):
                  datetime(replace(Timestamp, 'T', ' ')),
                  ID
         """,
-        (ta._ts(start), ta._ts(end), *_ALLOWED_STORAGE),
+        (ta._ts(start), ta._ts(end), *ta._ALLOWED_STORAGE),
     ).fetchall()
 
     grouped = defaultdict(list)
@@ -96,7 +96,7 @@ def aggregate_once_local_time(force=False):
         )
 
         day_end = ta._day_start(anchor)
-        day_start = day_end - timedelta(days=1)
+        day_start = ta._day_start(anchor) - timedelta(days=1)
         ta._aggregate_children(
             conn,
             "TrendHour",
