@@ -8,14 +8,12 @@ The saved Drawflow is the only source of report configuration.
 import json
 import threading
 import time
-from datetime import datetime
 
 from database import get_connection, get_company_flow
 from services.report_service import save_report_snapshot
 
 
 POLL_SECONDS = 0.5
-BURST_WINDOW_SECONDS = 5.0
 
 
 class ReportRuntime:
@@ -25,9 +23,6 @@ class ReportRuntime:
         self.last_snapshot_key = {}
         self.last_time_snapshot = {}
 
-    # -------------------------------------------------
-    # FLOW HELPERS
-    # -------------------------------------------------
     def _nodes(self, company_id):
         flow = get_company_flow(company_id)
         if not flow:
@@ -52,16 +47,14 @@ class ReportRuntime:
             if node.get("name") != "ReportOutput":
                 continue
 
+            # ReportOutput must be connected in the saved Flow.
             inputs = node.get("inputs", {}) or {}
-            connected = False
-            for input_data in inputs.values():
-                if not isinstance(input_data, dict):
-                    continue
-                connections = input_data.get("connections", [])
-                if isinstance(connections, list) and connections:
-                    connected = True
-                    break
-
+            connected = any(
+                isinstance(input_data, dict)
+                and isinstance(input_data.get("connections", []), list)
+                and bool(input_data.get("connections", []))
+                for input_data in inputs.values()
+            )
             if not connected:
                 continue
 
@@ -70,9 +63,17 @@ class ReportRuntime:
             if not isinstance(products, list) or not products:
                 continue
 
+            clean_products = [
+                p for p in products
+                if isinstance(p, dict)
+                and str(p.get("tag", "")).strip()
+            ]
+            if not clean_products:
+                continue
+
             configs.append({
                 "node_id": str(node_id),
-                "products": [p for p in products if isinstance(p, dict) and str(p.get("tag", "")).strip()],
+                "products": clean_products,
             })
 
         return configs
@@ -101,9 +102,6 @@ class ReportRuntime:
 
         return result
 
-    # -------------------------------------------------
-    # DATABASE HELPERS
-    # -------------------------------------------------
     def _latest_values(self, company_id, tags):
         if not tags:
             return {}
@@ -137,28 +135,6 @@ class ReportRuntime:
 
         return result
 
-    # -------------------------------------------------
-    # SNAPSHOT LOGIC
-    # -------------------------------------------------
-    def _fresh_enough(self, timestamp, latest):
-        if not timestamp:
-            return False
-
-        try:
-            base = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
-        except Exception:
-            return False
-
-        for item in latest.values():
-            try:
-                value_time = datetime.fromisoformat(str(item["timestamp"]).replace("Z", "+00:00"))
-            except Exception:
-                return False
-            if abs((base - value_time).total_seconds()) > BURST_WINDOW_SECONDS:
-                return False
-
-        return True
-
     def _save_from_edge_row(self, row):
         company_id = int(row["CompanyID"])
         tag_name = str(row["TagName"] or "").strip()
@@ -174,71 +150,88 @@ class ReportRuntime:
         if not definitions:
             return
 
+        incoming_key = tag_name.lower()
+
         for config in configs:
             products = config["products"]
-            tags = [str(p.get("tag", "")).strip() for p in products]
-            tags = [t for t in tags if t]
-            if not tags or tag_name.lower() not in {t.lower() for t in tags}:
+            tags = [
+                str(p.get("tag", "")).strip()
+                for p in products
+                if str(p.get("tag", "")).strip()
+            ]
+            tag_keys = {tag.lower() for tag in tags}
+
+            # Only the selected ReportOutput columns can trigger/report.
+            if incoming_key not in tag_keys:
                 continue
 
-            modes = []
-            for tag in tags:
-                definition = definitions.get(tag.lower())
-                if not definition:
-                    continue
-                modes.append((
-                    tag,
-                    str(definition.get("storage", "TIME")).upper(),
-                    definition,
-                ))
-
-            if not modes:
+            incoming_definition = definitions.get(incoming_key)
+            if not incoming_definition:
                 continue
 
-            incoming_mode = None
-            incoming_definition = None
-            for tag, mode, definition in modes:
-                if tag.lower() == tag_name.lower():
-                    incoming_mode = mode
-                    incoming_definition = definition
-                    break
-
-            if incoming_mode is None:
-                continue
+            incoming_mode = str(
+                incoming_definition.get("storage", "TIME")
+            ).strip().upper()
 
             latest = self._latest_values(company_id, tags)
             if len(latest) != len(tags):
+                # Wait until every selected report column has at least one
+                # value in PLC_Data. Values do NOT need matching timestamps.
                 continue
 
-            if not self._fresh_enough(timestamp, latest):
-                continue
-
-            # TIME: respect the configured minimum interval for the report tag.
+            # For TIME reports, the interval belongs to the incoming
+            # ReportOutput column that caused this evaluation. Other report
+            # columns may have completely different intervals; their latest
+            # stored values are intentionally reused for the snapshot.
             if incoming_mode == "TIME":
                 try:
-                    interval = float(incoming_definition.get("interval", 0) or 0)
+                    interval = float(
+                        incoming_definition.get("interval", 0) or 0
+                    )
                 except (TypeError, ValueError):
-                    interval = 0
+                    interval = 0.0
 
-                key = (company_id, config["node_id"])
+                key = (
+                    company_id,
+                    config["node_id"],
+                    incoming_key,
+                )
                 now = time.monotonic()
                 last = self.last_time_snapshot.get(key, 0.0)
+
                 if interval > 0 and now - last < interval:
                     continue
+
                 self.last_time_snapshot[key] = now
 
-            # TRIGGER: one snapshot per burst of report-tag arrivals.
+            elif incoming_mode == "TRIGGER":
+                # ReportOutput trigger columns are represented by the
+                # arrival of the configured data tag. Keep one snapshot for
+                # the current set of latest timestamps.
+                pass
+            else:
+                continue
+
             snapshot_key = (
                 company_id,
                 config["node_id"],
                 tuple(
                     sorted(
-                        (str(name).lower(), str(item["timestamp"]))
+                        (
+                            str(name).lower(),
+                            str(item.get("timestamp")),
+                        )
                         for name, item in latest.items()
                     )
                 ),
             )
-            if self.last_snapshot_key.get((company_id, config["node_id"])) == snapshot_key:
+
+            report_key = (
+                company_id,
+                config["node_id"],
+            )
+
+            if self.last_snapshot_key.get(report_key) == snapshot_key:
                 continue
 
             values = {
@@ -254,18 +247,17 @@ class ReportRuntime:
             )
 
             if report_id is not None:
-                self.last_snapshot_key[(company_id, config["node_id"])] = snapshot_key
+                self.last_snapshot_key[report_key] = snapshot_key
                 print(
                     "REPORT RUNTIME SNAPSHOT:",
                     "Company=", company_id,
                     "ReportNode=", config["node_id"],
                     "ReportID=", report_id,
+                    "TriggerTag=", tag_name,
+                    "Mode=", incoming_mode,
                     "Tags=", tags,
                 )
 
-    # -------------------------------------------------
-    # LOOP
-    # -------------------------------------------------
     def run(self):
         while self.running:
             try:
