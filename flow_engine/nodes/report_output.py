@@ -8,6 +8,7 @@ from datetime import datetime
 
 import jdatetime
 
+from database import get_latest_tag_values
 from services.report_service import (
     get_report_data,
     ensure_report_tables,
@@ -128,6 +129,7 @@ class ReportOutput:
 
         time_ready = False
         trigger_ready = False
+        configured_mode_found = False
 
         for product in self.products:
             if not isinstance(product, dict):
@@ -142,12 +144,10 @@ class ReportOutput:
                 continue
 
             mode = str(definition.get("storage", "TIME")).strip().upper()
+            configured_mode_found = True
 
             if mode == "TIME":
-                if self._time_due(
-                    tag,
-                    definition.get("interval", 0),
-                ):
+                if self._time_due(tag, definition.get("interval", 0)):
                     time_ready = True
 
             elif mode == "TRIGGER":
@@ -158,17 +158,76 @@ class ReportOutput:
                 ):
                     trigger_ready = True
 
+        # If a ReportOutput product is configured but its TagMapper definition
+        # is absent, do not invent a storage policy. The Flow must define it.
+        if not configured_mode_found:
+            return False
+
         return time_ready or trigger_ready
+
+    def _runtime_tags_for_products(self, data):
+        """Resolve values only for ReportOutput.products.
+
+        Prefer the values traveling through the connected Flow branch. If a
+        selected report tag is not present in that packet, load the latest
+        value for that exact Company/Tag from the Historian. No other tags are
+        introduced into the report.
+        """
+        live_tags = data.get("Tags", {}) or {}
+        if not isinstance(live_tags, dict):
+            live_tags = {}
+
+        requested_tags = [
+            str(item.get("tag", "")).strip()
+            for item in self.products
+            if isinstance(item, dict) and str(item.get("tag", "")).strip()
+        ]
+
+        resolved = {}
+        live_lookup = {
+            str(name).strip().lower(): (name, value)
+            for name, value in live_tags.items()
+        }
+
+        missing = []
+        for tag in requested_tags:
+            item = live_lookup.get(tag.lower())
+            if item is None or item[1] is None:
+                missing.append(tag)
+                continue
+            resolved[item[0]] = item[1]
+
+        if missing and self.company_id is not None:
+            try:
+                latest = get_latest_tag_values(
+                    self.company_id,
+                    missing,
+                )
+                for tag in missing:
+                    item = latest.get(tag)
+                    if not item:
+                        continue
+                    value = item.get("value")
+                    if value is None:
+                        continue
+                    resolved[tag] = value
+            except Exception as exc:
+                print("REPORT LATEST VALUE LOAD ERROR:", exc)
+
+        return resolved
 
     def _save_realtime_snapshot(self, data):
         if not self._should_snapshot(data):
             return 0
 
-        tags = data.get("Tags", {}) or {}
-        if not isinstance(tags, dict):
+        tags = self._runtime_tags_for_products(data)
+        if not tags:
             return 0
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = data.get("Timestamp")
+        if not timestamp:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         report_id = save_report_snapshot(
             self.company_id,
             tags,
@@ -199,8 +258,6 @@ class ReportOutput:
         # -------------------------------------------------
         # REALTIME FLOW PATH
         # -------------------------------------------------
-        # ReportOutput is responsible for its own report storage when it
-        # receives data through a connected Drawflow branch.
         if not data.get("ReportRequest"):
             try:
                 data["Report_Written"] = self._save_realtime_snapshot(data)
@@ -228,9 +285,9 @@ class ReportOutput:
         end = self.normalize_date(request.get("End"), calendar)
 
         report = {
-            "columns": [],
+            "columns": self.products,
             "rows": [],
-            "totals": [],
+            "totals": [0.0 for _ in self.products],
             "grand_total": 0,
         }
 
