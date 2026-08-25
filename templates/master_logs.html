@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>لاگ</title>
+    <style>
+        body{margin:0;background:#f3f6f8;color:#17212b;font-family:Tahoma,Arial,sans-serif}
+        .wrap{max-width:1500px;margin:24px auto;padding:0 18px}
+        .top{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:#0f2638;color:#fff;padding:18px 20px;border-radius:14px}
+        .top h1{margin:0;font-size:24px}.top a{color:#fff;text-decoration:none}
+        .toolbar{margin:16px 0;padding:14px 16px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.06);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+        select,button{font:inherit;padding:9px 12px;border:1px solid #ccd5dc;border-radius:8px;background:#fff}
+        button{cursor:pointer;background:#0f526e;color:#fff;border-color:#0f526e}.sub{color:#66747f;font-size:13px}
+        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-bottom:16px}
+        .card{background:#fff;border-radius:12px;padding:14px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+        .card h3{margin:0 0 9px;font-size:16px}.ok{color:#16834d;font-weight:700}.bad{color:#b42318;font-weight:700}.muted{color:#6a7680}
+        pre{white-space:pre-wrap;word-break:break-word;background:#0d1720;color:#d6eef7;padding:12px;border-radius:10px;max-height:420px;overflow:auto;direction:ltr;text-align:left;font-size:12px}
+        table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden}th,td{padding:8px 9px;border-bottom:1px solid #e8edf0;font-size:12px;text-align:right}th{background:#edf4f7}
+        .section{margin:16px 0}.section h2{font-size:18px;margin:0 0 10px}.scroll{overflow:auto}
+        .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#edf4f7;margin:2px;font-size:12px}
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="top">
+        <div><h1>لاگ و دیباگ</h1><div class="sub" style="color:#c9d6df">بررسی مستقل هر کمپانی از Flow تا دیتابیس</div></div>
+        <a href="/master/companies">بازگشت به Master</a>
+    </div>
+
+    <form class="toolbar" method="get" action="/master/logs">
+        <label for="company_id">کمپانی:</label>
+        <select id="company_id" name="company_id">
+            {% for company in companies %}
+                <option value="{{ company.CompanyID }}" {% if company.CompanyID == selected_company_id %}selected{% endif %}>
+                    {{ company.CompanyID }} — {{ company.CompanyName }}
+                </option>
+            {% endfor %}
+        </select>
+        <button type="submit">نمایش لاگ</button>
+        <span class="sub">این صفحه فقط خواندنی است.</span>
+    </form>
+
+    {% if diagnostics %}
+        <div class="grid">
+            <div class="card"><h3>کمپانی</h3>{% if diagnostics.company %}<div><b>{{ diagnostics.company.CompanyID }}</b> — {{ diagnostics.company.CompanyName }}</div>{% else %}<div class="bad">پیدا نشد</div>{% endif %}</div>
+            <div class="card"><h3>Flow</h3>{% if diagnostics.flow.exists %}<div class="ok">وجود دارد</div><div>FlowID: {{ diagnostics.flow.flow_id }}</div><div>LastModified: {{ diagnostics.flow.last_modified }}</div>{% else %}<div class="bad">Flow وجود ندارد</div>{% endif %}</div>
+            <div class="card"><h3>PLC</h3><div><b>{{ diagnostics.plcs|length }}</b> رکورد</div>{% for plc in diagnostics.plcs %}<div class="sub">{{ plc.PLC_ID }} — {{ plc.PLC_IP }}:{{ plc.PLC_Port }} / Slave {{ plc.Slave_ID }}</div>{% endfor %}</div>
+            <div class="card"><h3>ReportHistory</h3><div><b>{{ diagnostics.counts.report_history_count }}</b> رکورد</div></div>
+            <div class="card"><h3>ReportValues</h3><div><b>{{ diagnostics.counts.report_values_count }}</b> رکورد</div></div>
+            <div class="card"><h3>TrendMinute</h3><div><b>{{ diagnostics.counts.trend_minute_count }}</b> رکورد</div></div>
+        </div>
+
+        <div class="section card">
+            <h2>ReportOutput</h2>
+            {% if diagnostics.report_outputs %}
+                {% for ro in diagnostics.report_outputs %}
+                    <div style="margin-bottom:12px"><b>Node {{ ro.id }}</b>
+                        <pre>{{ ro.data|tojson(indent=2) }}</pre>
+                    </div>
+                {% endfor %}
+            {% else %}<div class="bad">ReportOutput پیدا نشد یا به چیزی متصل نیست.</div>{% endif %}
+        </div>
+
+        <div class="section card">
+            <h2>TagMapper</h2>
+            {% if diagnostics.tag_mappers %}
+                {% for tm in diagnostics.tag_mappers %}
+                    <div><b>Node {{ tm.id }}</b></div>
+                    <pre>{{ tm.mappings|tojson(indent=2) }}</pre>
+                {% endfor %}
+            {% else %}<div class="bad">TagMapper پیدا نشد.</div>{% endif %}
+        </div>
+
+        <div class="section card">
+            <h2>PLC_Data — آخرین ۳۰ رکورد</h2>
+            <div class="scroll"><table><tr><th>ID</th><th>Company</th><th>Tag</th><th>Value</th><th>Storage</th><th>Timestamp</th></tr>
+            {% for r in diagnostics.plc_data %}<tr><td>{{ r.ID }}</td><td>{{ r.CompanyID }}</td><td>{{ r.TagName }}</td><td>{{ r.Value }}</td><td>{{ r.StorageType }}</td><td>{{ r.Timestamp }}</td></tr>{% endfor %}
+            </table></div>
+        </div>
+
+        <div class="section card">
+            <h2>ReportHistory — آخرین ۳۰</h2>
+            <div class="scroll"><table><tr><th>ReportID</th><th>Company</th><th>Timestamp</th></tr>
+            {% for r in diagnostics.report_history %}<tr><td>{{ r.ReportID }}</td><td>{{ r.CompanyID }}</td><td>{{ r.Timestamp }}</td></tr>{% endfor %}
+            </table></div>
+        </div>
+
+        <div class="section card">
+            <h2>ReportValues — آخرین ۶۰</h2>
+            <div class="scroll"><table><tr><th>ID</th><th>ReportID</th><th>Tag</th><th>Value</th><th>Timestamp</th></tr>
+            {% for r in diagnostics.report_values %}<tr><td>{{ r.ReportValueID }}</td><td>{{ r.ReportID }}</td><td>{{ r.TagName }}</td><td>{{ r.Value }}</td><td>{{ r.Timestamp }}</td></tr>{% endfor %}
+            </table></div>
+        </div>
+
+        <div class="section card">
+            <h2>TrendMinute — آخرین ۳۰</h2>
+            <div class="scroll"><table><tr><th>Company</th><th>Tag</th><th>Start</th><th>End</th><th>Min</th><th>Max</th><th>Avg</th><th>Last</th><th>Count</th></tr>
+            {% for r in diagnostics.trend_minute %}<tr><td>{{ r.CompanyID }}</td><td>{{ r.TagName }}</td><td>{{ r.StartTime }}</td><td>{{ r.EndTime }}</td><td>{{ r.MinValue }}</td><td>{{ r.MaxValue }}</td><td>{{ r.AvgValue }}</td><td>{{ r.LastValue }}</td><td>{{ r.SampleCount }}</td></tr>{% endfor %}
+            </table></div>
+        </div>
+
+        {% if diagnostics.errors %}
+        <div class="section card"><h2>خطاها</h2><pre>{{ diagnostics.errors|join('\n') }}</pre></div>
+        {% endif %}
+    {% endif %}
+</div>
+</body>
+</html>
