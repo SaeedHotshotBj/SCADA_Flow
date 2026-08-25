@@ -211,7 +211,12 @@ def _sync_plc_reader_to_database(flow_data, company_id):
 def _patch_save_flow():
     """Patch the existing Flask save_flow view without changing app.py."""
 
-    app_module = sys.modules.get("app")
+    # When the server is launched with `python app.py`, Flask lives in
+    # __main__, not in a module named `app`.
+    app_module = (
+        sys.modules.get("app")
+        or sys.modules.get("__main__")
+    )
     if app_module is None:
         return False
 
