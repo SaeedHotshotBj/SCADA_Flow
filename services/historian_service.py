@@ -230,6 +230,17 @@ class HistorianService:
         registers,
         report_products
     ):
+        """
+        Persist ReportOutput snapshots according to the storage mode defined
+        in the Flow's TagMapper entries.
+
+        - Report tags using TRIGGER storage are captured on their configured
+          rising-edge trigger.
+        - Report tags using TIME storage are captured on their configured
+          interval.
+
+        No company, tag, register, or trigger is hardcoded here.
+        """
         if not report_products:
             return 0
 
@@ -258,11 +269,59 @@ class HistorianService:
         if not report_tags:
             return 0
 
-        if self.check_report_trigger(
-            definitions,
-            report_tags,
-            registers
-        ) is None:
+        selected = set(tag.lower() for tag in report_tags)
+        selected_definitions = [
+            definition
+            for definition in definitions
+            if str(definition.get("name", "")).strip().lower() in selected
+        ]
+
+        if not selected_definitions:
+            return 0
+
+        has_trigger = any(
+            str(definition.get("storage", "")).upper() == "TRIGGER"
+            for definition in selected_definitions
+        )
+
+        has_time = any(
+            str(definition.get("storage", "")).upper() == "TIME"
+            for definition in selected_definitions
+        )
+
+        # Trigger-based reports keep their original edge-trigger behavior.
+        trigger_ready = True
+        if has_trigger:
+            trigger_ready = (
+                self.check_report_trigger(
+                    selected_definitions,
+                    report_tags,
+                    registers
+                )
+                is not None
+            )
+
+        # Time-based reports are captured at the interval defined in Flow.
+        time_ready = False
+        if has_time:
+            time_ready = any(
+                self.check_time(definition)
+                for definition in selected_definitions
+                if str(definition.get("storage", "")).upper() == "TIME"
+            )
+
+        # If the report contains only TIME tags, use their schedule.
+        # If it contains only TRIGGER tags, use their trigger.
+        # If it contains both, allow either configured mechanism to produce
+        # a snapshot so every configured report source remains usable.
+        if has_trigger and has_time:
+            should_snapshot = trigger_ready or time_ready
+        elif has_trigger:
+            should_snapshot = trigger_ready
+        else:
+            should_snapshot = time_ready
+
+        if not should_snapshot:
             return 0
 
         timestamp = datetime.now().strftime(
@@ -303,7 +362,7 @@ class HistorianService:
                 company_id,
                 actual_name,
                 value,
-                "REPORT_TRIGGER",
+                "REPORT_TRIGGER" if has_trigger else "REPORT_TIME",
                 timestamp
             ):
                 written += 1
