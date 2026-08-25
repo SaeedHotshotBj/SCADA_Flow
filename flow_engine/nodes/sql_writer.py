@@ -1,36 +1,22 @@
 # =====================================================
 # SCADA_FLOW SQL WRITER NODE
 # HISTORIAN STORAGE ENGINE
-# TIME + TRIGGER + REPORT GROUP STORAGE
+# TIME + TRIGGER STORAGE
 # =====================================================
 
 import json
 
 from services.historian_service import HistorianService
-from services.report_service import get_report_products
 from services.tag_registry import TagRegistry
 
 
 class SQLWriter:
-
-    _report_product_cache = {}
 
     def __init__(self, config):
         self.config = config or {}
         self.company_id = self.config.get("company_id", 1)
         self.historian = HistorianService()
         self._last_definition_signature = None
-        self._last_report_signature = None
-        self._cached_report_products = []
-
-    def _get_report_products(self):
-        try:
-            # Use the same Flow-driven resolver as the report query layer.
-            # It prefers matching ReportOutput products and otherwise derives
-            # the report tags from the same company's TagMapper.
-            return get_report_products(self.company_id)
-        except Exception:
-            return []
 
     def _signature(self, value):
         try:
@@ -38,13 +24,12 @@ class SQLWriter:
                 value,
                 sort_keys=True,
                 separators=(",", ":"),
-                ensure_ascii=False
+                ensure_ascii=False,
             )
         except (TypeError, ValueError):
             return repr(value)
 
     def execute(self, data=None):
-
         if data is None:
             data = {}
 
@@ -55,62 +40,25 @@ class SQLWriter:
         if not definitions:
             return data
 
-        # -------------------------------------------------
-        # Synchronize Tags table only when definitions change.
-        # -------------------------------------------------
-
-        definition_signature = self._signature(
-            definitions
-        )
-
+        definition_signature = self._signature(definitions)
         if definition_signature != self._last_definition_signature:
             TagRegistry.sync(
                 self.company_id,
-                definitions
+                definitions,
             )
             self._last_definition_signature = definition_signature
 
-        # -------------------------------------------------
-        # Reload report products only when the Flow changes.
-        # -------------------------------------------------
-
-        report_products = self._get_report_products()
-        report_signature = self._signature(
-            report_products
-        )
-
-        if report_signature != self._last_report_signature:
-            self._cached_report_products = report_products
-            self._last_report_signature = report_signature
-
-        report_products = self._cached_report_products
-
-        report_tags = [
-            str(item.get("tag", "")).strip()
-            for item in report_products
-            if (
-                isinstance(item, dict)
-                and str(item.get("tag", "")).strip()
-            )
-        ]
-
-        report_written = self.historian.process_report_group(
-            self.company_id,
-            tags,
-            definitions,
-            registers,
-            report_products
-        )
-
+        # ReportOutput owns report persistence. SQLWriter only writes the
+        # normal TIME/TRIGGER historian data.
         written = self.historian.process(
             self.company_id,
             tags,
             definitions,
             registers,
-            report_tags=report_tags
+            report_tags=None,
         )
 
-        data["SQL_Written"] = written + report_written
-        data["Report_Written"] = report_written
+        data["SQL_Written"] = written
+        data["Report_Written"] = 0
 
         return data
