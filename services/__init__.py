@@ -62,15 +62,8 @@ def _sync_flow_plc(flow_data, company_id):
     if not plc_ip:
         return False
 
-    try:
-        plc_port = int(data.get("port", 502))
-    except (TypeError, ValueError):
-        plc_port = 502
-
-    try:
-        slave_id = int(data.get("slave", 1))
-    except (TypeError, ValueError):
-        slave_id = 1
+    plc_port = data.get("port")
+    slave_id = data.get("slave")
 
     plc_name = str(
         data.get("name")
@@ -225,7 +218,7 @@ def _sync_all_saved_flows():
 
 
 def _install_save_flow_sync():
-    """Install a direct Flask request hook for the real /save_flow route."""
+    """Install a direct Flask request hook before the server accepts requests."""
 
     app_module = (
         sys.modules.get("app")
@@ -350,10 +343,15 @@ def _install_save_flow_sync():
     return True
 
 
+# Install the Save Flow hook immediately while Flask is still in its setup phase.
+_install_save_flow_sync()
+
+
 def _bootstrap_flow_plc_sync():
+    # Existing Flow records may already be present in the database.
+    # Wait until database initialization has completed, then synchronize them.
     time.sleep(2)
     _sync_all_saved_flows()
-    _install_save_flow_sync()
 
 
 threading.Thread(
