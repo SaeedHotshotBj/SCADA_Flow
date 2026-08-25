@@ -383,3 +383,11 @@ threading.Thread(
     name="SCADA-Flow-PLC-Startup-Sync",
     daemon=True,
 ).start()
+
+# =====================================================
+# MASTER LOGS / DEBUG PAGE
+# =====================================================
+try:
+    from . import master_logs  # noqa: F401
+except Exception as _master_logs_exc:
+    print("MASTER LOGS LOAD ERROR:", _master_logs_exc)
