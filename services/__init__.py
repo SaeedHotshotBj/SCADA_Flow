@@ -22,6 +22,7 @@ except Exception as _trend_exc:
 # PLC CONFIGURATION FROM SAVED FLOW
 # =====================================================
 
+
 def _extract_plc_reader(flow_data):
     if not isinstance(flow_data, dict):
         return None
@@ -47,7 +48,7 @@ def _extract_plc_reader(flow_data):
 
 
 def _sync_flow_plc(flow_data, company_id):
-    """Use the PLCReader inside a company's saved Flow as PLC source of truth."""
+    """Create/update the PLC record from the PLCReader in the saved Flow."""
 
     if company_id is None:
         return False
@@ -60,16 +61,27 @@ def _sync_flow_plc(flow_data, company_id):
     plc_ip = str(data.get("ip", "")).strip()
 
     if not plc_ip:
+        print("PLC FLOW SYNC SKIPPED: PLCReader has no IP", company_id)
         return False
 
-    plc_port = data.get("port")
-    slave_id = data.get("slave")
+    try:
+        plc_port = int(data.get("port", 502))
+    except (TypeError, ValueError):
+        plc_port = 502
+
+    try:
+        slave_id = int(data.get("slave", 1))
+    except (TypeError, ValueError):
+        slave_id = 1
 
     plc_name = str(
         data.get("name")
         or data.get("PLC_Name")
         or "PLC"
     ).strip()
+
+    conn = None
+    cursor = None
 
     try:
         from database import get_connection
@@ -85,13 +97,13 @@ def _sync_flow_plc(flow_data, company_id):
             ORDER BY PLC_ID
             LIMIT 1
             """,
-            (company_id,),
+            (int(company_id),),
         )
 
         row = cursor.fetchone()
 
         if row:
-            plc_id = row["PLC_ID"]
+            plc_id = int(row["PLC_ID"])
 
             cursor.execute(
                 """
@@ -111,7 +123,6 @@ def _sync_flow_plc(flow_data, company_id):
                     plc_id,
                 ),
             )
-
         else:
             cursor.execute(
                 """
@@ -127,7 +138,7 @@ def _sync_flow_plc(flow_data, company_id):
                 (?, ?, ?, ?, ?)
                 """,
                 (
-                    company_id,
+                    int(company_id),
                     plc_name,
                     plc_ip,
                     plc_port,
@@ -138,35 +149,51 @@ def _sync_flow_plc(flow_data, company_id):
             plc_id = cursor.lastrowid
 
         conn.commit()
-        cursor.close()
-        conn.close()
 
         print(
-            "PLC FLOW SYNC:",
-            "CompanyID=",
-            company_id,
-            "PLC_ID=",
-            plc_id,
-            "IP=",
-            plc_ip,
-            "PORT=",
-            plc_port,
-            "SLAVE=",
-            slave_id,
+            "PLC FLOW SYNC OK:",
+            "CompanyID=", company_id,
+            "PLC_ID=", plc_id,
+            "IP=", plc_ip,
+            "PORT=", plc_port,
+            "SLAVE=", slave_id,
         )
 
         return True
 
     except Exception as exc:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
         print(
             "PLC FLOW SYNC ERROR:",
-            exc,
+            "CompanyID=", company_id,
+            "ERROR=", exc,
         )
         return False
+
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _sync_all_saved_flows():
     """Synchronize PLC records from every Flow already stored in Flows."""
+
+    conn = None
+    cursor = None
 
     try:
         from database import get_connection
@@ -177,6 +204,7 @@ def _sync_all_saved_flows():
         cursor.execute(
             """
             SELECT
+                FlowID,
                 CompanyID,
                 FlowJson
             FROM Flows
@@ -188,9 +216,6 @@ def _sync_all_saved_flows():
         )
 
         rows = cursor.fetchall()
-
-        cursor.close()
-        conn.close()
 
         print(
             "PLC FLOW STARTUP SYNC FLOWS:",
@@ -206,19 +231,36 @@ def _sync_all_saved_flows():
                 )
             except Exception as exc:
                 print(
-                    "PLC FLOW STARTUP SYNC ERROR:",
-                    exc,
+                    "PLC FLOW STARTUP FLOW ERROR:",
+                    "FlowID=", row["FlowID"],
+                    "ERROR=", exc,
                 )
+
+        return True
 
     except Exception as exc:
         print(
             "PLC FLOW STARTUP SYNC LOAD ERROR:",
             exc,
         )
+        return False
+
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _install_save_flow_sync():
-    """Install a direct Flask request hook before the server accepts requests."""
+    """Install the /save_flow hook after Flask app creation, even though this package loads earlier."""
 
     app_module = (
         sys.modules.get("app")
@@ -233,68 +275,47 @@ def _install_save_flow_sync():
     if flask_app is None:
         return False
 
-    if getattr(
-        flask_app,
-        "_flow_plc_sync_installed",
-        False,
-    ):
+    if getattr(flask_app, "_flow_plc_sync_installed", False):
         return True
 
     try:
         from flask import request, session, g
-    except Exception:
+    except Exception as exc:
+        print("PLC FLOW HOOK IMPORT ERROR:", exc)
         return False
 
     @flask_app.before_request
     def _capture_save_flow_payload():
-        if (
-            request.path != "/save_flow"
-            or request.method != "POST"
-        ):
+        if request.path != "/save_flow" or request.method != "POST":
             return None
 
         try:
-            g._flow_plc_payload = (
-                request.get_json(
-                    silent=True
-                )
-                or {}
-            )
+            payload = request.get_json(silent=True) or {}
         except Exception:
-            g._flow_plc_payload = {}
+            payload = {}
 
-        company_id = request.args.get(
-            "company_id",
-            type=int,
-        )
+        g._flow_plc_payload = payload
+
+        company_id = request.args.get("company_id", type=int)
 
         if company_id is None:
-            company_id = request.headers.get(
-                "X-Company-ID",
-                type=int,
-            )
+            company_id = request.headers.get("X-Company-ID", type=int)
 
         if company_id is None:
             try:
-                company_id = session.get(
-                    "selected_company_id"
-                )
+                company_id = session.get("selected_company_id")
             except Exception:
                 company_id = None
 
         if company_id is None:
             try:
-                company_id = session.get(
-                    "company_id"
-                )
+                company_id = session.get("company_id")
             except Exception:
                 company_id = None
 
         try:
             g._flow_plc_company_id = (
-                int(company_id)
-                if company_id is not None
-                else None
+                int(company_id) if company_id is not None else None
             )
         except (TypeError, ValueError):
             g._flow_plc_company_id = None
@@ -303,59 +324,62 @@ def _install_save_flow_sync():
 
     @flask_app.after_request
     def _sync_saved_flow_to_plc(response):
-        if (
-            request.path != "/save_flow"
-            or request.method != "POST"
-        ):
+        if request.path != "/save_flow" or request.method != "POST":
             return response
 
-        try:
-            status_code = int(
-                response.status_code
-            )
-        except Exception:
-            status_code = 200
-
-        if status_code >= 400:
+        if int(getattr(response, "status_code", 200)) >= 400:
             return response
 
         _sync_flow_plc(
-            getattr(
-                g,
-                "_flow_plc_payload",
-                None,
-            ),
-            getattr(
-                g,
-                "_flow_plc_company_id",
-                None,
-            ),
+            getattr(g, "_flow_plc_payload", None),
+            getattr(g, "_flow_plc_company_id", None),
         )
 
         return response
 
     flask_app._flow_plc_sync_installed = True
 
-    print(
-        "PLC FLOW SAVE SYNC HOOK INSTALLED"
-    )
-
+    print("PLC FLOW SAVE SYNC HOOK INSTALLED")
     return True
 
 
-# Install the Save Flow hook immediately while Flask is still in its setup phase.
-_install_save_flow_sync()
+def _install_save_flow_sync_retry():
+    """Retry Hook installation because services/__init__.py is imported before app = Flask(...)."""
+
+    for attempt in range(120):
+        try:
+            if _install_save_flow_sync():
+                return
+        except Exception as exc:
+            print("PLC FLOW HOOK RETRY ERROR:", exc)
+
+        time.sleep(0.5)
+
+    print("PLC FLOW HOOK INSTALL FAILED: app object was not detected")
 
 
-def _bootstrap_flow_plc_sync():
-    # Existing Flow records may already be present in the database.
-    # Wait until database initialization has completed, then synchronize them.
-    time.sleep(2)
-    _sync_all_saved_flows()
+def _startup_sync_retry():
+    """Retry startup synchronization until database initialization has completed."""
 
+    for attempt in range(60):
+        if _sync_all_saved_flows():
+            return
+
+        time.sleep(1)
+
+    print("PLC FLOW STARTUP SYNC FAILED AFTER RETRIES")
+
+
+# Both jobs run asynchronously because this package is imported before the
+# Flask application and database initialization in app.py.
+threading.Thread(
+    target=_install_save_flow_sync_retry,
+    name="SCADA-Flow-PLC-Hook",
+    daemon=True,
+).start()
 
 threading.Thread(
-    target=_bootstrap_flow_plc_sync,
-    name="SCADA-Flow-PLC-Sync",
+    target=_startup_sync_retry,
+    name="SCADA-Flow-PLC-Startup-Sync",
     daemon=True,
 ).start()
