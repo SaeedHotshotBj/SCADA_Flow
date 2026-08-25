@@ -1,13 +1,18 @@
 # =====================================================
 # SCADA_FLOW REPORT OUTPUT NODE
-# DYNAMIC REPORT QUERY OUTPUT
+# DYNAMIC REPORT QUERY + SNAPSHOT OUTPUT
 # =====================================================
 
+import time
 from datetime import datetime
 
 import jdatetime
 
-from services.report_service import get_report_data, ensure_report_tables
+from services.report_service import (
+    get_report_data,
+    ensure_report_tables,
+    save_report_snapshot,
+)
 
 
 class ReportOutput:
@@ -17,9 +22,9 @@ class ReportOutput:
         self.company_id = self.config.get("company_id")
         self.date_picker = self.config.get("DatePicker", "JalaliPicker")
         self.products = self.config.get("products", [])
+        self.time_memory = {}
+        self.trigger_memory = {}
 
-        # Make the report database available as soon as a
-        # ReportOutput node exists in the flow.
         try:
             ensure_report_tables()
         except Exception as exc:
@@ -50,10 +55,163 @@ class ReportOutput:
 
         return None
 
+    def _definitions_by_tag(self, data):
+        definitions = data.get("TagDefinitions", [])
+        if not isinstance(definitions, list):
+            return {}
+
+        result = {}
+        for definition in definitions:
+            if not isinstance(definition, dict):
+                continue
+            name = str(definition.get("name", "")).strip()
+            if not name:
+                continue
+            result[name.lower()] = definition
+        return result
+
+    def _time_due(self, tag, interval):
+        try:
+            seconds = float(interval)
+        except (TypeError, ValueError):
+            seconds = 0.0
+
+        if seconds <= 0:
+            return False
+
+        now = time.monotonic()
+        last = self.time_memory.get(tag, 0.0)
+
+        if now - last >= seconds:
+            self.time_memory[tag] = now
+            return True
+
+        return False
+
+    def _trigger_rising(self, tag, definition, registers):
+        trigger_register = definition.get("trigger_register")
+        trigger_value = definition.get("trigger_value")
+
+        if trigger_register in (None, ""):
+            return False
+
+        key = str(trigger_register)
+        if key in registers:
+            current = registers[key]
+        elif trigger_register in registers:
+            current = registers[trigger_register]
+        else:
+            return False
+
+        previous = self.trigger_memory.get(tag)
+        self.trigger_memory[tag] = current
+
+        try:
+            current_number = float(current)
+            previous_number = None if previous is None else float(previous)
+            target = float(trigger_value)
+        except (TypeError, ValueError):
+            current_number = current
+            previous_number = previous
+            target = trigger_value
+
+        return previous_number == 0 and current_number == target
+
+    def _should_snapshot(self, data):
+        if not isinstance(self.products, list) or not self.products:
+            return False
+
+        definitions = self._definitions_by_tag(data)
+        registers = data.get("Registers", {}) or {}
+        if not isinstance(registers, dict):
+            registers = {}
+
+        time_ready = False
+        trigger_ready = False
+
+        for product in self.products:
+            if not isinstance(product, dict):
+                continue
+
+            tag = str(product.get("tag", "")).strip()
+            if not tag:
+                continue
+
+            definition = definitions.get(tag.lower())
+            if not definition:
+                continue
+
+            mode = str(definition.get("storage", "TIME")).strip().upper()
+
+            if mode == "TIME":
+                if self._time_due(
+                    tag,
+                    definition.get("interval", 0),
+                ):
+                    time_ready = True
+
+            elif mode == "TRIGGER":
+                if self._trigger_rising(
+                    tag,
+                    definition,
+                    registers,
+                ):
+                    trigger_ready = True
+
+        return time_ready or trigger_ready
+
+    def _save_realtime_snapshot(self, data):
+        if not self._should_snapshot(data):
+            return 0
+
+        tags = data.get("Tags", {}) or {}
+        if not isinstance(tags, dict):
+            return 0
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        report_id = save_report_snapshot(
+            self.company_id,
+            tags,
+            self.products,
+            timestamp=timestamp,
+        )
+
+        if report_id is None:
+            return 0
+
+        print(
+            "REPORT SNAPSHOT SAVED:",
+            "Company=", self.company_id,
+            "ReportID=", report_id,
+            "Columns=", [
+                item.get("tag")
+                for item in self.products
+                if isinstance(item, dict)
+            ],
+        )
+
+        return 1
+
     def execute(self, data=None):
         if data is None:
             data = {}
 
+        # -------------------------------------------------
+        # REALTIME FLOW PATH
+        # -------------------------------------------------
+        # ReportOutput is responsible for its own report storage when it
+        # receives data through a connected Drawflow branch.
+        if not data.get("ReportRequest"):
+            try:
+                data["Report_Written"] = self._save_realtime_snapshot(data)
+            except Exception as exc:
+                print("REPORT SNAPSHOT ERROR:", exc)
+                data["Report_Written"] = 0
+            return data
+
+        # -------------------------------------------------
+        # HISTORICAL REPORT REQUEST
+        # -------------------------------------------------
         request = data.get("ReportRequest", {}) or {}
         company_id = request.get("CompanyID", self.company_id)
         self.company_id = company_id
