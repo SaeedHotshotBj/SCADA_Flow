@@ -71,9 +71,74 @@ def _flow_nodes(company_id):
     )
 
 
-def get_report_products(company_id):
-    """Return ReportOutput selections from the saved Drawflow configuration."""
+def _flow_tag_mapper_products(company_id):
+    """Return report-capable tags defined by TagMapper in the saved Flow.
+
+    The Flow is the source of truth. No company, tag, register, or product
+    name is hard-coded here.
+    """
     products = []
+    seen = set()
+
+    try:
+        for node in _flow_nodes(company_id).values():
+            if node.get("name") != "TagMapper":
+                continue
+
+            mappings = (
+                node.get("data", {}) or {}
+            ).get("mappings", [])
+
+            if not isinstance(mappings, list):
+                continue
+
+            for item in mappings:
+                if not isinstance(item, dict):
+                    continue
+
+                tag = str(item.get("name", "")).strip()
+                if not tag:
+                    continue
+
+                storage = str(
+                    item.get("storage", "TIME")
+                ).strip().upper()
+
+                if storage not in ("TIME", "TRIGGER"):
+                    continue
+
+                key = tag.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                products.append({
+                    "name": tag,
+                    "tag": tag,
+                    "unit": str(item.get("unit", "")).strip(),
+                })
+
+            # One TagMapper is the normal flow source. Do not merge unrelated
+            # disconnected mapper nodes into this report configuration.
+            break
+
+    except Exception as exc:
+        print("REPORT TAGMAPPER CONFIG ERROR:", exc)
+
+    return products
+
+
+def get_report_products(company_id):
+    """Return ReportOutput selections, with Flow-driven TagMapper fallback.
+
+    Explicit ReportOutput products are preferred when they actually match
+    tags defined by the same Flow. If the ReportOutput was left empty or was
+    copied from another company and no configured product matches the current
+    Flow's TagMapper, the report automatically uses the TagMapper report-capable
+    tags. This keeps the report fully Flow-driven and prevents empty reports
+    caused by stale product names.
+    """
+    configured = []
 
     try:
         for node in _flow_nodes(company_id).values():
@@ -82,31 +147,43 @@ def get_report_products(company_id):
 
             data = node.get("data", {}) or {}
             config = data.get("config", data) or {}
-            configured = config.get("products", [])
+            values = config.get("products", [])
 
-            if not isinstance(configured, list):
-                return []
+            if isinstance(values, list):
+                for item in values:
+                    if not isinstance(item, dict):
+                        continue
 
-            for item in configured:
-                if not isinstance(item, dict):
-                    continue
+                    tag = str(item.get("tag", "")).strip()
+                    if not tag:
+                        continue
 
-                tag = str(item.get("tag", "")).strip()
-                if not tag:
-                    continue
-
-                products.append({
-                    "name": str(item.get("name", tag)).strip() or tag,
-                    "tag": tag,
-                    "unit": str(item.get("unit", "")).strip(),
-                })
-
+                    configured.append({
+                        "name": str(item.get("name", tag)).strip() or tag,
+                        "tag": tag,
+                        "unit": str(item.get("unit", "")).strip(),
+                    })
             break
 
     except Exception as exc:
         print("REPORT CONFIG ERROR:", exc)
 
-    return products
+    flow_tags = _flow_tag_mapper_products(company_id)
+    flow_keys = {
+        str(item["tag"]).strip().lower()
+        for item in flow_tags
+    }
+
+    matching = [
+        item
+        for item in configured
+        if str(item["tag"]).strip().lower() in flow_keys
+    ]
+
+    if matching:
+        return matching
+
+    return flow_tags
 
 
 # =====================================================
@@ -122,9 +199,9 @@ def save_report_snapshot(
     """
     Store one complete report snapshot.
 
-    The list of tags is taken from ReportOutput. No register/tag names are
-    hard-coded here. ReportValues is normalized so the UI can pivot it into
-    dynamic columns later.
+    The list of tags is taken from ReportOutput or, when its configuration
+    does not match the current Flow, from TagMapper in that same Flow. No
+    register/tag names are hard-coded here.
     """
     if company_id is None or not isinstance(tags, dict):
         return None
@@ -269,6 +346,36 @@ def get_report_data(company_id, start, end):
         )
 
         fetched = cursor.fetchall()
+
+        # -------------------------------------------------
+        # FALLBACK TO HISTORIAN DATA
+        # -------------------------------------------------
+        # If older snapshots are missing ReportValues, use the same company's
+        # historian data for the Flow-selected report tags. This keeps the
+        # report usable without requiring a manual database repair.
+        if not fetched:
+            cursor.execute(
+                f"""
+                SELECT
+                    ID AS ReportID,
+                    Timestamp,
+                    TagName,
+                    Value
+                FROM PLC_Data
+                WHERE CompanyID = ?
+                  AND datetime(Timestamp) >= datetime(?)
+                  AND datetime(Timestamp) <= datetime(?)
+                  AND LOWER(TagName) IN ({placeholders})
+                ORDER BY datetime(Timestamp) ASC, ID ASC
+                """,
+                [
+                    company_id,
+                    start.strftime("%Y-%m-%d %H:%M:%S"),
+                    end.strftime("%Y-%m-%d %H:%M:%S"),
+                    *tag_keys,
+                ],
+            )
+            fetched = cursor.fetchall()
 
     finally:
         cursor.close()
