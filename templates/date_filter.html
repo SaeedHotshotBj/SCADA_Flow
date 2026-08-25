@@ -27,8 +27,6 @@ const calendarMode='Jalali';
 let chart=null;
 let ready=false;
 
-function pad(n){return String(n).padStart(2,'0')}
-
 function setupPicker(){
     const s=document.getElementById('start');
     const e=document.getElementById('end');
@@ -64,7 +62,7 @@ async function loadReport(){
     document.getElementById('status').textContent='در حال دریافت گزارش...';
 
     try{
-        const response=await fetch('/flow_trend',{
+        const response=await fetch('/flow_report',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({
