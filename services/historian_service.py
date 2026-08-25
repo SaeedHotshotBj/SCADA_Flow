@@ -129,9 +129,6 @@ class HistorianService:
                 previous_number = previous
                 target = trigger_value
 
-            # First observation at the configured target is treated as an
-            # initial report event. Afterwards only the normal 0 -> target
-            # rising edge starts a new snapshot.
             first_target = (
                 previous_number is None
                 and current_number == target
@@ -180,13 +177,6 @@ class HistorianService:
             return False
 
     def _zero_debounced(self, company_id, name, value):
-        """
-        Ignore a zero transition for the first 2 seconds.
-
-        A genuine zero is accepted only if zero remains the observed value
-        for at least ZERO_DEBOUNCE_SECONDS. This prevents short zero glitches
-        from being stored in the historian and prevents dashboard flicker.
-        """
         key = (int(company_id), str(name).strip().lower())
         now = time.monotonic()
 
@@ -217,7 +207,6 @@ class HistorianService:
             )
             return True
 
-        # Zero has remained continuously long enough to be a real value.
         self.zero_memory.pop(key, None)
         print(
             "HISTORIAN ZERO ACCEPTED:",
@@ -227,8 +216,6 @@ class HistorianService:
 
     def _insert_changed(self, company_id, name, value, storage_type, timestamp=None):
         """Insert only on a real value transition, with 2-second zero debounce."""
-
-        # A short zero glitch must not reach the historian/database.
         if self._zero_debounced(company_id, name, value):
             return False
 
@@ -353,3 +340,16 @@ class HistorianService:
                 written += 1
 
         return written
+
+
+# -----------------------------------------------------
+# GENERIC REPORT RUNTIME WORKER
+# -----------------------------------------------------
+# The worker is started when HistorianService is imported. It watches
+# PLC_Data for every company and uses each company's saved Flow/ReportOutput.
+# No company, PLC, tag or Edge is hardcoded.
+try:
+    from services.report_runtime import start as _start_report_runtime
+    _start_report_runtime()
+except Exception as _report_runtime_exc:
+    print("REPORT RUNTIME START ERROR:", _report_runtime_exc)
