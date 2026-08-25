@@ -9,22 +9,30 @@ _started = False
 _lock = threading.Lock()
 
 
-def _latest_raw_timestamp(conn):
+def _raw_time_bounds(conn):
+    """Return the oldest and newest raw timestamp currently available."""
     allowed = ",".join("?" for _ in ta._ALLOWED_STORAGE)
     row = conn.execute(
         f"""
-        SELECT MAX(datetime(replace(Timestamp, 'T', ' '))) AS LatestTimestamp
+        SELECT
+            MIN(datetime(replace(Timestamp, 'T', ' '))) AS EarliestTimestamp,
+            MAX(datetime(replace(Timestamp, 'T', ' '))) AS LatestTimestamp
         FROM PLC_Data
         WHERE (StorageType IS NULL OR UPPER(StorageType) IN ({allowed}))
         """,
         ta._ALLOWED_STORAGE,
     ).fetchone()
+
     if not row:
-        return None
-    return ta._parse_ts(row["LatestTimestamp"])
+        return None, None
+
+    earliest = ta._parse_ts(row["EarliestTimestamp"])
+    latest = ta._parse_ts(row["LatestTimestamp"])
+    return earliest, latest
 
 
 def _aggregate_raw_bucket_normalized(conn, start, end):
+    """Aggregate every company's raw data in one normalized minute bucket."""
     allowed = ",".join("?" for _ in ta._ALLOWED_STORAGE)
     rows = conn.execute(
         f"""
@@ -68,22 +76,43 @@ def _aggregate_raw_bucket_normalized(conn, start, end):
 
 
 def aggregate_once_local_time(force=False):
+    """
+    Aggregate ALL available raw minute buckets, for ALL companies and edges.
+
+    CompanyID and TagName are used only as grouping keys. No company or Edge
+    is selected, filtered, or hardcoded here.
+    """
     ta._ensure_tables()
     if not force and not ta._try_acquire_lease():
         return 0
 
     conn = ta._connect()
     try:
-        latest_raw = _latest_raw_timestamp(conn)
-        anchor = latest_raw or datetime.now().replace(microsecond=0)
+        earliest_raw, latest_raw = _raw_time_bounds(conn)
 
-        minute_end = ta._minute_start(anchor)
-        minute_start = minute_end - timedelta(minutes=1)
-        written = _aggregate_raw_bucket_normalized(
-            conn,
-            minute_start,
-            minute_end,
+        if earliest_raw is None or latest_raw is None:
+            return 0
+
+        retention_floor = latest_raw - timedelta(minutes=ta.RAW_RETENTION_MINUTES)
+        scan_start = max(
+            ta._minute_start(earliest_raw),
+            ta._minute_start(retention_floor),
         )
+        scan_end = ta._minute_start(latest_raw)
+
+        total_written = 0
+        bucket = scan_start
+
+        while bucket < scan_end:
+            bucket_end = bucket + timedelta(minutes=1)
+            total_written += _aggregate_raw_bucket_normalized(
+                conn,
+                bucket,
+                bucket_end,
+            )
+            bucket = bucket_end
+
+        anchor = latest_raw
 
         hour_end = ta._hour_start(anchor)
         hour_start = hour_end - timedelta(hours=1)
@@ -96,7 +125,7 @@ def aggregate_once_local_time(force=False):
         )
 
         day_end = ta._day_start(anchor)
-        day_start = ta._day_start(anchor) - timedelta(days=1)
+        day_start = day_end - timedelta(days=1)
         ta._aggregate_children(
             conn,
             "TrendHour",
@@ -105,7 +134,9 @@ def aggregate_once_local_time(force=False):
             day_end,
         )
 
-        raw_cutoff = ta._ts(anchor - timedelta(minutes=ta.RAW_RETENTION_MINUTES))
+        raw_cutoff = ta._ts(
+            anchor - timedelta(minutes=ta.RAW_RETENTION_MINUTES)
+        )
         conn.execute(
             """
             DELETE FROM PLC_Data
@@ -124,26 +155,32 @@ def aggregate_once_local_time(force=False):
             (history_cutoff,),
         )
 
-        minute_cutoff = ta._ts(anchor - timedelta(hours=ta.MINUTE_RETENTION_HOURS))
+        minute_cutoff = ta._ts(
+            anchor - timedelta(hours=ta.MINUTE_RETENTION_HOURS)
+        )
         conn.execute(
             "DELETE FROM TrendMinute WHERE PeriodStart < ?",
             (minute_cutoff,),
         )
 
-        hour_cutoff = ta._ts(anchor - timedelta(days=ta.HOUR_RETENTION_DAYS))
+        hour_cutoff = ta._ts(
+            anchor - timedelta(days=ta.HOUR_RETENTION_DAYS)
+        )
         conn.execute(
             "DELETE FROM TrendHour WHERE PeriodStart < ?",
             (hour_cutoff,),
         )
 
-        day_cutoff = ta._ts(anchor - timedelta(days=ta.DAY_RETENTION_DAYS))
+        day_cutoff = ta._ts(
+            anchor - timedelta(days=ta.DAY_RETENTION_DAYS)
+        )
         conn.execute(
             "DELETE FROM TrendDay WHERE PeriodStart < ?",
             (day_cutoff,),
         )
 
         conn.commit()
-        return written
+        return total_written
     finally:
         conn.close()
 
@@ -154,7 +191,11 @@ def _worker():
         try:
             written = aggregate_once_local_time()
             if written:
-                print("TREND AGGREGATION: wrote", written, "minute bucket(s)")
+                print(
+                    "TREND AGGREGATION: wrote",
+                    written,
+                    "minute bucket/tag rows across all companies",
+                )
         except Exception as exc:
             print("TREND AGGREGATION ERROR:", exc)
         time.sleep(ta.WORKER_INTERVAL_SECONDS)
@@ -171,4 +212,4 @@ def start():
             name="SCADA-Trend-Aggregator-PLC-Time",
             daemon=True,
         ).start()
-        print("TREND AGGREGATION WORKER STARTED (PLC TIMESTAMP ANCHOR)")
+        print("TREND AGGREGATION WORKER STARTED (ALL COMPANIES / ALL EDGES)")
