@@ -53,43 +53,46 @@ def _get_response_status(response):
     return 200
 
 
-def _sync_plc_reader_to_database(flow_data, company_id):
-    """Create/update the company's PLC record from the saved PLCReader node."""
+def _extract_plc_reader(flow_data):
+    if not isinstance(flow_data, dict):
+        return None
 
-    if company_id is None or not isinstance(flow_data, dict):
-        return
-
-    try:
-        nodes = (
-            flow_data
-            .get("drawflow", {})
-            .get("Home", {})
-            .get("data", {})
-        )
-    except Exception:
-        return
+    nodes = (
+        flow_data
+        .get("drawflow", {})
+        .get("Home", {})
+        .get("data", {})
+    )
 
     if not isinstance(nodes, dict):
-        return
-
-    plc_reader = None
+        return None
 
     for node in nodes.values():
         if not isinstance(node, dict):
             continue
+
         node_type = node.get("class") or node.get("name")
         if node_type == "PLCReader":
-            plc_reader = node
-            break
+            return node
 
+    return None
+
+
+def _sync_plc_reader_to_database(flow_data, company_id):
+    """Create/update the PLC record strictly from the company's saved Flow."""
+
+    if company_id is None:
+        return False
+
+    plc_reader = _extract_plc_reader(flow_data)
     if plc_reader is None:
-        return
+        return False
 
     data = plc_reader.get("data", {}) or {}
 
     plc_ip = str(data.get("ip", "")).strip()
     if not plc_ip:
-        return
+        return False
 
     try:
         plc_port = int(data.get("port", 502))
@@ -187,6 +190,8 @@ def _sync_plc_reader_to_database(flow_data, company_id):
             slave_id,
         )
 
+        return True
+
     except Exception as exc:
         if conn is not None:
             try:
@@ -194,6 +199,7 @@ def _sync_plc_reader_to_database(flow_data, company_id):
             except Exception:
                 pass
         _original_print("PLC FLOW SYNC ERROR:", exc)
+        return False
 
     finally:
         if cursor is not None:
@@ -208,15 +214,82 @@ def _sync_plc_reader_to_database(flow_data, company_id):
                 pass
 
 
-def _patch_save_flow():
-    """Patch the existing Flask save_flow view without changing app.py."""
+def _sync_all_saved_flows_to_plcs():
+    """Build/update PLC configuration from every saved company Flow."""
 
-    # When the server is launched with `python app.py`, Flask lives in
-    # __main__, not in a module named `app`.
+    from database import get_connection
+
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT CompanyID, FlowJson
+            FROM Flows
+            ORDER BY FlowID
+            """
+        )
+        rows = cursor.fetchall()
+    except Exception as exc:
+        _original_print("PLC FLOW STARTUP SYNC LOAD ERROR:", exc)
+        return
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    for row in rows:
+        try:
+            company_id = int(row["CompanyID"])
+            flow_data = __import__("json").loads(row["FlowJson"])
+            _sync_plc_reader_to_database(flow_data, company_id)
+        except Exception as exc:
+            _original_print(
+                "PLC FLOW STARTUP SYNC ERROR:",
+                exc,
+            )
+
+
+def _disable_file_flow_fallback():
+    """Prevent the legacy flow.json from becoming a company configuration source."""
+
     app_module = (
         sys.modules.get("app")
         or sys.modules.get("__main__")
     )
+
+    if app_module is None:
+        return False
+
+    if hasattr(app_module, "_read_flow_file"):
+        def _no_file_flow_fallback():
+            return None
+
+        app_module._read_flow_file = _no_file_flow_fallback
+        _original_print("FLOW FILE FALLBACK DISABLED")
+        return True
+
+    return False
+
+
+def _patch_save_flow():
+    """Patch the existing Flask save_flow view to sync PLC from saved Flow."""
+
+    app_module = (
+        sys.modules.get("app")
+        or sys.modules.get("__main__")
+    )
+
     if app_module is None:
         return False
 
@@ -275,13 +348,23 @@ def _patch_save_flow():
 
 def _wait_for_app_and_patch():
     deadline = time.time() + 60
+    startup_synced = False
+    fallback_disabled = False
 
     while time.time() < deadline:
         try:
+            if not fallback_disabled:
+                fallback_disabled = _disable_file_flow_fallback()
+
+            if not startup_synced:
+                _sync_all_saved_flows_to_plcs()
+                startup_synced = True
+
             if _patch_save_flow():
                 return
         except Exception as exc:
             _original_print("PLC FLOW PATCH ERROR:", exc)
+
         time.sleep(0.2)
 
     _original_print("PLC FLOW PATCH: save_flow was not found")
