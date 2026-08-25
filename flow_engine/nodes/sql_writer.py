@@ -7,8 +7,8 @@
 import json
 
 from services.historian_service import HistorianService
+from services.report_service import get_report_products
 from services.tag_registry import TagRegistry
-from database import get_company_flow
 
 
 class SQLWriter:
@@ -25,35 +25,12 @@ class SQLWriter:
 
     def _get_report_products(self):
         try:
-            flow = get_company_flow(self.company_id)
-            if not flow:
-                return []
-
-            if isinstance(flow, str):
-                flow = json.loads(flow)
-
-            nodes = (
-                flow
-                .get("drawflow", {})
-                .get("Home", {})
-                .get("data", {})
-            )
-
-            for node in nodes.values():
-                if node.get("name") != "ReportOutput":
-                    continue
-
-                data = node.get("data", {}) or {}
-                config = data.get("config", data) or {}
-                products = config.get("products", [])
-
-                if isinstance(products, list):
-                    return products
-
+            # Use the same Flow-driven resolver as the report query layer.
+            # It prefers matching ReportOutput products and otherwise derives
+            # the report tags from the same company's TagMapper.
+            return get_report_products(self.company_id)
         except Exception:
             return []
-
-        return []
 
     def _signature(self, value):
         try:
