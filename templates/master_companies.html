@@ -253,7 +253,8 @@
 
 
         button,
-        .db-button {
+        .db-button,
+        .log-button {
 
             padding: 10px 17px;
 
@@ -319,6 +320,21 @@
         }
 
 
+        .log-button {
+
+            background: #7157a5;
+
+            color: white;
+
+        }
+
+
+        .log-button:hover {
+
+            background: #8064b8;
+        }
+
+
         .content-area {
 
             margin-top: 30px;
@@ -377,7 +393,8 @@
 
 
             button,
-            .db-button {
+            .db-button,
+            .log-button {
 
                 width: 100%;
 
@@ -439,7 +456,7 @@
         </h1>
 
         <p>
-            Select a company, open the Flow Designer, or inspect the production database.
+            Select a company, open the Flow Designer, inspect the production database, or open debug logs.
         </p>
 
     </div>
@@ -515,6 +532,14 @@
                 href="{{ url_for('flow_company.master_database') }}"
             >
                 DATABASE VIEWER
+            </a>
+
+
+            <a
+                class="log-button"
+                href="/master/logs"
+            >
+                LOGS
             </a>
 
 
