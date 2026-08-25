@@ -391,3 +391,62 @@ try:
     from . import master_logs  # noqa: F401
 except Exception as _master_logs_exc:
     print("MASTER LOGS LOAD ERROR:", _master_logs_exc)
+
+
+# =====================================================
+# FLOW COMPANY BLUEPRINT REGISTRATION
+# =====================================================
+
+def _install_flow_company_blueprint():
+    """Register the company Flow blueprint after the Flask app exists."""
+    app_module = (
+        sys.modules.get("app")
+        or sys.modules.get("__main__")
+    )
+
+    if app_module is None:
+        return False
+
+    flask_app = getattr(app_module, "app", None)
+    if flask_app is None:
+        return False
+
+    if getattr(flask_app, "_flow_company_blueprint_registered", False):
+        return True
+
+    try:
+        from flow_company_routes import flow_company_bp
+
+        if "flow_company" not in flask_app.blueprints:
+            flask_app.register_blueprint(flow_company_bp)
+
+        flask_app._flow_company_blueprint_registered = True
+
+        print("FLOW COMPANY BLUEPRINT REGISTERED")
+        print("FLOW COMPANY ROUTES:", len(flask_app.url_map._rules))
+        return True
+
+    except Exception as exc:
+        print("FLOW COMPANY BLUEPRINT REGISTER ERROR:", exc)
+        return False
+
+
+def _install_flow_company_blueprint_retry():
+    """Retry registration because services loads before app creates the Flask object."""
+    for attempt in range(120):
+        try:
+            if _install_flow_company_blueprint():
+                return
+        except Exception as exc:
+            print("FLOW COMPANY BLUEPRINT RETRY ERROR:", exc)
+
+        time.sleep(0.5)
+
+    print("FLOW COMPANY BLUEPRINT INSTALL FAILED")
+
+
+threading.Thread(
+    target=_install_flow_company_blueprint_retry,
+    name="SCADA-Flow-Company-Routes",
+    daemon=True,
+).start()
