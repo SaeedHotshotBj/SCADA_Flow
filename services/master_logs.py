@@ -149,17 +149,45 @@ def _install():
                 )
                 out["report_values"] = [dict(r) for r in cursor.fetchall()]
 
-                cursor.execute(
-                    """
-                    SELECT CompanyID, TagName, StartTime, EndTime, MinValue, MaxValue,
-                           AvgValue, FirstValue, LastValue, SampleCount
-                    FROM TrendMinute
-                    WHERE CompanyID = ?
-                    ORDER BY EndTime DESC
-                    LIMIT 30
-                    """,
-                    (company_id,),
-                )
+                # TrendMinute schema varies across historical deployments.
+                # Read its actual columns first so the debug page never fails
+                # just because a deployment uses a different aggregation schema.
+                cursor.execute("PRAGMA table_info(TrendMinute)")
+                trend_columns = [r["name"] for r in cursor.fetchall()]
+
+                if "Timestamp" in trend_columns and "EndTime" not in trend_columns:
+                    cursor.execute(
+                        """
+                        SELECT *
+                        FROM TrendMinute
+                        WHERE CompanyID = ?
+                        ORDER BY Timestamp DESC
+                        LIMIT 30
+                        """,
+                        (company_id,),
+                    )
+                elif "EndTime" in trend_columns:
+                    cursor.execute(
+                        """
+                        SELECT *
+                        FROM TrendMinute
+                        WHERE CompanyID = ?
+                        ORDER BY EndTime DESC
+                        LIMIT 30
+                        """,
+                        (company_id,),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT *
+                        FROM TrendMinute
+                        WHERE CompanyID = ?
+                        LIMIT 30
+                        """,
+                        (company_id,),
+                    )
+
                 out["trend_minute"] = [dict(r) for r in cursor.fetchall()]
 
                 for table, key in (
@@ -182,7 +210,6 @@ def _install():
         @flask_app.route("/master/logs", methods=["GET"])
         def master_logs():
             # Master-only, read-only diagnostics.
-            session = getattr(request, "session", None)
             from flask import session as flask_session
             if flask_session.get("role", "").strip().lower() != "master":
                 return redirect(url_for("login", next=request.path))
@@ -208,8 +235,117 @@ def _install():
                 diagnostics=data,
             )
 
+        # -------------------------------------------------------------
+        # FLOW-DRIVEN REPORT DATA ENDPOINT
+        # -------------------------------------------------------------
+        @flask_app.post("/flow_report")
+        def flow_report_runtime_endpoint():
+            from flask import jsonify, session as flask_session
+            from datetime import datetime
+            import jdatetime
+            from database import get_company_flow
+            from services.report_service import get_report_data
+
+            if not flask_session.get("user_id"):
+                return jsonify({"status": "error", "message": "Login required"}), 401
+
+            if flask_session.get("role", "").strip().lower() == "master":
+                company_id = request.args.get("company_id", type=int)
+                if company_id is None:
+                    company_id = flask_session.get("selected_company_id")
+            else:
+                company_id = flask_session.get("company_id")
+
+            try:
+                company_id = int(company_id)
+            except (TypeError, ValueError):
+                company_id = None
+
+            if company_id is None:
+                return jsonify({"status": "error", "message": "Company is required"}), 403
+
+            flow_json = get_company_flow(company_id)
+            if not flow_json:
+                return jsonify({"status": "error", "message": "No flow configured for this company"}), 404
+
+            flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
+            nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
+
+            products = []
+            for node in nodes.values():
+                if not isinstance(node, dict) or node.get("name") != "ReportOutput":
+                    continue
+                config = node.get("data", {}) or {}
+                configured = (config.get("config", config) or {}).get("products", [])
+                if isinstance(configured, list):
+                    for item in configured:
+                        if not isinstance(item, dict):
+                            continue
+                        tag = str(item.get("tag", "")).strip()
+                        if not tag:
+                            continue
+                        products.append({
+                            "name": str(item.get("name", tag)).strip() or tag,
+                            "tag": tag,
+                            "unit": str(item.get("unit", "")).strip(),
+                        })
+                if products:
+                    break
+
+            if not products:
+                return jsonify({"status": "error", "message": "ReportOutput has no products configured"}), 400
+
+            payload = request.get_json(silent=True) or {}
+            report_request = payload.get("ReportRequest", {}) or {}
+            calendar = report_request.get("Calendar")
+            if calendar not in ("Jalali", "Gregorian"):
+                calendar = "Jalali"
+
+            def normalize(value):
+                if not value:
+                    return None
+                text = str(value).strip().replace("T", " ")
+                text = text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+                if calendar == "Jalali":
+                    text = text.replace("-", "/")
+                    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+                        try:
+                            return jdatetime.datetime.strptime(text, fmt).togregorian()
+                        except Exception:
+                            pass
+                else:
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                        try:
+                            return datetime.strptime(text, fmt)
+                        except Exception:
+                            pass
+                return None
+
+            start = normalize(report_request.get("Start"))
+            end = normalize(report_request.get("End"))
+
+            if start is None or end is None:
+                return jsonify({"status": "error", "message": "Invalid report date/time range"}), 400
+            if end < start:
+                return jsonify({"status": "error", "message": "Report end time is before start time"}), 400
+
+            # Read only persisted report snapshots. No realtime FlowRunner is
+            # required for the query; Flow is used solely to determine the
+            # selected ReportOutput columns for this company.
+            report = get_report_data(company_id, start, end)
+            report["columns"] = products
+
+            return jsonify({
+                "calendar": calendar,
+                "date_picker": "JalaliPicker" if calendar == "Jalali" else "GregorianPicker",
+                "report": report,
+                "labels": [item["name"] for item in products],
+                "datasets": [{"label": "مجموع گزارش", "data": report.get("totals", [])}],
+            })
+
         flask_app._master_logs_installed = True
         print("MASTER LOGS PAGE INSTALLED: /master/logs")
+        print("FLOW REPORT DATA ENDPOINT INSTALLED: /flow_report")
         return
 
     print("MASTER LOGS INSTALL FAILED")
