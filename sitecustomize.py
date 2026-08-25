@@ -79,19 +79,21 @@ def _extract_plc_reader(flow_data):
 
 
 def _sync_plc_reader_to_database(flow_data, company_id):
-    """Create/update the PLC record strictly from the company's saved Flow."""
+    """Create/update PLC configuration strictly from a company's Flow."""
 
     if company_id is None:
         return False
 
     plc_reader = _extract_plc_reader(flow_data)
     if plc_reader is None:
+        _original_print("PLC FLOW SYNC SKIPPED: NO PLCReader", "CompanyID=", company_id)
         return False
 
     data = plc_reader.get("data", {}) or {}
 
     plc_ip = str(data.get("ip", "")).strip()
     if not plc_ip:
+        _original_print("PLC FLOW SYNC SKIPPED: PLCReader has no IP", "CompanyID=", company_id)
         return False
 
     try:
@@ -218,6 +220,7 @@ def _sync_all_saved_flows_to_plcs():
     """Build/update PLC configuration from every saved company Flow."""
 
     from database import get_connection
+    import json
 
     conn = None
     cursor = None
@@ -229,6 +232,9 @@ def _sync_all_saved_flows_to_plcs():
             """
             SELECT CompanyID, FlowJson
             FROM Flows
+            WHERE CompanyID IS NOT NULL
+              AND FlowJson IS NOT NULL
+              AND TRIM(FlowJson) <> ''
             ORDER BY FlowID
             """
         )
@@ -248,20 +254,19 @@ def _sync_all_saved_flows_to_plcs():
             except Exception:
                 pass
 
+    _original_print("PLC FLOW STARTUP SYNC FLOWS:", len(rows))
+
     for row in rows:
         try:
             company_id = int(row["CompanyID"])
-            flow_data = __import__("json").loads(row["FlowJson"])
+            flow_data = json.loads(row["FlowJson"])
             _sync_plc_reader_to_database(flow_data, company_id)
         except Exception as exc:
-            _original_print(
-                "PLC FLOW STARTUP SYNC ERROR:",
-                exc,
-            )
+            _original_print("PLC FLOW STARTUP SYNC ERROR:", exc)
 
 
 def _disable_file_flow_fallback():
-    """Prevent the legacy flow.json from becoming a company configuration source."""
+    """Prevent legacy flow.json from becoming a company configuration source."""
 
     app_module = (
         sys.modules.get("app")
@@ -271,19 +276,23 @@ def _disable_file_flow_fallback():
     if app_module is None:
         return False
 
+    changed = False
+
     if hasattr(app_module, "_read_flow_file"):
         def _no_file_flow_fallback():
             return None
 
         app_module._read_flow_file = _no_file_flow_fallback
-        _original_print("FLOW FILE FALLBACK DISABLED")
-        return True
+        changed = True
 
-    return False
+    if changed:
+        _original_print("FLOW FILE FALLBACK DISABLED")
+
+    return changed
 
 
 def _patch_save_flow():
-    """Patch the existing Flask save_flow view to sync PLC from saved Flow."""
+    """Patch save_flow so PLC configuration is derived from the saved Flow."""
 
     app_module = (
         sys.modules.get("app")
@@ -305,7 +314,7 @@ def _patch_save_flow():
         return True
 
     try:
-        from flask import request, session
+        from flask import request
     except Exception:
         return False
 
@@ -316,26 +325,29 @@ def _patch_save_flow():
         except Exception:
             flow_data = {}
 
-        company_id = None
+        # The Flow Designer already carries the selected company in the URL.
+        # Use it as the source of truth instead of relying on session state.
+        company_id = request.args.get("company_id", type=int)
 
-        try:
-            role = str(session.get("role", "")).strip().lower()
-            if role == "master":
-                company_id = request.args.get("company_id", type=int)
-                if company_id is None:
-                    company_id = session.get("selected_company_id")
-            else:
+        if company_id is None:
+            try:
+                from flask import session
                 company_id = session.get("company_id")
-
-            if company_id is not None:
-                company_id = int(company_id)
-        except (TypeError, ValueError):
-            company_id = None
+                if company_id is not None:
+                    company_id = int(company_id)
+            except (TypeError, ValueError):
+                company_id = None
 
         response = view(*args, **kwargs)
 
         if _get_response_status(response) < 400:
-            _sync_plc_reader_to_database(flow_data, company_id)
+            synced = _sync_plc_reader_to_database(flow_data, company_id)
+            if not synced:
+                _original_print(
+                    "PLC FLOW SAVE SYNC FAILED:",
+                    "CompanyID=",
+                    company_id,
+                )
 
         return response
 
