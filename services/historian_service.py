@@ -23,20 +23,31 @@ class HistorianService:
         # present for 2 seconds before it is accepted by the historian.
         self.zero_memory = {}
 
-    def check_time(self, definition):
-        name = definition.get("name")
+    def check_time(self, company_id, definition):
+        name = str(definition.get("name", "")).strip().lower()
         interval = definition.get("interval", 0)
         if not interval:
             return False
+
+        key = (int(company_id), name)
         now = time.time()
-        last = self.time_memory.get(name, 0)
+        last = self.time_memory.get(key, 0)
+
         if now - last >= float(interval):
-            self.time_memory[name] = now
-            print("TIME TRIGGER:", name, "interval:", interval)
+            self.time_memory[key] = now
+            print(
+                "TIME TRIGGER:",
+                name,
+                "Company:",
+                company_id,
+                "interval:",
+                interval
+            )
             return True
+
         return False
 
-    def check_trigger(self, definition, registers):
+    def check_trigger(self, company_id, definition, registers):
         trigger_register = definition.get("trigger_register")
         trigger_value = definition.get("trigger_value")
         if trigger_register is None:
@@ -49,9 +60,10 @@ class HistorianService:
         else:
             return False
 
-        name = definition.get("name")
-        previous = self.trigger_memory.get(name)
-        self.trigger_memory[name] = current
+        name = str(definition.get("name", "")).strip().lower()
+        memory_key = (int(company_id), "TRIGGER", name)
+        previous = self.trigger_memory.get(memory_key)
+        self.trigger_memory[memory_key] = current
 
         try:
             target = float(trigger_value)
@@ -63,11 +75,21 @@ class HistorianService:
             previous_number = previous
 
         if previous_number == 0 and current_number == target:
-            print("TRIGGER EVENT:", name, "Register:", trigger_register, "Value:", current)
+            print(
+                "TRIGGER EVENT:",
+                name,
+                "Company:",
+                company_id,
+                "Register:",
+                trigger_register,
+                "Value:",
+                current
+            )
             return True
+
         return False
 
-    def check_report_trigger(self, definitions, report_tags, registers):
+    def check_report_trigger(self, company_id, definitions, report_tags, registers):
         selected = set(str(tag).strip().lower() for tag in report_tags)
 
         for definition in definitions:
@@ -89,7 +111,12 @@ class HistorianService:
             else:
                 continue
 
-            memory_key = "__REPORT__:" + ",".join(sorted(selected))
+            memory_key = (
+                int(company_id),
+                "REPORT",
+                ",".join(sorted(selected)),
+                str(trigger_register),
+            )
             previous = self.trigger_memory.get(memory_key)
             self.trigger_memory[memory_key] = current
 
@@ -102,14 +129,28 @@ class HistorianService:
                 previous_number = previous
                 target = trigger_value
 
-            if previous_number == 0 and current_number == target:
+            # First observation at the configured target is treated as an
+            # initial report event. Afterwards only the normal 0 -> target
+            # rising edge starts a new snapshot.
+            first_target = (
+                previous_number is None
+                and current_number == target
+            )
+            rising_edge = (
+                previous_number == 0
+                and current_number == target
+            )
+
+            if first_target or rising_edge:
                 print(
                     "REPORT TRIGGER EVENT:",
+                    "Company:", company_id,
                     "Register:", trigger_register,
                     "Value:", current,
                     "Tags:", sorted(selected)
                 )
                 return definition
+
             return None
 
         return None
@@ -234,7 +275,7 @@ class HistorianService:
         if not report_tags:
             return 0
 
-        if self.check_report_trigger(definitions, report_tags, registers) is None:
+        if self.check_report_trigger(company_id, definitions, report_tags, registers) is None:
             return 0
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -276,6 +317,8 @@ class HistorianService:
         print(
             "REPORT SNAPSHOT SAVED:",
             snapshot_id,
+            "Company:",
+            company_id,
             "TAGS:",
             len(report_tags)
         )
@@ -299,9 +342,9 @@ class HistorianService:
 
             mode = str(definition.get("storage", "TIME")).upper()
             save = (
-                self.check_time(definition)
+                self.check_time(company_id, definition)
                 if mode == "TIME"
-                else self.check_trigger(definition, registers)
+                else self.check_trigger(company_id, definition, registers)
                 if mode == "TRIGGER"
                 else False
             )
