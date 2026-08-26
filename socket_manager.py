@@ -6,6 +6,7 @@
 import json
 
 from flask import request, redirect, url_for
+from flask_socketio import join_room
 from werkzeug.security import check_password_hash
 
 from database import get_company_flow, get_connection
@@ -13,6 +14,7 @@ from database import get_company_flow, get_connection
 
 socketio_instance = None
 _auth_guard_registered = False
+_socket_handlers_registered = False
 
 
 # =====================================================
@@ -281,6 +283,43 @@ def _install_authentication_guard(socketio):
 
 
 # =====================================================
+# SOCKET.IO COMPANY ISOLATION
+# =====================================================
+
+def _install_socket_handlers(socketio):
+    global _socket_handlers_registered
+
+    if _socket_handlers_registered:
+        return True
+
+    @socketio.on("connect")
+    def _dashboard_socket_connect():
+        """Put each browser socket into its authenticated company room."""
+        company_id = request.args.get("company_id", type=int)
+
+        # The normal dashboard socket uses the authenticated Flask session.
+        if company_id is None:
+            try:
+                from flask import session
+                company_id = session.get("company_id")
+            except Exception:
+                company_id = None
+
+        if company_id is not None:
+            room = f"company:{company_id}"
+            join_room(room)
+            print("SOCKET JOINED COMPANY ROOM:", room)
+        else:
+            print("SOCKET CONNECTED WITHOUT COMPANY ID")
+
+        return True
+
+    _socket_handlers_registered = True
+    print("SOCKET COMPANY ROOM HANDLER REGISTERED")
+    return True
+
+
+# =====================================================
 # INITIALIZE
 # =====================================================
 
@@ -288,6 +327,7 @@ def init_socketio(socketio):
     global socketio_instance
     socketio_instance = socketio
     _install_authentication_guard(socketio)
+    _install_socket_handlers(socketio)
 
 
 # =====================================================
@@ -300,27 +340,33 @@ def send_dashboard_data(data):
         return
 
     try:
-        socketio_instance.emit("tag_update", data)
-
-        # Trend page consumes a normalized per-tag live event.
-        # Keep the original dashboard payload untouched for existing clients.
         tags = data.get("Tags", {}) if isinstance(data, dict) else {}
         company_id = data.get("CompanyID") if isinstance(data, dict) else None
         timestamp = data.get("Timestamp") if isinstance(data, dict) else None
+        room = f"company:{company_id}" if company_id is not None else None
 
+        # Never broadcast company-specific data to every logged-in dashboard.
+        # A CompanyID creates a private Socket.IO room for that company.
+        if room is not None:
+            socketio_instance.emit("tag_update", data, room=room)
+        else:
+            socketio_instance.emit("tag_update", data)
+
+        # Trend page consumes a normalized per-tag live event.
         if isinstance(tags, dict):
             for tag, value in tags.items():
-                socketio_instance.emit(
-                    "tag_update",
-                    {
-                        "CompanyID": company_id,
-                        "Tag": tag,
-                        "Value": value,
-                        "Timestamp": timestamp,
-                    }
-                )
+                payload = {
+                    "CompanyID": company_id,
+                    "Tag": tag,
+                    "Value": value,
+                    "Timestamp": timestamp,
+                }
+                if room is not None:
+                    socketio_instance.emit("tag_update", payload, room=room)
+                else:
+                    socketio_instance.emit("tag_update", payload)
 
-        print("SOCKET DATA SENT")
+        print("SOCKET DATA SENT", "COMPANY", company_id)
     except Exception as e:
         print("SOCKET SEND ERROR:", e)
 
@@ -329,8 +375,9 @@ def send_dashboard_data(data):
 # OPTIONAL MANUAL EMIT
 # =====================================================
 
-def send_tag_data(tags, online=True):
+def send_tag_data(tags, online=True, company_id=None):
     send_dashboard_data({
         "Online": online,
         "Tags": tags,
+        "CompanyID": company_id,
     })
