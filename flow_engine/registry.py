@@ -11,6 +11,7 @@ from flow_engine.nodes.tag_mapper import TagMapper
 from flow_engine.nodes.expression_node import ExpressionNode
 from flow_engine.nodes.sql_writer import SQLWriter
 from flow_engine.nodes.dashboard_output import DashboardOutput
+from flow_engine.nodes.machine_card import MachineCard
 from flow_engine.nodes.alarm_node import AlarmNode
 
 # =====================================================
@@ -63,6 +64,9 @@ NODE_CLASSES = {
 
     "DashboardOutput":
         DashboardOutput,
+
+    "MachineCard":
+        MachineCard,
 
     "AlarmNode":
         AlarmNode,
