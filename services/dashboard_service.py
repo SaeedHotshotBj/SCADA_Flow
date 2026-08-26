@@ -28,16 +28,56 @@ def _get_nodes(company_id):
     )
 
 
+def _register_to_tag(nodes):
+    """Build register -> real TagMapper name lookup for dashboard machine parameters."""
+    lookup = {}
+
+    for node in nodes.values():
+        if not isinstance(node, dict) or node.get("name") != "TagMapper":
+            continue
+
+        mappings = node.get("data", {}).get("mappings", [])
+        if not isinstance(mappings, list):
+            continue
+
+        for item in mappings:
+            if not isinstance(item, dict):
+                continue
+
+            name = str(item.get("name", "")).strip()
+            register = item.get("register")
+
+            if not name or register in (None, ""):
+                continue
+
+            try:
+                lookup[str(int(register))] = name
+            except (TypeError, ValueError):
+                lookup[str(register).strip()] = name
+
+    return lookup
+
+
+def _resolve_machine_tag(raw_tag, register_lookup):
+    """Resolve a MachineCard tag that may be a PLC register to its PLC_Data TagName."""
+    tag = str(raw_tag or "").strip()
+    if not tag:
+        return ""
+
+    return register_lookup.get(tag, tag)
+
+
 # =====================================================
 # DASHBOARD CONFIGURATION
 # =====================================================
 
 def get_dashboard_widgets(company_id):
     """
-    Return the existing parameter widgets plus the information required by
-    MachineCard. Machine parameter tags are included as hidden lookup entries
-    so /dashboard/latest can fetch their current values without changing the
-    existing dashboard API shape.
+    Return DashboardOutput widgets followed by MachineCard definitions.
+
+    MachineCard parameters are normalized through TagMapper so a parameter
+    configured as register 144/145 can read PLC_Data rows stored as
+    Motor1V1/Motor1S.
     """
 
     widgets = []
@@ -46,6 +86,7 @@ def get_dashboard_widgets(company_id):
 
     try:
         nodes = _get_nodes(company_id)
+        register_lookup = _register_to_tag(nodes)
 
         for node in nodes.values():
             if not isinstance(node, dict):
@@ -85,22 +126,25 @@ def get_dashboard_widgets(company_id):
                                 if not isinstance(parameter, dict):
                                     continue
 
-                                tag = str(parameter.get("tag", "")).strip()
-                                if not tag:
+                                raw_tag = str(parameter.get("tag", "")).strip()
+                                resolved_tag = _resolve_machine_tag(raw_tag, register_lookup)
+                                if not resolved_tag:
                                     continue
 
+                                label = str(parameter.get("label", "")).strip() or resolved_tag
+                                unit = str(parameter.get("unit", "")).strip()
+
                                 normalized["parameters"].append({
-                                    "label": str(parameter.get("label", "")).strip() or tag,
-                                    "tag": tag,
-                                    "unit": str(parameter.get("unit", "")).strip(),
+                                    "label": label,
+                                    "tag": resolved_tag,
+                                    "configured_tag": raw_tag,
+                                    "unit": unit,
                                 })
 
                                 widgets.append({
-                                    "tag": tag,
-                                    "title": normalized["name"] + " / " + (
-                                        str(parameter.get("label", "")).strip() or tag
-                                    ),
-                                    "unit": str(parameter.get("unit", "")).strip(),
+                                    "tag": resolved_tag,
+                                    "title": normalized["name"] + " / " + label,
+                                    "unit": unit,
                                     "_dashboard_type": "machine_parameter",
                                 })
 
@@ -112,9 +156,9 @@ def get_dashboard_widgets(company_id):
                         if isinstance(item, dict)
                     )
 
-        # Machine definitions are passed through the same list because the
-        # existing Flask dashboard route already supplies `widgets` to the
-        # template. No unrelated route/API contract is changed.
+        # Keep all DashboardOutput widgets first. Machine cards are appended
+        # after them so the dashboard always renders machine cards below the
+        # normal DashboardOutput cards.
         for machine in machines:
             widgets.append({
                 "_dashboard_type": "machine",
