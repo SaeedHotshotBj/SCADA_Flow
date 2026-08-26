@@ -1,410 +1,155 @@
 <!DOCTYPE html>
-
 <html lang="en">
-
 <head>
-
 <meta charset="UTF-8">
-
 <title>SCADA LIVE DASHBOARD</title>
-
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-
 <style>
-
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; }
-    body { background: #111827; color: white; font-family: Arial, sans-serif; }
-
-    .header {
-        height: 70px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0 25px;
-        background: #1f2937;
-    }
-
-    .title { font-size: 24px; font-weight: bold; }
-
-    .status {
-        padding: 8px 18px;
-        border-radius: 20px;
-        font-weight: bold;
-    }
-
-    .online { background: #166534; color: #bbf7d0; }
-    .offline { background: #7f1d1d; color: #fecaca; }
-
-    #dashboard {
-        position: relative;
-        min-height: calc(100vh - 70px);
-    }
-
-    .widget {
-        position: absolute;
-        width: 220px;
-        height: 140px;
-        background: #1f2937;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        transition: none !important;
-        animation: none !important;
-        transform: none !important;
-    }
-
-    .widget-title {
-        font-size: 17px;
-        color: #d1d5db;
-        margin-bottom: 15px;
-        transition: none !important;
-        animation: none !important;
-        transform: none !important;
-    }
-
-    .widget-value {
-        font-size: 34px;
-        font-weight: bold;
-        color: white;
-        width: 120px;
-        height: 42px;
-        line-height: 42px;
-        text-align: center;
-        white-space: nowrap;
-        overflow: hidden;
-        transition: none !important;
-        animation: none !important;
-        transform: none !important;
-    }
-
-    .widget-unit {
-        margin-top: 8px;
-        color: #9ca3af;
-        font-size: 14px;
-        transition: none !important;
-        animation: none !important;
-        transform: none !important;
-    }
-
-    #dashboard,
-    #dashboard *,
-    #dashboard *::before,
-    #dashboard *::after {
-        transition: none !important;
-        animation: none !important;
-        transform: none !important;
-    }
-
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;width:100%;min-height:100%}
+body{background:#111827;color:white;font-family:Arial,sans-serif}
+.header{height:70px;display:flex;align-items:center;justify-content:space-between;padding:0 25px;background:#1f2937}
+.title{font-size:24px;font-weight:bold}
+.status{padding:8px 18px;border-radius:20px;font-weight:bold}
+.online{background:#166534;color:#bbf7d0}.offline{background:#7f1d1d;color:#fecaca}
+#dashboard{position:relative;min-height:calc(100vh - 70px);padding:20px;display:flex;flex-wrap:wrap;align-items:flex-start;gap:20px}
+.widget{width:220px;min-height:140px;background:#1f2937;border-radius:12px;box-shadow:0 4px 15px rgba(0,0,0,.3);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:18px}
+.widget-title{font-size:17px;color:#d1d5db;margin-bottom:15px}.widget-value{font-size:34px;font-weight:bold;color:white;width:180px;height:42px;line-height:42px;text-align:center;white-space:nowrap;overflow:hidden}.widget-unit{margin-top:8px;color:#9ca3af;font-size:14px}
+.machine-card{width:min(460px,calc(100vw - 60px));background:#1f2937;border:1px solid #374151;border-radius:16px;box-shadow:0 5px 18px rgba(0,0,0,.28);padding:18px;display:flex;flex-direction:column;gap:14px}
+.machine-header{display:flex;align-items:center;gap:13px;border-bottom:1px solid #374151;padding-bottom:14px}.machine-icon{width:58px;height:58px;border-radius:12px;background:#111827;display:flex;align-items:center;justify-content:center;font-size:34px;flex:0 0 auto}.machine-icon img{width:44px;height:44px;object-fit:contain}.machine-name{font-size:21px;font-weight:bold;flex:1}.machine-state{font-size:11px;padding:5px 9px;border-radius:12px;background:#374151;color:#d1d5db}.machine-state.online-state{background:#166534;color:#bbf7d0}
+.machine-parameters{display:grid;grid-template-columns:1fr;gap:8px}.machine-card.layout-2 .machine-parameters,.machine-card.layout-auto-compact .machine-parameters{grid-template-columns:repeat(2,minmax(0,1fr))}.machine-parameter{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;background:#111827;border-radius:9px;padding:10px 12px;min-width:0}.machine-parameter-label{color:#d1d5db;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.machine-parameter-value{font-size:17px;font-weight:bold;white-space:nowrap}.machine-parameter-unit{color:#9ca3af;font-size:11px;margin-left:3px}.machine-card.layout-compact .machine-parameter{padding:7px 9px}.machine-card.layout-compact .machine-parameter-value{font-size:14px}
+.machine-empty{color:#9ca3af;text-align:center;padding:15px}.hidden-machine-parameter{display:none}
+#dashboard,#dashboard *,#dashboard *::before,#dashboard *::after{transition:none!important;animation:none!important;transform:none!important}
+@media(max-width:700px){#dashboard{padding:12px;gap:12px}.machine-card,.widget{width:100%}.machine-card.layout-2 .machine-parameters,.machine-card.layout-auto-compact .machine-parameters{grid-template-columns:1fr}}
 </style>
-
 </head>
-
 <body>
-
 {% include "nav.html" %}
-
 <div class="header">
-
     <div class="title">SCADA LIVE DASHBOARD</div>
-
     <div id="status" class="status offline">OFFLINE</div>
-
 </div>
 
 <div id="dashboard">
 
-{% for widget in widgets %}
-
-<div
-    class="widget"
-    id="widget_{{ widget.tag }}"
-    style="
-        left: {{ loop.index0 % 4 * 260 + 20 }}px;
-        top: {{ (loop.index0 // 4) * 180 + 20 }}px;
-    "
->
-
-    <div class="widget-title">
-        {{ widget.title if widget.title else widget.tag }}
-    </div>
-
-    <div class="widget-value" id="value_{{ widget.tag }}">0</div>
-
-    <div class="widget-unit">
-        {{ widget.unit if widget.unit else "" }}
-    </div>
-
-</div>
-
+{% set machine_entries = [] %}
+{% for item in widgets %}
+    {% if item._dashboard_type == 'machine' %}
+        {% set _ = machine_entries.append(item) %}
+    {% endif %}
 {% endfor %}
 
-{% if not widgets %}
-<div style="padding: 30px;">No dashboard widgets configured in flow.</div>
-{% endif %}
+{% for widget in widgets %}
+    {% if not widget._dashboard_type %}
+    <div class="widget" id="widget_{{ widget.tag }}">
+        <div class="widget-title">{{ widget.title if widget.title else widget.tag }}</div>
+        <div class="widget-value" id="value_{{ widget.tag }}">0</div>
+        <div class="widget-unit">{{ widget.unit if widget.unit else "" }}</div>
+    </div>
+    {% endif %}
+{% endfor %}
 
+{% for item in machine_entries %}
+{% set machine = item.machine %}
+<div class="machine-card layout-{{ machine.layout if machine.layout else 'auto' }}" data-machine-id="{{ machine.id }}" data-icon="{{ machine.icon }}" data-icons='{{ item.icon_library|tojson }}'>
+    <div class="machine-header">
+        <div class="machine-icon" data-machine-icon></div>
+        <div class="machine-name">{{ machine.name }}</div>
+        <div class="machine-state" data-machine-state>WAITING</div>
+    </div>
+    <div class="machine-parameters" data-machine-parameters>
+        {% for parameter in machine.parameters %}
+        <div class="machine-parameter" data-machine-parameter data-tag="{{ parameter.tag }}">
+            <div class="machine-parameter-label">{{ parameter.label }}</div>
+            <div class="machine-parameter-value"><span data-value>0</span><span class="machine-parameter-unit">{{ parameter.unit }}</span></div>
+        </div>
+        {% endfor %}
+        {% if not machine.parameters %}<div class="machine-empty">No machine parameters configured.</div>{% endif %}
+    </div>
+</div>
+{% endfor %}
+
+{% if not widgets %}<div style="padding:30px;">No dashboard widgets configured in flow.</div>{% endif %}
 </div>
 
 <script>
+const socket=io({transports:["websocket","polling"],reconnection:true,reconnectionAttempts:Infinity,reconnectionDelay:1000,reconnectionDelayMax:5000});
 
-// =====================================================
-// LIVE DATA POLICY
-// =====================================================
-//
-// DashboardOutput controls the Edge timeout on the server.
-// Between Edge transmissions the last value is preserved.
-// When the configured timeout expires, the server returns
-// zero for the stale Edge parameters.
-//
-// The browser has no fixed value timeout anymore.
-// =====================================================
+const BUILTIN_ICONS={
+    "builtin:factory":"🏭","builtin:machine":"⚙️","builtin:motor":"🔧","builtin:pump":"💧","builtin:fan":"🌀","builtin:heater":"🔥","builtin:power":"⚡","builtin:production":"📦","builtin:robot":"🤖","builtin:conveyor":"➡️","builtin:compressor":"🔩","builtin:warehouse":"🏢"
+};
 
-// =====================================================
-// SOCKET.IO
-// =====================================================
-
-const socket = io({
-    transports: ["websocket", "polling"],
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000
-});
-
-// =====================================================
-// UPDATE ONE CARD
-// =====================================================
-
-function updateCard(tag, value) {
-
-    if (!tag) {
-        return;
-    }
-
-    const element = document.getElementById("value_" + tag);
-
-    if (!element) {
-        console.warn("Dashboard widget not found:", tag);
-        return;
-    }
-
-    // null/undefined means no value. It must never replace
-    // an existing valid value with zero.
-    if (value === null || value === undefined) {
-        return;
-    }
-
-    const newValue = String(value);
-
-    if (element.textContent !== newValue) {
-        element.textContent = newValue;
-    }
+function updateCard(tag,value){
+    if(!tag||value===null||value===undefined)return;
+    const element=document.getElementById("value_"+tag);
+    if(element&&element.textContent!==String(value))element.textContent=String(value);
 }
 
-// =====================================================
-// CLEAR ALL VALUES
-// =====================================================
+function setOnline(){
+    const status=document.getElementById("status");
+    if(!status)return;
+    status.textContent="ONLINE";status.classList.remove("offline");status.classList.add("online");
+    document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="ONLINE";e.classList.add("online-state")});
+}
 
-function clearDashboardValues() {
+function setOffline(){
+    const status=document.getElementById("status");
+    if(!status)return;
+    status.textContent="OFFLINE";status.classList.remove("online");status.classList.add("offline");
+    document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="OFFLINE";e.classList.remove("online-state")});
+}
 
-    document.querySelectorAll(".widget-value").forEach(function (element) {
-
-        if (element.id.startsWith("value_")) {
-            element.textContent = "0";
-        }
-
+function renderMachineIcons(){
+    document.querySelectorAll(".machine-card").forEach(card=>{
+        const target=card.querySelector("[data-machine-icon]");
+        if(!target)return;
+        const icon=card.dataset.icon||"builtin:factory";
+        if(BUILTIN_ICONS[icon]){target.textContent=BUILTIN_ICONS[icon];return;}
+        let icons=[];try{icons=JSON.parse(card.dataset.icons||"[]")}catch(e){icons=[]}
+        const id=icon.startsWith("custom:")?icon.substring(7):icon;
+        const custom=icons.find(x=>String(x.id||"")===id);
+        if(custom&&custom.src){target.innerHTML="<img src=\""+String(custom.src).replace(/\"/g,"&quot;")+"\" alt=\"\">";return;}
+        target.textContent="🏭";
     });
 }
 
-// =====================================================
-// ONLINE
-// =====================================================
-
-function setOnline() {
-
-    const status = document.getElementById("status");
-
-    if (!status) {
-        return;
-    }
-
-    status.textContent = "ONLINE";
-    status.classList.remove("offline");
-    status.classList.add("online");
-}
-
-// =====================================================
-// OFFLINE
-// =====================================================
-
-function setOffline() {
-
-    const status = document.getElementById("status");
-
-    if (!status) {
-        return;
-    }
-
-    status.textContent = "OFFLINE";
-    status.classList.remove("online");
-    status.classList.add("offline");
-
-    // IMPORTANT: offline status alone never clears cards.
-}
-
-// =====================================================
-// APPLY SERVER LATEST DATA
-// =====================================================
-
-function applyLatestData(data) {
-
-    if (!data) {
-        setOffline();
-        return;
-    }
-
-    const tags = data.Tags || {};
-
-    Object.keys(tags).forEach(function (tag) {
-
-        updateCard(tag, tags[tag]);
-
-    });
-
-    if (data.Online === true) {
-        setOnline();
-    } else {
-        setOffline();
-    }
-}
-
-// =====================================================
-// SOCKET CONNECT
-// =====================================================
-
-socket.on("connect", function () {
-
-    console.log("Dashboard Socket.IO connected");
-
-});
-
-// =====================================================
-// SOCKET DISCONNECT
-// =====================================================
-
-socket.on("disconnect", function () {
-
-    console.log("Dashboard Socket.IO disconnected");
-
-    // Browser Socket.IO disconnect does not mean Edge is offline.
-    // Keep the last values visible.
-    setOffline();
-
-});
-
-// =====================================================
-// SOCKET TAG UPDATE
-// =====================================================
-
-socket.on("tag_update", function (data) {
-
-    console.log("TAG UPDATE RECEIVED:", data);
-
-    if (!data || data.Online !== true) {
-        return;
-    }
-
-    const tag = data.Tag;
-
-    if (!tag) {
-        return;
-    }
-
-    // Zero is a valid PLC value and must be displayed.
-    if (data.Value === null || data.Value === undefined) {
-        return;
-    }
-
-    updateCard(tag, data.Value);
-    setOnline();
-
-});
-
-// =====================================================
-// SOCKET ERROR
-// =====================================================
-
-socket.on("connect_error", function (error) {
-
-    console.error("Socket.IO connection error:", error);
-
-});
-
-// =====================================================
-// LOAD LATEST VALUES
-// =====================================================
-
-async function loadLatestValues() {
-
-    try {
-
-        const response = await fetch(
-            "/dashboard/latest?t=" + Date.now(),
-            {
-                method: "GET",
-                cache: "no-store",
-                headers: {
-                    "Cache-Control": "no-cache",
-                    "Pragma": "no-cache"
-                }
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error("HTTP " + response.status);
+function applyMachineTag(tag,value){
+    if(!tag||value===null||value===undefined)return;
+    document.querySelectorAll('[data-machine-parameter][data-tag]').forEach(row=>{
+        if(String(row.dataset.tag).toLowerCase()===String(tag).toLowerCase()){
+            const valueElement=row.querySelector("[data-value]");
+            if(valueElement)valueElement.textContent=String(value);
         }
+    });
+}
 
-        const data = await response.json();
+function applyLatestData(data){
+    if(!data){setOffline();return;}
+    const tags=data.Tags||{};
+    Object.keys(tags).forEach(tag=>{updateCard(tag,tags[tag]);applyMachineTag(tag,tags[tag])});
+    if(data.Online===true)setOnline();else setOffline();
+}
 
-        console.log("LATEST DASHBOARD DATA:", data);
+socket.on("connect",()=>console.log("Dashboard Socket.IO connected"));
+socket.on("disconnect",()=>{console.log("Dashboard Socket.IO disconnected");setOffline()});
+socket.on("tag_update",data=>{
+    if(!data||data.Online!==true)return;
+    if(data.Tag&&data.Value!==null&&data.Value!==undefined){updateCard(data.Tag,data.Value);applyMachineTag(data.Tag,data.Value);setOnline()}
+});
+socket.on("connect_error",error=>console.error("Socket.IO connection error:",error));
 
+async function loadLatestValues(){
+    try{
+        const response=await fetch("/dashboard/latest?t="+Date.now(),{method:"GET",cache:"no-store",headers:{"Cache-Control":"no-cache","Pragma":"no-cache"}});
+        if(!response.ok)throw new Error("HTTP "+response.status);
+        const data=await response.json();
         applyLatestData(data);
-
-    }
-    catch (error) {
-
-        console.error("DASHBOARD DATA ERROR:", error);
-
-        // Keep last values when the dashboard request itself fails.
-        setOffline();
-
-    }
-
+    }catch(error){console.error("DASHBOARD DATA ERROR:",error);setOffline()}
 }
 
-// =====================================================
-// INITIAL LOAD
-// =====================================================
-
+renderMachineIcons();
 loadLatestValues();
-
-// =====================================================
-// SERVER TIMEOUT CHECK
-// =====================================================
-//
-// The server evaluates DashboardOutput.timeout on every
-// request. Polling once per second makes the zero appear
-// within approximately one second after the configured
-// timeout expires.
-//
-
-setInterval(loadLatestValues, 1000);
-
+setInterval(loadLatestValues,1000);
 </script>
-
 </body>
-
 </html>
