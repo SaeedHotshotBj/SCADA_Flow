@@ -49,6 +49,9 @@ class DashboardOutput:
             {}
         )
 
+        if not isinstance(tags, dict):
+            tags = {}
+
         engaged_roles = data.get(
             "EngagedRoles",
             []
@@ -79,6 +82,14 @@ class DashboardOutput:
 
         }
 
+        machine_cards = data.get("MachineCards", [])
+        if isinstance(machine_cards, list):
+            output["MachineCards"] = machine_cards
+            output["MachineIconLibrary"] = data.get(
+                "MachineIconLibrary",
+                []
+            )
+
         if self.widgets:
 
             for widget in self.widgets:
@@ -88,8 +99,17 @@ class DashboardOutput:
                 )
 
                 if tag in tags:
-
                     output["Tags"][tag] = tags[tag]
+
+            # MachineCard parameters are dashboard data too. They are added
+            # automatically so the editor does not require duplicate tag rows
+            # in DashboardOutput just to make a machine card live.
+            if isinstance(machine_cards, list):
+                for machine in machine_cards:
+                    for parameter in machine.get("parameters", []):
+                        tag = parameter.get("tag")
+                        if tag in tags:
+                            output["Tags"][tag] = tags[tag]
 
         else:
 
