@@ -231,6 +231,94 @@ run_remote(
 
 
 # ============================================================
+# TEST AUTHENTICATED DASHBOARD ROUTE DIRECTLY
+# ============================================================
+#
+# This does not use the public browser session. It asks Flask itself to
+# create a temporary authenticated test session using the first enabled
+# company user in SQLite, then requests /dashboard through the real route,
+# decorators, database access and Jinja template. This gives us the exact
+# Python exception behind a browser-side 500 without needing server-console
+# access or real credentials.
+# ============================================================
+
+dashboard_diagnostic = r'''cd /var/www/scada && .venv/bin/python - <<'PY'
+import time
+import traceback
+
+from app import app
+from database import get_connection
+
+print("AUTHENTICATED DASHBOARD DIAGNOSTIC START")
+
+conn = get_connection()
+try:
+    row = conn.execute(
+        """
+        SELECT UserID, Username, CompanyID, Role
+        FROM Users
+        WHERE Enabled = 1
+          AND CompanyID IS NOT NULL
+        ORDER BY UserID
+        LIMIT 1
+        """
+    ).fetchone()
+finally:
+    conn.close()
+
+if row is None:
+    print("DIAGNOSTIC ERROR: no enabled company user exists")
+    raise SystemExit(2)
+
+company_id = row["CompanyID"]
+user_id = row["UserID"]
+username = row["Username"]
+role = row["Role"]
+
+print("DIAGNOSTIC USER:", username)
+print("DIAGNOSTIC COMPANY:", company_id)
+print("DIAGNOSTIC ROLE:", role)
+
+app.testing = True
+
+try:
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess.clear()
+            sess["user_id"] = user_id
+            sess["username"] = username
+            sess["role"] = role
+            sess["company_id"] = company_id
+            sess["auth_login_time"] = time.time()
+            sess.permanent = True
+
+        response = client.get("/dashboard")
+
+        print("DASHBOARD HTTP STATUS:", response.status_code)
+        print("DASHBOARD CONTENT TYPE:", response.headers.get("Content-Type"))
+        print("DASHBOARD BODY PREVIEW:")
+        print(response.get_data(as_text=True)[:2000])
+
+        if response.status_code >= 500:
+            raise RuntimeError(
+                "Authenticated /dashboard returned HTTP %s" % response.status_code
+            )
+
+except Exception:
+    print("AUTHENTICATED DASHBOARD TRACEBACK:")
+    traceback.print_exc()
+    raise
+
+print("AUTHENTICATED DASHBOARD DIAGNOSTIC END")
+PY'''
+
+run_remote(
+    dashboard_diagnostic,
+    "Testing authenticated /dashboard directly inside Flask...",
+)
+
+
+# ============================================================
 # TEST PUBLIC DOMAIN
 # ============================================================
 
@@ -245,7 +333,7 @@ run_remote(
 # ============================================================
 
 run_remote(
-    "journalctl -u scada -n 80 --no-pager -o cat",
+    "journalctl -u scada -n 120 --no-pager -o cat",
     "Recent SCADA logs...",
 )
 
