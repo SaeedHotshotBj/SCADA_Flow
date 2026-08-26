@@ -14,41 +14,68 @@ from database import get_connection, get_company_flow
 # =====================================================
 
 def ensure_report_tables():
-    """Create the report-specific database tables if they do not exist."""
+    """Create report tables and migrate the legacy ReportHistory schema."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS ReportHistory (
-            ReportID INTEGER PRIMARY KEY AUTOINCREMENT,
-            CompanyID INTEGER NOT NULL,
-            Timestamp TEXT NOT NULL,
-            FOREIGN KEY (CompanyID)
-                REFERENCES Companies(CompanyID)
-        );
+    try:
+        cursor.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS ReportHistory (
+                ReportID INTEGER PRIMARY KEY AUTOINCREMENT,
+                CompanyID INTEGER,
+                Timestamp TEXT NOT NULL,
+                FOREIGN KEY (CompanyID)
+                    REFERENCES Companies(CompanyID)
+            );
 
-        CREATE TABLE IF NOT EXISTS ReportValues (
-            ReportValueID INTEGER PRIMARY KEY AUTOINCREMENT,
-            ReportID INTEGER NOT NULL,
-            TagName TEXT NOT NULL,
-            Value REAL,
-            FOREIGN KEY (ReportID)
-                REFERENCES ReportHistory(ReportID)
-                ON DELETE CASCADE
-        );
+            CREATE TABLE IF NOT EXISTS ReportValues (
+                ReportValueID INTEGER PRIMARY KEY AUTOINCREMENT,
+                ReportID INTEGER NOT NULL,
+                TagName TEXT NOT NULL,
+                Value REAL,
+                FOREIGN KEY (ReportID)
+                    REFERENCES ReportHistory(ReportID)
+                    ON DELETE CASCADE
+            );
+            """
+        )
 
-        CREATE INDEX IF NOT EXISTS idx_report_history_company_time
-        ON ReportHistory (CompanyID, Timestamp);
+        cursor.execute('PRAGMA table_info("ReportHistory")')
+        columns = {row["name"] for row in cursor.fetchall()}
 
-        CREATE INDEX IF NOT EXISTS idx_report_values_report_tag
-        ON ReportValues (ReportID, TagName);
-        """
-    )
+        if "CompanyID" not in columns:
+            cursor.execute(
+                'ALTER TABLE "ReportHistory" ADD COLUMN CompanyID INTEGER'
+            )
 
-    conn.commit()
-    cursor.close()
-    conn.close()
+            cursor.execute(
+                """
+                UPDATE ReportHistory
+                SET CompanyID = 1
+                WHERE CompanyID IS NULL
+                """
+            )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_report_history_company_time
+            ON ReportHistory (CompanyID, Timestamp)
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_report_values_report_tag
+            ON ReportValues (ReportID, TagName)
+            """
+        )
+
+        conn.commit()
+
+    finally:
+        cursor.close()
+        conn.close()
 
 
 # =====================================================
@@ -72,14 +99,6 @@ def _flow_nodes(company_id):
 
 
 def get_report_products(company_id):
-    """
-    Return the configured report columns from the company's saved Flow.
-
-    A Flow may contain more than one ReportOutput node. Some of those nodes
-    can intentionally be empty (for example a role-gating/output node).
-    Empty ReportOutput nodes must not mask a later ReportOutput that actually
-    defines the report columns.
-    """
     products = []
 
     try:
@@ -118,8 +137,6 @@ def get_report_products(company_id):
             if candidate:
                 products.extend(candidate)
 
-        # De-duplicate while preserving Flow order. This also makes multiple
-        # non-empty ReportOutput nodes behave deterministically.
         unique = []
         seen = set()
 
@@ -147,13 +164,6 @@ def save_report_snapshot(
     report_products,
     timestamp=None,
 ):
-    """
-    Store one complete report snapshot.
-
-    The list of tags is taken from ReportOutput. No register/tag names are
-    hard-coded here. ReportValues is normalized so the UI can pivot it into
-    dynamic columns later.
-    """
     if company_id is None or not isinstance(tags, dict):
         return None
 
@@ -248,7 +258,6 @@ def save_report_snapshot(
 # =====================================================
 
 def get_report_data(company_id, start, end):
-    """Return dynamic report columns and rows for the requested date range."""
     products = get_report_products(company_id)
 
     result = {
