@@ -83,6 +83,21 @@ NODE_REGISTRY = {
         ]
     },
 
+    "MachineCard": {
+        "config": [
+            {
+                "name": "machines",
+                "label": "Machines",
+                "type": "machine_cards"
+            },
+            {
+                "name": "icon_library",
+                "label": "Icon Library",
+                "type": "icon_library"
+            }
+        ]
+    },
+
     "DashboardOutput": {
         "config": [
             {
