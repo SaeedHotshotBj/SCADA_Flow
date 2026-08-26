@@ -26,7 +26,6 @@ _edge_last_seen = {}
 
 def _record_edge_request(response):
     """Record the server-side receive time of a successful Edge request."""
-
     try:
         payload = response.get_json(silent=True)
         if not isinstance(payload, dict):
@@ -46,7 +45,6 @@ def _record_edge_request(response):
 
 def _get_dashboard_timeout(company_id):
     """Read Edge Timeout from the company's DashboardOutput node."""
-
     default_timeout = 10.0
 
     try:
@@ -130,7 +128,6 @@ def _apply_dashboard_edge_timeout(response):
     This changes only the live dashboard response. No synthetic zero is written
     to PLC_Data or TagHistory, so historian/trend data remains real.
     """
-
     if response.status_code != 200:
         return response
 
@@ -279,6 +276,22 @@ def _start_edge_watchdog():
 
 
 class SCADAFlowSocketIO(SocketIO):
+
+    def emit(self, event, data=None, *args, **kwargs):
+        """Keep company-specific realtime events isolated.
+
+        Some server paths emit directly through the shared SocketIO instance
+        instead of socket_manager.send_dashboard_data().  If a tag_update has
+        a CompanyID, route it to that company's room automatically.
+        """
+        if event == "tag_update" and isinstance(data, dict):
+            company_id = data.get("CompanyID")
+
+            if company_id is not None:
+                if kwargs.get("room") is None and kwargs.get("to") is None:
+                    kwargs["room"] = f"company:{company_id}"
+
+        return super().emit(event, data, *args, **kwargs)
 
     def run(self, app, *args, **kwargs):
         try:
