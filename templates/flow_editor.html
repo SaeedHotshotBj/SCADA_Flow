@@ -31,6 +31,19 @@ input,select{padding:7px;background:#111;color:#fff;border:1px solid #555;border
 .config-table input,.config-table select{width:100%;min-width:75px;padding:5px}
 .delete-row{padding:5px 8px}.table-actions{margin-top:8px}
 .drawflow .drawflow-node{background:#252525;border:1px solid #777;color:#fff}.drawflow .drawflow-node.selected{border:2px solid #00aaff}.drawflow .drawflow-node .title-box{padding:10px;font-weight:bold}
+.machine-editor{border:1px solid #444;background:#181818;border-radius:6px;padding:8px;margin-bottom:10px}
+.machine-editor-head{display:flex;gap:5px;align-items:center;margin-bottom:8px}
+.machine-editor-head strong{flex:1;color:#fff}
+.machine-editor input,.machine-editor select{width:100%;padding:5px;margin-bottom:5px}
+.machine-parameter{border-top:1px solid #333;padding-top:6px;margin-top:6px}
+.machine-parameter-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
+.machine-parameter-grid input{min-width:0}
+.icon-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:6px 0}
+.icon-choice{min-height:52px;padding:5px;font-size:22px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.icon-choice small{font-size:9px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.icon-preview{display:inline-flex;width:34px;height:34px;align-items:center;justify-content:center;font-size:24px;vertical-align:middle;border:1px solid #555;border-radius:4px;margin-right:5px}
+.library-item{display:flex;gap:5px;align-items:center;margin-bottom:5px}.library-item img{width:32px;height:32px;object-fit:contain;background:#fff;border-radius:3px}
+.section-note{font-size:11px;color:#999;line-height:1.4;margin:4px 0 8px}
 </style>
 </head>
 <body>
@@ -66,6 +79,21 @@ let editor=null;
 let nodeRegistry={};
 let selectedNodeId=null;
 let flowRoles=[];
+
+const BUILTIN_ICONS=[
+    {id:'builtin:factory',name:'Factory',symbol:'🏭'},
+    {id:'builtin:machine',name:'Machine',symbol:'⚙️'},
+    {id:'builtin:motor',name:'Motor',symbol:'🔧'},
+    {id:'builtin:pump',name:'Pump',symbol:'💧'},
+    {id:'builtin:fan',name:'Fan',symbol:'🌀'},
+    {id:'builtin:heater',name:'Heater',symbol:'🔥'},
+    {id:'builtin:power',name:'Power',symbol:'⚡'},
+    {id:'builtin:production',name:'Production',symbol:'📦'},
+    {id:'builtin:robot',name:'Robot',symbol:'🤖'},
+    {id:'builtin:conveyor',name:'Conveyor',symbol:'➡️'},
+    {id:'builtin:compressor',name:'Compressor',symbol:'🔩'},
+    {id:'builtin:warehouse',name:'Warehouse',symbol:'🏢'}
+];
 
 function status(text){document.getElementById('status').textContent=text}
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#039;')}
@@ -143,6 +171,7 @@ async function loadRegistry(){
 function addNode(name){
     let data={};
     if(name==='RolesEngaged') data={roles:[]};
+    if(name==='MachineCard') data={machines:[],icon_library:[]};
     const id=editor.addNode(name,1,1,100+Math.random()*350,100+Math.random()*300,name,data,`<div class="title-box">${esc(name)}</div>`,false);
     selectNode(id);
     refreshRoles();
@@ -236,6 +265,8 @@ function renderProperty(box,node,def){
     const wrap=document.createElement('div');wrap.className='property-field';
     const label=document.createElement('label');label.textContent=def.label||def.name;wrap.appendChild(label);
     if(def.type==='table') renderTable(wrap,node,def);
+    else if(def.type==='machine_cards') renderMachineCards(wrap,node);
+    else if(def.type==='icon_library') renderIconLibrary(wrap,node);
     else{
         const input=createInput(def,node.data?.[def.name]);
         input.onchange=()=>setNodeValue(node,def.name,inputValue(input,def));
@@ -291,6 +322,157 @@ function renderTable(wrap,node,def){
     const actions=document.createElement('div');actions.className='table-actions';const add=document.createElement('button');add.textContent='ADD ROW';
     add.onclick=()=>{const row={};(def.columns||[]).forEach(col=>row[col.name]=col.default??'');rows.push(row);editor.updateNodeDataFromId(node.id,node.data);renderProperties(node);refreshRoles()};
     actions.appendChild(add);wrap.appendChild(actions);
+}
+
+// =====================================================
+// MACHINE CARD DESIGNER
+// =====================================================
+
+function machineIconItems(node){
+    const custom=Array.isArray(node.data?.icon_library)?node.data.icon_library:[];
+    return [...BUILTIN_ICONS,...custom.map(x=>({
+        id:'custom:'+String(x.id||''),
+        name:String(x.name||x.id||'Custom'),
+        src:x.src,
+        custom:true
+    }))];
+}
+
+function machineIconVisual(icon,node){
+    const item=machineIconItems(node).find(x=>x.id===icon);
+    if(!item) return '<span class="icon-preview">🏭</span>';
+    if(item.custom && item.src){
+        return '<span class="icon-preview"><img src="'+esc(item.src)+'" style="width:28px;height:28px;object-fit:contain"></span>';
+    }
+    return '<span class="icon-preview">'+esc(item.symbol||'🏭')+'</span>';
+}
+
+function renderMachineCards(wrap,node){
+    if(!Array.isArray(node.data.machines)) node.data.machines=[];
+    const machines=node.data.machines;
+
+    const note=document.createElement('div');
+    note.className='section-note';
+    note.textContent='Define any number of industrial machines. Each machine can have any number of tag-based parameters.';
+    wrap.appendChild(note);
+
+    const list=document.createElement('div');
+    machines.forEach((machine,index)=>{
+        if(!machine.id) machine.id='machine_'+(index+1);
+        if(!Array.isArray(machine.parameters)) machine.parameters=[];
+        if(!machine.icon) machine.icon='builtin:factory';
+        if(!machine.layout) machine.layout='auto';
+
+        const card=document.createElement('div');card.className='machine-editor';
+        const head=document.createElement('div');head.className='machine-editor-head';
+        const strong=document.createElement('strong');strong.textContent='Machine '+(index+1);head.appendChild(strong);
+        const del=document.createElement('button');del.textContent='DELETE';del.onclick=()=>{machines.splice(index,1);commitMachineNode(node);renderProperties(node)};head.appendChild(del);card.appendChild(head);
+
+        const idInput=document.createElement('input');idInput.placeholder='Machine ID';idInput.value=machine.id;
+        idInput.onchange=()=>{machine.id=idInput.value.trim()||('machine_'+(index+1));commitMachineNode(node)};card.appendChild(idInput);
+
+        const nameInput=document.createElement('input');nameInput.placeholder='Machine Name';nameInput.value=machine.name||'';
+        nameInput.onchange=()=>{machine.name=nameInput.value;commitMachineNode(node)};card.appendChild(nameInput);
+
+        const iconLabel=document.createElement('label');iconLabel.textContent='Icon';card.appendChild(iconLabel);
+        card.insertAdjacentHTML('beforeend',machineIconVisual(machine.icon,node));
+        const iconGrid=document.createElement('div');iconGrid.className='icon-grid';
+        machineIconItems(node).forEach(item=>{
+            const b=document.createElement('button');b.type='button';b.className='icon-choice';
+            if(item.custom && item.src){b.innerHTML='<img src="'+esc(item.src)+'" style="width:28px;height:28px;object-fit:contain"><small>'+esc(item.name)+'</small>'}
+            else b.innerHTML=esc(item.symbol)+'<small>'+esc(item.name)+'</small>';
+            b.onclick=()=>{machine.icon=item.id;commitMachineNode(node);renderProperties(node)};
+            iconGrid.appendChild(b);
+        });
+        card.appendChild(iconGrid);
+
+        const layout=document.createElement('select');
+        [['auto','Automatic'],['1','1 Column'],['2','2 Columns'],['compact','Compact']].forEach(x=>layout.add(new Option(x[1],x[0])));
+        layout.value=machine.layout;
+        layout.onchange=()=>{machine.layout=layout.value;commitMachineNode(node)};
+        card.appendChild(layout);
+
+        const pTitle=document.createElement('div');pTitle.textContent='Parameters';pTitle.style.margin='8px 0 4px';card.appendChild(pTitle);
+        const pList=document.createElement('div');
+        machine.parameters.forEach((parameter,pIndex)=>{
+            const row=document.createElement('div');row.className='machine-parameter';
+            const grid=document.createElement('div');grid.className='machine-parameter-grid';
+            const label=document.createElement('input');label.placeholder='Label';label.value=parameter.label||'';
+            const tag=document.createElement('input');tag.placeholder='Tag';tag.value=parameter.tag||'';
+            const unit=document.createElement('input');unit.placeholder='Unit';unit.value=parameter.unit||'';
+            label.onchange=()=>{parameter.label=label.value;commitMachineNode(node)};
+            tag.onchange=()=>{parameter.tag=tag.value;commitMachineNode(node)};
+            unit.onchange=()=>{parameter.unit=unit.value;commitMachineNode(node)};
+            grid.append(label,tag,unit);row.appendChild(grid);
+            const remove=document.createElement('button');remove.textContent='DELETE PARAMETER';remove.style.marginTop='4px';
+            remove.onclick=()=>{machine.parameters.splice(pIndex,1);commitMachineNode(node);renderProperties(node)};
+            row.appendChild(remove);pList.appendChild(row);
+        });
+        card.appendChild(pList);
+        const addParam=document.createElement('button');addParam.textContent='+ ADD PARAMETER';
+        addParam.onclick=()=>{machine.parameters.push({label:'',tag:'',unit:''});commitMachineNode(node);renderProperties(node)};
+        card.appendChild(addParam);
+        list.appendChild(card);
+    });
+    wrap.appendChild(list);
+
+    const addMachine=document.createElement('button');addMachine.textContent='+ ADD MACHINE';
+    addMachine.onclick=()=>{machines.push({id:'machine_'+(machines.length+1),name:'',icon:'builtin:factory',layout:'auto',parameters:[ ]});commitMachineNode(node);renderProperties(node)};
+    wrap.appendChild(addMachine);
+}
+
+function commitMachineNode(node){
+    editor.updateNodeDataFromId(node.id,node.data);
+}
+
+// =====================================================
+// ICON LIBRARY
+// =====================================================
+
+function renderIconLibrary(wrap,node){
+    if(!Array.isArray(node.data.icon_library)) node.data.icon_library=[];
+    const library=node.data.icon_library;
+
+    const note=document.createElement('div');
+    note.className='section-note';
+    note.textContent='Built-in icons are always available. Custom SVG/PNG/JPG icons added here are stored in this MachineCard flow and can be reused by all machines in it.';
+    wrap.appendChild(note);
+
+    const builtinTitle=document.createElement('div');builtinTitle.textContent='Built-in Icons';builtinTitle.style.fontWeight='bold';wrap.appendChild(builtinTitle);
+    const builtGrid=document.createElement('div');builtGrid.className='icon-grid';
+    BUILTIN_ICONS.forEach(item=>{
+        const b=document.createElement('button');b.type='button';b.className='icon-choice';
+        b.innerHTML=esc(item.symbol)+'<small>'+esc(item.name)+'</small>';
+        b.disabled=true;
+        builtGrid.appendChild(b);
+    });
+    wrap.appendChild(builtGrid);
+
+    const customTitle=document.createElement('div');customTitle.textContent='My Icons';customTitle.style.fontWeight='bold';wrap.appendChild(customTitle);
+    const customList=document.createElement('div');
+    library.forEach((item,index)=>{
+        const row=document.createElement('div');row.className='library-item';
+        row.innerHTML='<img src="'+esc(item.src||'')+'"><input value="'+esc(item.name||'Custom Icon')+'">';
+        const input=row.querySelector('input');input.onchange=()=>{item.name=input.value;commitMachineNode(node);renderProperties(node)};
+        const del=document.createElement('button');del.textContent='DELETE';del.onclick=()=>{library.splice(index,1);commitMachineNode(node);renderProperties(node)};
+        row.appendChild(del);customList.appendChild(row);
+    });
+    wrap.appendChild(customList);
+
+    const upload=document.createElement('input');upload.type='file';upload.accept='.svg,.png,.jpg,.jpeg,image/svg+xml,image/png,image/jpeg';upload.style.marginTop='8px';
+    upload.onchange=()=>{
+        const file=upload.files?.[0];
+        if(!file) return;
+        const reader=new FileReader();
+        reader.onload=()=>{
+            const ext=(file.name.split('.').pop()||'icon').toLowerCase();
+            const id='custom_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+            library.push({id:id,name:file.name.replace(/\.[^.]+$/,''),src:String(reader.result),type:ext});
+            commitMachineNode(node);renderProperties(node);status('CUSTOM ICON ADDED TO MACHINECARD LIBRARY');
+        };
+        reader.readAsDataURL(file);
+    };
+    wrap.appendChild(upload);
 }
 </script>
 </body>
