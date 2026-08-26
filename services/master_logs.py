@@ -25,7 +25,7 @@ def _install():
             return
 
         try:
-            from database import get_connection, get_company_flow
+            from database import get_connection
         except Exception:
             time.sleep(0.5)
             continue
@@ -150,43 +150,45 @@ def _install():
                 out["report_values"] = [dict(r) for r in cursor.fetchall()]
 
                 # TrendMinute schema varies across historical deployments.
-                # Read its actual columns first so the debug page never fails
-                # just because a deployment uses a different aggregation schema.
+                # Discover the company/timestamp columns before querying.
                 cursor.execute("PRAGMA table_info(TrendMinute)")
                 trend_columns = [r["name"] for r in cursor.fetchall()]
 
-                if "Timestamp" in trend_columns and "EndTime" not in trend_columns:
-                    cursor.execute(
-                        """
-                        SELECT *
-                        FROM TrendMinute
-                        WHERE CompanyID = ?
-                        ORDER BY Timestamp DESC
-                        LIMIT 30
-                        """,
-                        (company_id,),
-                    )
-                elif "EndTime" in trend_columns:
-                    cursor.execute(
-                        """
-                        SELECT *
-                        FROM TrendMinute
-                        WHERE CompanyID = ?
-                        ORDER BY EndTime DESC
-                        LIMIT 30
-                        """,
-                        (company_id,),
-                    )
+                company_column = None
+                for candidate in ("CompanyID", "Company", "company_id", "company"):
+                    if candidate in trend_columns:
+                        company_column = candidate
+                        break
+
+                time_column = None
+                for candidate in ("EndTime", "Timestamp", "Time", "StartTime"):
+                    if candidate in trend_columns:
+                        time_column = candidate
+                        break
+
+                if company_column:
+                    safe_company = company_column.replace('"', '""')
+                    if time_column:
+                        safe_time = time_column.replace('"', '""')
+                        cursor.execute(
+                            f'SELECT * FROM "TrendMinute" WHERE "{safe_company}" = ? ORDER BY "{safe_time}" DESC LIMIT 30',
+                            (company_id,),
+                        )
+                    else:
+                        cursor.execute(
+                            f'SELECT * FROM "TrendMinute" WHERE "{safe_company}" = ? LIMIT 30',
+                            (company_id,),
+                        )
                 else:
-                    cursor.execute(
-                        """
-                        SELECT *
-                        FROM TrendMinute
-                        WHERE CompanyID = ?
-                        LIMIT 30
-                        """,
-                        (company_id,),
-                    )
+                    # If the historical table is not company-scoped, display
+                    # its recent rows instead of failing the entire debug page.
+                    if time_column:
+                        safe_time = time_column.replace('"', '""')
+                        cursor.execute(
+                            f'SELECT * FROM "TrendMinute" ORDER BY "{safe_time}" DESC LIMIT 30'
+                        )
+                    else:
+                        cursor.execute('SELECT * FROM "TrendMinute" LIMIT 30')
 
                 out["trend_minute"] = [dict(r) for r in cursor.fetchall()]
 
@@ -194,10 +196,19 @@ def _install():
                     ("PLC_Data", "plc_data_count"),
                     ("ReportHistory", "report_history_count"),
                     ("ReportValues", "report_values_count"),
-                    ("TrendMinute", "trend_minute_count"),
                 ):
                     cursor.execute(f"SELECT COUNT(*) AS C FROM {table} WHERE CompanyID = ?", (company_id,))
                     out["counts"][key] = int(cursor.fetchone()["C"])
+
+                if company_column:
+                    cursor.execute(
+                        f'SELECT COUNT(*) AS C FROM "TrendMinute" WHERE "{company_column.replace(chr(34), chr(34)+chr(34))}" = ?',
+                        (company_id,),
+                    )
+                    out["counts"]["trend_minute_count"] = int(cursor.fetchone()["C"])
+                else:
+                    cursor.execute('SELECT COUNT(*) AS C FROM "TrendMinute"')
+                    out["counts"]["trend_minute_count"] = int(cursor.fetchone()["C"])
 
             except Exception as exc:
                 out["errors"].append(str(exc))
@@ -209,7 +220,6 @@ def _install():
 
         @flask_app.route("/master/logs", methods=["GET"])
         def master_logs():
-            # Master-only, read-only diagnostics.
             from flask import session as flask_session
             if flask_session.get("role", "").strip().lower() != "master":
                 return redirect(url_for("login", next=request.path))
@@ -235,9 +245,7 @@ def _install():
                 diagnostics=data,
             )
 
-        # -------------------------------------------------------------
         # FLOW-DRIVEN REPORT DATA ENDPOINT
-        # -------------------------------------------------------------
         @flask_app.post("/flow_report")
         def flow_report_runtime_endpoint():
             from flask import jsonify, session as flask_session
@@ -277,23 +285,27 @@ def _install():
                     continue
                 config = node.get("data", {}) or {}
                 configured = (config.get("config", config) or {}).get("products", [])
-                if isinstance(configured, list):
-                    for item in configured:
-                        if not isinstance(item, dict):
-                            continue
-                        tag = str(item.get("tag", "")).strip()
-                        if not tag:
-                            continue
-                        products.append({
-                            "name": str(item.get("name", tag)).strip() or tag,
-                            "tag": tag,
-                            "unit": str(item.get("unit", "")).strip(),
-                        })
+                if not isinstance(configured, list):
+                    continue
+                for item in configured:
+                    if not isinstance(item, dict):
+                        continue
+                    tag = str(item.get("tag", "")).strip()
+                    if not tag:
+                        continue
+                    products.append({
+                        "name": str(item.get("name", tag)).strip() or tag,
+                        "tag": tag,
+                        "unit": str(item.get("unit", "")).strip(),
+                    })
                 if products:
                     break
 
             if not products:
-                return jsonify({"status": "error", "message": "ReportOutput has no products configured"}), 400
+                return redirect(url_for("login", next=request.path)) if not flask_session.get("user_id") else (
+                    {"status": "error", "message": "ReportOutput has no products configured"},
+                    400,
+                )
 
             payload = request.get_json(silent=True) or {}
             report_request = payload.get("ReportRequest", {}) or {}
@@ -323,15 +335,11 @@ def _install():
 
             start = normalize(report_request.get("Start"))
             end = normalize(report_request.get("End"))
-
             if start is None or end is None:
                 return jsonify({"status": "error", "message": "Invalid report date/time range"}), 400
             if end < start:
                 return jsonify({"status": "error", "message": "Report end time is before start time"}), 400
 
-            # Read only persisted report snapshots. No realtime FlowRunner is
-            # required for the query; Flow is used solely to determine the
-            # selected ReportOutput columns for this company.
             report = get_report_data(company_id, start, end)
             report["columns"] = products
 
