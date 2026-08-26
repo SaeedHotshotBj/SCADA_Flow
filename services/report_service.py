@@ -72,11 +72,23 @@ def _flow_nodes(company_id):
 
 
 def get_report_products(company_id):
-    """Return ReportOutput selections from the saved Drawflow configuration."""
+    """
+    Return the configured report columns from the company's saved Flow.
+
+    A Flow may contain more than one ReportOutput node. Some of those nodes
+    can intentionally be empty (for example a role-gating/output node).
+    Empty ReportOutput nodes must not mask a later ReportOutput that actually
+    defines the report columns.
+    """
     products = []
 
     try:
-        for node in _flow_nodes(company_id).values():
+        nodes = _flow_nodes(company_id)
+
+        for node in nodes.values():
+            if not isinstance(node, dict):
+                continue
+
             if node.get("name") != "ReportOutput":
                 continue
 
@@ -85,7 +97,9 @@ def get_report_products(company_id):
             configured = config.get("products", [])
 
             if not isinstance(configured, list):
-                return []
+                continue
+
+            candidate = []
 
             for item in configured:
                 if not isinstance(item, dict):
@@ -95,18 +109,32 @@ def get_report_products(company_id):
                 if not tag:
                     continue
 
-                products.append({
+                candidate.append({
                     "name": str(item.get("name", tag)).strip() or tag,
                     "tag": tag,
                     "unit": str(item.get("unit", "")).strip(),
                 })
 
-            break
+            if candidate:
+                products.extend(candidate)
+
+        # De-duplicate while preserving Flow order. This also makes multiple
+        # non-empty ReportOutput nodes behave deterministically.
+        unique = []
+        seen = set()
+
+        for product in products:
+            key = product["tag"].lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(product)
+
+        return unique
 
     except Exception as exc:
         print("REPORT CONFIG ERROR:", exc)
-
-    return products
+        return []
 
 
 # =====================================================
@@ -249,7 +277,8 @@ def get_report_data(company_id, start, end):
                 h.ReportID,
                 h.Timestamp,
                 v.TagName,
-                v.Value
+                v.Value,
+                v.ReportValueID
             FROM ReportHistory h
             INNER JOIN ReportValues v
                 ON v.ReportID = h.ReportID
@@ -257,7 +286,8 @@ def get_report_data(company_id, start, end):
               AND datetime(h.Timestamp) >= datetime(?)
               AND datetime(h.Timestamp) <= datetime(?)
               AND LOWER(v.TagName) IN ({placeholders})
-            ORDER BY datetime(h.Timestamp) ASC, h.ReportID ASC,
+            ORDER BY datetime(h.Timestamp) ASC,
+                     h.ReportID ASC,
                      v.ReportValueID ASC
             """,
             [
