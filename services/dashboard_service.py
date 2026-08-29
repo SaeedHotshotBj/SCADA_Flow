@@ -170,3 +170,16 @@ def get_dashboard_widgets(company_id):
         print("Dashboard widget error:", e)
 
     return widgets
+
+
+# =====================================================
+# START EDGE TIMEOUT WORKER
+# =====================================================
+
+try:
+    from services.edge_timeout_service import start_worker as start_edge_timeout_worker
+
+    start_edge_timeout_worker()
+    print("EDGE TIMEOUT WORKER STARTED FROM DASHBOARD SERVICE")
+except Exception as exc:
+    print("EDGE TIMEOUT START ERROR:", exc)
