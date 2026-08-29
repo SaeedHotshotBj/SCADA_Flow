@@ -1,8 +1,8 @@
-"""Server-side Edge timeout worker.
+"""Server-side Edge timeout historian watchdog.
 
-When an Edge stops sending data, insert a synthetic zero for every TIME
-TagMapper tag exactly once per outage.  Trigger tags are never zeroed by
-this watchdog.
+When an Edge stops sending data, write one synthetic zero into PLC_Data for
+EVERY TagMapper tag whose storage is TIME.  The zero is written once per
+outage.  Trigger/non-TIME tags are never zeroed.
 """
 
 import json
@@ -57,11 +57,6 @@ def _parse_timestamp(value):
         return None
 
 
-def _columns(conn, table_name):
-    rows = conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()
-    return {str(row[1]) for row in rows}
-
-
 def _ensure_tables(conn):
     conn.execute(
         """
@@ -105,12 +100,17 @@ def _log(conn, company_id, level, message):
             """,
             (int(company_id), str(level).upper(), str(message), _now_string()),
         )
+        conn.commit()
     except Exception as exc:
         print("EDGE TIMEOUT LOG ERROR:", exc)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 
 def _load_configs(conn):
-    """Load timeout and ONLY TIME historian tags for each company."""
+    """Return timeout plus ONLY TIME-storage TagMapper tags per company."""
     result = {}
 
     rows = conn.execute(
@@ -124,6 +124,7 @@ def _load_configs(conn):
 
     for row in rows:
         company_id = int(row["CompanyID"])
+
         try:
             flow = json.loads(row["FlowJson"] or "{}")
         except Exception as exc:
@@ -138,13 +139,8 @@ def _load_configs(conn):
         )
 
         timeout = None
-        tags = []
-        seen = set()
-
         for node in nodes.values():
-            if not isinstance(node, dict):
-                continue
-            if node.get("name") != "EdgeTimeout":
+            if not isinstance(node, dict) or node.get("name") != "EdgeTimeout":
                 continue
 
             data = node.get("data", {}) or {}
@@ -153,6 +149,7 @@ def _load_configs(conn):
                 timeout = float(config.get("timeout_seconds", DEFAULT_TIMEOUT))
             except (TypeError, ValueError):
                 timeout = DEFAULT_TIMEOUT
+
             if timeout <= 0:
                 timeout = DEFAULT_TIMEOUT
             break
@@ -160,17 +157,25 @@ def _load_configs(conn):
         if timeout is None:
             continue
 
+        tags = []
+        seen = set()
+
         for node in nodes.values():
             if not isinstance(node, dict) or node.get("name") != "TagMapper":
                 continue
 
-            mappings = (node.get("data", {}) or {}).get("mappings", []) or []
+            data = node.get("data", {}) or {}
+            config = data.get("config", data) or {}
+            mappings = config.get("mappings", []) or []
+
+            if not isinstance(mappings, list):
+                continue
+
             for mapping in mappings:
                 if not isinstance(mapping, dict):
                     continue
 
-                storage = str(mapping.get("storage", "TIME")).strip().upper()
-                if storage != "TIME":
+                if str(mapping.get("storage", "TIME")).strip().upper() != "TIME":
                     continue
 
                 tag = str(mapping.get("name", "")).strip()
@@ -185,7 +190,7 @@ def _load_configs(conn):
 
 
 def _last_edge_timestamp(conn, company_id):
-    """Use DB history as the cross-worker source of truth."""
+    """The latest real Edge row is the persistent source of truth."""
     row = conn.execute(
         """
         SELECT MAX(Timestamp) AS LastReceivedAt
@@ -212,45 +217,77 @@ def _get_state(conn, company_id):
     return dict(row) if row else None
 
 
-def _upsert_state(conn, company_id, timeout, last_received, timed_out, last_timeout_at=None):
+def _ensure_state(conn, company_id, timeout, last_received):
+    """Create the state row before attempting an atomic timeout claim."""
+    state = _get_state(conn, company_id)
+    if state is not None:
+        return state
+
     now = _now_string()
-    row = conn.execute(
-        "SELECT rowid FROM EdgeTimeoutState WHERE CompanyID = ? LIMIT 1",
-        (int(company_id),),
-    ).fetchone()
-
-    values = (
-        last_received,
-        float(timeout),
-        1 if timed_out else 0,
-        last_timeout_at,
-        now,
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO EdgeTimeoutState
+        (CompanyID, LastReceivedAt, TimeoutSeconds, TimedOut, LastTimeoutAt, UpdatedAt)
+        VALUES (?, ?, ?, 0, NULL, ?)
+        """,
+        (int(company_id), last_received, float(timeout), now),
     )
+    conn.commit()
+    return _get_state(conn, company_id)
 
-    if row is None:
-        conn.execute(
-            """
-            INSERT INTO EdgeTimeoutState
-            (CompanyID, LastReceivedAt, TimeoutSeconds, TimedOut, LastTimeoutAt, UpdatedAt)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (int(company_id), *values),
-        )
-    else:
-        conn.execute(
-            """
-            UPDATE EdgeTimeoutState
-            SET LastReceivedAt=?, TimeoutSeconds=?, TimedOut=?,
-                LastTimeoutAt=?, UpdatedAt=?
-            WHERE rowid=?
-            """,
-            (*values, row["rowid"]),
-        )
+
+def _set_state(conn, company_id, timeout, last_received, timed_out, last_timeout_at=None):
+    now = _now_string()
+    conn.execute(
+        """
+        UPDATE EdgeTimeoutState
+        SET LastReceivedAt=?, TimeoutSeconds=?, TimedOut=?,
+            LastTimeoutAt=?, UpdatedAt=?
+        WHERE CompanyID=?
+        """,
+        (
+            last_received,
+            float(timeout),
+            1 if timed_out else 0,
+            last_timeout_at,
+            now,
+            int(company_id),
+        ),
+    )
+    conn.commit()
+
+
+def _claim_timeout(conn, company_id, timeout, last_received):
+    """Atomically change 0 -> 1 so only one worker can fire the outage."""
+    timeout_at = _now_string()
+    cursor = conn.execute(
+        """
+        UPDATE EdgeTimeoutState
+        SET TimedOut=1,
+            LastReceivedAt=?,
+            TimeoutSeconds=?,
+            LastTimeoutAt=?,
+            UpdatedAt=?
+        WHERE CompanyID=?
+          AND COALESCE(TimedOut, 0)=0
+        """,
+        (
+            last_received,
+            float(timeout),
+            timeout_at,
+            timeout_at,
+            int(company_id),
+        ),
+    )
+    conn.commit()
+    return cursor.rowcount == 1, timeout_at if cursor.rowcount == 1 else None
 
 
 def _insert_zero_rows(conn, company_id, tags):
+    """Insert one zero per configured TIME tag into PLC_Data."""
     stamp = _now_string()
     count = 0
+
     for tag in tags:
         conn.execute(
             """
@@ -261,6 +298,8 @@ def _insert_zero_rows(conn, company_id, tags):
             (int(company_id), str(tag), stamp),
         )
         count += 1
+
+    conn.commit()
     return count, stamp
 
 
@@ -272,7 +311,6 @@ def check_once():
         configs = _load_configs(conn)
 
         if not configs:
-            conn.commit()
             return
 
         now = datetime.now(SCADA_TIMEZONE).replace(tzinfo=None)
@@ -281,96 +319,72 @@ def check_once():
             timeout = float(cfg["timeout"])
             tags = list(cfg["tags"])
             last_edge = _last_edge_timestamp(conn, company_id)
-            state = _get_state(conn, company_id)
-            was_timed_out = bool(state and state.get("TimedOut"))
 
             if last_edge is None:
-                _upsert_state(conn, company_id, timeout, None, False,
-                              state.get("LastTimeoutAt") if state else None)
-                _log(conn, company_id, "WARNING",
-                     f"No EDGE data yet; timeout={timeout}s tags={len(tags)}")
+                _ensure_state(conn, company_id, timeout, None)
                 continue
 
             parsed = _parse_timestamp(last_edge)
             if parsed is None:
-                _log(conn, company_id, "ERROR",
-                     f"Invalid EDGE timestamp: {last_edge}")
+                _log(conn, company_id, "ERROR", f"Invalid EDGE timestamp: {last_edge}")
                 continue
 
             elapsed = max(0.0, (now - parsed).total_seconds())
+            state = _ensure_state(conn, company_id, timeout, str(last_edge))
+            timed_out = bool(state.get("TimedOut"))
+
+            if elapsed < timeout:
+                if timed_out:
+                    _set_state(
+                        conn,
+                        company_id,
+                        timeout,
+                        str(last_edge),
+                        False,
+                        state.get("LastTimeoutAt"),
+                    )
+                    _log(conn, company_id, "INFO", "EDGE RECOVERED")
+                else:
+                    _set_state(
+                        conn,
+                        company_id,
+                        timeout,
+                        str(last_edge),
+                        False,
+                        state.get("LastTimeoutAt"),
+                    )
+                continue
+
+            if timed_out:
+                continue
+
+            claimed, timeout_at = _claim_timeout(
+                conn,
+                company_id,
+                timeout,
+                str(last_edge),
+            )
+
+            if not claimed:
+                continue
+
+            count, stamp = _insert_zero_rows(conn, company_id, tags)
 
             _log(
                 conn,
                 company_id,
-                "INFO",
-                f"check timeout={timeout}s elapsed={round(elapsed,3)}s "
-                f"timed_out={was_timed_out} last_edge={last_edge} tags={len(tags)}",
+                "WARNING",
+                f"TIMEOUT FIRED timeout={timeout}s elapsed={round(elapsed,3)}s "
+                f"zero_rows={count} zero_timestamp={stamp}",
             )
 
-            if elapsed < timeout:
-                if was_timed_out:
-                    _upsert_state(conn, company_id, timeout, str(last_edge), False,
-                                  state.get("LastTimeoutAt") if state else None)
-                    _log(conn, company_id, "INFO", "EDGE RECOVERED")
-                else:
-                    _upsert_state(conn, company_id, timeout, str(last_edge), False,
-                                  state.get("LastTimeoutAt") if state else None)
-                continue
-
-            if was_timed_out:
-                continue
-
-            # One transaction owns both the timeout state and the zero inserts.
-            # BEGIN IMMEDIATE serializes competing Gunicorn/server workers.
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-
-                current = _get_state(conn, company_id)
-                if current and bool(current.get("TimedOut")):
-                    conn.rollback()
-                    _log(conn, company_id, "INFO",
-                         "TIMEOUT ALREADY CLAIMED BY ANOTHER WORKER")
-                    conn.commit()
-                    continue
-
-                timeout_at = _now_string()
-                _upsert_state(
-                    conn,
-                    company_id,
-                    timeout,
-                    str(last_edge),
-                    True,
-                    timeout_at,
-                )
-
-                count, stamp = _insert_zero_rows(conn, company_id, tags)
-
-                _log(
-                    conn,
-                    company_id,
-                    "WARNING",
-                    f"TIMEOUT FIRED timeout={timeout}s elapsed={round(elapsed,3)}s "
-                    f"zero_rows={count} zero_timestamp={stamp}",
-                )
-
-                conn.commit()
-
-                print(
-                    "EDGE TIMEOUT:",
-                    "Company=", company_id,
-                    "Timeout=", timeout,
-                    "Elapsed=", round(elapsed, 2),
-                    "ZeroRows=", count,
-                )
-
-            except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise
-
-        conn.commit()
+            print(
+                "EDGE TIMEOUT:",
+                "Company=", company_id,
+                "Timeout=", timeout,
+                "Elapsed=", round(elapsed, 2),
+                "ZeroRows=", count,
+            )
 
     except Exception as exc:
         try:
@@ -378,7 +392,6 @@ def check_once():
         except Exception:
             pass
         print("EDGE TIMEOUT WORKER ERROR:", type(exc).__name__, exc)
-        raise
     finally:
         conn.close()
 
@@ -388,8 +401,8 @@ def _worker():
     while True:
         try:
             check_once()
-        except Exception:
-            pass
+        except Exception as exc:
+            print("EDGE TIMEOUT WORKER ERROR:", exc)
         time.sleep(CHECK_INTERVAL)
 
 
