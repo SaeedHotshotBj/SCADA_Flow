@@ -179,3 +179,17 @@ def get_flow_tags(company_id):
                 result.append(role)
 
         return result
+
+
+# =====================================================
+# START EDGE TIMEOUT WORKER
+# =====================================================
+# dashboard_data.py is imported directly by app.py during module startup.
+# Starting the worker here guarantees that it does not depend on a secondary
+# service import path. The worker itself is guarded against duplicate starts.
+try:
+    from services.edge_timeout_service import start_worker as start_edge_timeout_worker
+    start_edge_timeout_worker()
+    print("EDGE TIMEOUT WORKER STARTED FROM DASHBOARD DATA")
+except Exception as exc:
+    print("EDGE TIMEOUT START ERROR FROM DASHBOARD DATA:", exc)
