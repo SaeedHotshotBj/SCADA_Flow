@@ -4,7 +4,6 @@
 # =====================================================
 
 import json
-import sqlite3
 import threading
 import time
 from datetime import datetime
@@ -93,7 +92,12 @@ def _load_company_timeout_configs(conn):
                 data = node.get("data", {}) or {}
                 config = data.get("config", data) or {}
                 try:
-                    timeout = float(config.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+                    timeout = float(
+                        config.get(
+                            "timeout_seconds",
+                            DEFAULT_TIMEOUT_SECONDS,
+                        )
+                    )
                 except (TypeError, ValueError):
                     timeout = DEFAULT_TIMEOUT_SECONDS
                 if timeout <= 0:
@@ -103,6 +107,7 @@ def _load_company_timeout_configs(conn):
         if timeout is None:
             continue
 
+        seen_tags = set()
         for node in nodes.values():
             if node.get("name") != "TagMapper":
                 continue
@@ -113,8 +118,10 @@ def _load_company_timeout_configs(conn):
                 if not isinstance(mapping, dict):
                     continue
                 name = str(mapping.get("name", "")).strip()
-                if name and name.lower() not in {x.lower() for x in tag_names}:
+                key = name.lower()
+                if name and key not in seen_tags:
                     tag_names.append(name)
+                    seen_tags.add(key)
 
         if tag_names:
             result[int(row["CompanyID"])] = {
@@ -139,7 +146,14 @@ def _latest_edge_timestamp(conn, company_id):
     return row["LastReceivedAt"] if row else None
 
 
-def _upsert_state(conn, company_id, timeout_seconds, last_received, timed_out, last_timeout_at=None):
+def _upsert_state(
+    conn,
+    company_id,
+    timeout_seconds,
+    last_received,
+    timed_out,
+    last_timeout_at=None,
+):
     now = _now_string()
     conn.execute(
         """
@@ -201,33 +215,32 @@ def check_once():
             timeout_seconds = float(cfg["timeout"])
             tag_names = cfg["tags"]
 
-            latest_edge = _latest_edge_timestamp(conn, company_id)
             state = _get_state(conn, company_id)
-
-            if latest_edge is not None:
-                latest_dt = _parse_timestamp(latest_edge)
-            else:
-                latest_dt = None
-
             previous_last_received = state["LastReceivedAt"] if state else None
             timed_out = bool(state["TimedOut"]) if state else False
             last_timeout_at = state["LastTimeoutAt"] if state else None
 
+            latest_edge = _latest_edge_timestamp(conn, company_id)
             if latest_edge is not None:
-                _upsert_state(
-                    conn,
-                    company_id,
-                    timeout_seconds,
-                    latest_edge,
-                    timed_out=False if not timed_out or latest_edge != previous_last_received else timed_out,
-                    last_timeout_at=last_timeout_at,
-                )
-                state = _get_state(conn, company_id)
-                timed_out = bool(state["TimedOut"])
-                previous_last_received = state["LastReceivedAt"]
+                if previous_last_received != latest_edge:
+                    timed_out = False
+                previous_last_received = latest_edge
 
+            if previous_last_received is None:
+                continue
+
+            latest_dt = _parse_timestamp(previous_last_received)
             if latest_dt is None:
                 continue
+
+            _upsert_state(
+                conn,
+                company_id,
+                timeout_seconds,
+                previous_last_received,
+                timed_out,
+                last_timeout_at,
+            )
 
             elapsed = (datetime.now() - latest_dt).total_seconds()
 
@@ -237,6 +250,7 @@ def check_once():
                     company_id,
                     tag_names,
                 )
+
                 _upsert_state(
                     conn,
                     company_id,
@@ -245,6 +259,7 @@ def check_once():
                     timed_out=True,
                     last_timeout_at=timeout_timestamp,
                 )
+
                 print(
                     "EDGE TIMEOUT:",
                     "Company=", company_id,
@@ -253,7 +268,7 @@ def check_once():
                     "ZeroRows=", written,
                 )
 
-            elif latest_edge is not None and timed_out and latest_edge != previous_last_received:
+            elif latest_edge is not None and timed_out and latest_edge != state["LastReceivedAt"]:
                 _upsert_state(
                     conn,
                     company_id,

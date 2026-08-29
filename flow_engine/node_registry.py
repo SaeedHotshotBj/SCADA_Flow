@@ -119,6 +119,17 @@ NODE_REGISTRY = {
         ]
     },
 
+    "EdgeTimeout": {
+        "config": [
+            {
+                "name": "timeout_seconds",
+                "label": "Edge Timeout (sec)",
+                "type": "number",
+                "default": 10
+            }
+        ]
+    },
+
     "AlarmNode": {
         "config": [
             {

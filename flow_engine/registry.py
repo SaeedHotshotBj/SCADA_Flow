@@ -13,6 +13,7 @@ from flow_engine.nodes.sql_writer import SQLWriter
 from flow_engine.nodes.dashboard_output import DashboardOutput
 from flow_engine.nodes.machine_card import MachineCard
 from flow_engine.nodes.alarm_node import AlarmNode
+from flow_engine.nodes.edge_timeout import EdgeTimeout
 
 # =====================================================
 # ROLE NODES
@@ -41,6 +42,7 @@ from flow_engine.nodes.report_output import ReportOutput
 # =====================================================
 
 from flow_engine.nodes.date_converter import DateConverterNode
+from services.edge_timeout_service import start_worker as start_edge_timeout_worker
 
 
 # =====================================================
@@ -71,6 +73,9 @@ NODE_CLASSES = {
     "AlarmNode":
         AlarmNode,
 
+    "EdgeTimeout":
+        EdgeTimeout,
+
     # ROLES
     "Roles":
         Roles,
@@ -99,7 +104,7 @@ NODE_CLASSES = {
 
 
 # =====================================================
-# START TREND AGGREGATION
+# START BACKGROUND WORKERS
 # =====================================================
 
 try:
@@ -107,6 +112,12 @@ try:
     print("TREND AGGREGATION WORKER STARTED FROM REGISTRY")
 except Exception as exc:
     print("TREND AGGREGATION START ERROR:", exc)
+
+try:
+    start_edge_timeout_worker()
+    print("EDGE TIMEOUT WORKER STARTED FROM REGISTRY")
+except Exception as exc:
+    print("EDGE TIMEOUT START ERROR:", exc)
 
 
 # =====================================================
