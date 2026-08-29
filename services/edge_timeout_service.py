@@ -61,6 +61,46 @@ def _ensure_state_table(conn):
     conn.commit()
 
 
+def _ensure_diagnostic_log_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS EdgeTimeoutDiagnosticLog (
+            LogID INTEGER PRIMARY KEY AUTOINCREMENT,
+            CompanyID INTEGER NOT NULL,
+            Level TEXT NOT NULL,
+            Message TEXT NOT NULL,
+            Timestamp TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_edge_timeout_log_company_time
+        ON EdgeTimeoutDiagnosticLog (CompanyID, Timestamp)
+        """
+    )
+    conn.commit()
+
+
+def _write_diagnostic_log(conn, company_id, level, message):
+    try:
+        conn.execute(
+            """
+            INSERT INTO EdgeTimeoutDiagnosticLog
+            (CompanyID, Level, Message, Timestamp)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                int(company_id),
+                str(level).upper(),
+                str(message),
+                _now_string(),
+            ),
+        )
+    except Exception as exc:
+        print("EDGE TIMEOUT DIAGNOSTIC LOG ERROR:", exc)
+
+
 def _load_company_timeout_configs(conn):
     rows = conn.execute(
         """
@@ -74,10 +114,16 @@ def _load_company_timeout_configs(conn):
 
     for row in rows:
         company_id = int(row["CompanyID"])
+
         try:
             flow = json.loads(row["FlowJson"] or "{}")
         except Exception as exc:
-            print("EDGE TIMEOUT LOG: INVALID FLOW JSON", "Company=", company_id, "Error=", exc)
+            _write_diagnostic_log(
+                conn,
+                company_id,
+                "ERROR",
+                f"Flow JSON parse failed: {exc}",
+            )
             continue
 
         nodes = (
@@ -89,44 +135,29 @@ def _load_company_timeout_configs(conn):
         timeout = None
         tag_names = []
 
-        edge_timeout_nodes = []
-        for node_id, node in nodes.items():
-            if node.get("name") == "EdgeTimeout" or node.get("class") == "EdgeTimeout":
-                edge_timeout_nodes.append((str(node_id), node))
-
-        print(
-            "EDGE TIMEOUT LOG: FLOW CHECK",
-            "Company=", company_id,
-            "Nodes=", len(nodes),
-            "EdgeTimeoutNodes=", len(edge_timeout_nodes),
-        )
-
-        for node_id, node in edge_timeout_nodes:
-            data = node.get("data", {}) or {}
-            config = data.get("config", data) or {}
-            raw_timeout = config.get("timeout_seconds", config.get("timeout", DEFAULT_TIMEOUT_SECONDS))
-            try:
-                timeout = float(raw_timeout)
-            except (TypeError, ValueError):
-                timeout = DEFAULT_TIMEOUT_SECONDS
-            if timeout <= 0:
-                timeout = DEFAULT_TIMEOUT_SECONDS
-            print(
-                "EDGE TIMEOUT LOG: CONFIG FOUND",
-                "Company=", company_id,
-                "Node=", node_id,
-                "RawTimeout=", raw_timeout,
-                "TimeoutSeconds=", timeout,
-            )
-            break
+        for node in nodes.values():
+            if node.get("name") == "EdgeTimeout":
+                data = node.get("data", {}) or {}
+                config = data.get("config", data) or {}
+                try:
+                    timeout = float(
+                        config.get(
+                            "timeout_seconds",
+                            DEFAULT_TIMEOUT_SECONDS,
+                        )
+                    )
+                except (TypeError, ValueError):
+                    timeout = DEFAULT_TIMEOUT_SECONDS
+                if timeout <= 0:
+                    timeout = DEFAULT_TIMEOUT_SECONDS
+                break
 
         if timeout is None:
-            print("EDGE TIMEOUT LOG: NO EDGE TIMEOUT CONFIG", "Company=", company_id)
             continue
 
         seen_tags = set()
         for node in nodes.values():
-            if node.get("name") != "TagMapper" and node.get("class") != "TagMapper":
+            if node.get("name") != "TagMapper":
                 continue
 
             data = node.get("data", {}) or {}
@@ -139,13 +170,6 @@ def _load_company_timeout_configs(conn):
                 if name and key not in seen_tags:
                     tag_names.append(name)
                     seen_tags.add(key)
-
-        print(
-            "EDGE TIMEOUT LOG: TAGS",
-            "Company=", company_id,
-            "Count=", len(tag_names),
-            "Tags=", tag_names,
-        )
 
         if tag_names:
             result[company_id] = {
@@ -167,9 +191,7 @@ def _latest_edge_timestamp(conn, company_id):
         (int(company_id),),
     ).fetchone()
 
-    value = row["LastReceivedAt"] if row else None
-    print("EDGE TIMEOUT LOG: LATEST EDGE", "Company=", company_id, "LastReceivedAt=", value)
-    return value
+    return row["LastReceivedAt"] if row else None
 
 
 def _upsert_state(
@@ -215,13 +237,6 @@ def _write_timeout_zeros(conn, company_id, tag_names):
     timestamp = _now_string()
     written = 0
 
-    print(
-        "EDGE TIMEOUT LOG: WRITING ZERO ROWS",
-        "Company=", company_id,
-        "Timestamp=", timestamp,
-        "Tags=", tag_names,
-    )
-
     for tag_name in tag_names:
         conn.execute(
             """
@@ -233,12 +248,6 @@ def _write_timeout_zeros(conn, company_id, tag_names):
         )
         written += 1
 
-    print(
-        "EDGE TIMEOUT LOG: ZERO ROWS QUEUED",
-        "Company=", company_id,
-        "Count=", written,
-    )
-
     return written, timestamp
 
 
@@ -246,12 +255,18 @@ def check_once():
     conn = get_connection()
     try:
         _ensure_state_table(conn)
-        configs = _load_company_timeout_configs(conn)
+        _ensure_diagnostic_log_table(conn)
 
-        print("EDGE TIMEOUT LOG: CHECK START", "ConfiguredCompanies=", list(configs.keys()))
+        configs = _load_company_timeout_configs(conn)
+        _write_diagnostic_log(
+            conn,
+            0,
+            "INFO",
+            f"Worker check started; configured_companies={len(configs)}",
+        )
 
         if not configs:
-            print("EDGE TIMEOUT LOG: NOTHING TO CHECK")
+            conn.commit()
             return
 
         for company_id, cfg in configs.items():
@@ -266,34 +281,25 @@ def check_once():
             latest_edge = _latest_edge_timestamp(conn, company_id)
             if latest_edge is not None:
                 if previous_last_received != latest_edge:
-                    print(
-                        "EDGE TIMEOUT LOG: NEW EDGE DATA",
-                        "Company=", company_id,
-                        "Previous=", previous_last_received,
-                        "Current=", latest_edge,
-                    )
                     timed_out = False
                 previous_last_received = latest_edge
 
-            print(
-                "EDGE TIMEOUT LOG: STATE",
-                "Company=", company_id,
-                "LastReceived=", previous_last_received,
-                "TimedOut=", timed_out,
-                "TimeoutSeconds=", timeout_seconds,
-                "LastTimeoutAt=", last_timeout_at,
-            )
-
             if previous_last_received is None:
-                print("EDGE TIMEOUT LOG: NO LAST RECEIVED - SKIP", "Company=", company_id)
+                _write_diagnostic_log(
+                    conn,
+                    company_id,
+                    "WARNING",
+                    f"No EDGE record found; timeout={timeout_seconds}; tags={len(tag_names)}",
+                )
                 continue
 
             latest_dt = _parse_timestamp(previous_last_received)
             if latest_dt is None:
-                print(
-                    "EDGE TIMEOUT LOG: TIMESTAMP PARSE FAILED",
-                    "Company=", company_id,
-                    "Timestamp=", previous_last_received,
+                _write_diagnostic_log(
+                    conn,
+                    company_id,
+                    "ERROR",
+                    f"Could not parse LastReceivedAt={previous_last_received!r}",
                 )
                 continue
 
@@ -308,19 +314,17 @@ def check_once():
 
             elapsed = (datetime.now() - latest_dt).total_seconds()
 
-            print(
-                "EDGE TIMEOUT LOG: TIMING",
-                "Company=", company_id,
-                "Now=", _now_string(),
-                "LastReceived=", previous_last_received,
-                "ElapsedSeconds=", round(elapsed, 3),
-                "TimeoutSeconds=", timeout_seconds,
-                "TimedOut=", timed_out,
+            _write_diagnostic_log(
+                conn,
+                company_id,
+                "INFO",
+                (
+                    f"check timeout={timeout_seconds}s last_edge={previous_last_received} "
+                    f"elapsed={round(elapsed, 3)}s timed_out={timed_out} tags={len(tag_names)}"
+                ),
             )
 
             if elapsed > timeout_seconds and not timed_out:
-                print("EDGE TIMEOUT LOG: TIMEOUT CONDITION TRUE", "Company=", company_id)
-
                 written, timeout_timestamp = _write_timeout_zeros(
                     conn,
                     company_id,
@@ -336,22 +340,25 @@ def check_once():
                     last_timeout_at=timeout_timestamp,
                 )
 
-                print(
-                    "EDGE TIMEOUT:"
-                    , "Company=", company_id
-                    , "Timeout=", timeout_seconds
-                    , "Elapsed=", round(elapsed, 2)
-                    , "ZeroRows=", written
-                    , "Timestamp=", timeout_timestamp
+                _write_diagnostic_log(
+                    conn,
+                    company_id,
+                    "WARNING",
+                    (
+                        f"TIMEOUT FIRED timeout={timeout_seconds}s elapsed={round(elapsed, 3)}s "
+                        f"zero_rows={written} zero_timestamp={timeout_timestamp}"
+                    ),
                 )
 
-            elif elapsed > timeout_seconds:
-                print("EDGE TIMEOUT LOG: ALREADY TIMED OUT - NO DUPLICATE ZEROS", "Company=", company_id)
+                print(
+                    "EDGE TIMEOUT:",
+                    "Company=", company_id,
+                    "Timeout=", timeout_seconds,
+                    "Elapsed=", round(elapsed, 2),
+                    "ZeroRows=", written,
+                )
 
-            else:
-                print("EDGE TIMEOUT LOG: NOT TIMED OUT YET", "Company=", company_id)
-
-            if latest_edge is not None and timed_out and latest_edge != state["LastReceivedAt"]:
+            elif latest_edge is not None and timed_out and latest_edge != state["LastReceivedAt"]:
                 _upsert_state(
                     conn,
                     company_id,
@@ -360,6 +367,12 @@ def check_once():
                     timed_out=False,
                     last_timeout_at=last_timeout_at,
                 )
+                _write_diagnostic_log(
+                    conn,
+                    company_id,
+                    "INFO",
+                    f"EDGE RECOVERED last_edge={latest_edge}",
+                )
                 print(
                     "EDGE RECOVERED:",
                     "Company=", company_id,
@@ -367,16 +380,23 @@ def check_once():
                 )
 
         conn.commit()
-        print("EDGE TIMEOUT LOG: CHECK COMMITTED")
     except Exception as exc:
-        print("EDGE TIMEOUT LOG: CHECK ERROR", repr(exc))
+        try:
+            _write_diagnostic_log(
+                conn,
+                0,
+                "ERROR",
+                f"Worker exception: {type(exc).__name__}: {exc}",
+            )
+            conn.commit()
+        except Exception:
+            pass
         raise
     finally:
         conn.close()
 
 
 def _worker():
-    print("EDGE TIMEOUT LOG: WORKER THREAD ENTERED")
     while True:
         try:
             check_once()
@@ -389,7 +409,6 @@ def start_worker():
     global _worker_started
     with _worker_lock:
         if _worker_started:
-            print("EDGE TIMEOUT LOG: WORKER ALREADY STARTED")
             return
         _worker_started = True
         threading.Thread(
