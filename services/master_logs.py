@@ -30,7 +30,22 @@ def _install():
             time.sleep(0.5)
             continue
 
+        def ensure_edge_timeout_worker():
+            """Guarantee the EdgeTimeout worker is started in this Flask process."""
+            try:
+                from .edge_timeout_service import start_worker
+                start_worker()
+                return True
+            except Exception as exc:
+                print("EDGE TIMEOUT MASTER LOGS START ERROR:", exc)
+                return False
+
         def diagnostics(company_id):
+            # Start EdgeTimeout before reading its state/log tables. This is
+            # intentionally tied to the existing Master Logs diagnostic page
+            # so the page itself can prove whether the worker is alive.
+            ensure_edge_timeout_worker()
+
             conn = get_connection()
             cursor = conn.cursor()
             out = {
