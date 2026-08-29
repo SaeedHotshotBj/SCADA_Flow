@@ -19,6 +19,8 @@
         table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden}th,td{padding:8px 9px;border-bottom:1px solid #e8edf0;font-size:12px;text-align:right}th{background:#edf4f7}
         .section{margin:16px 0}.section h2{font-size:18px;margin:0 0 10px}.scroll{overflow:auto}
         .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#edf4f7;margin:2px;font-size:12px}
+        .diag-edge{font-family:Consolas,Monaco,monospace;direction:ltr;text-align:left;white-space:pre-wrap;line-height:1.55}
+        .edge-log-time{white-space:nowrap}.level-info{color:#0f526e;font-weight:700}.level-warning{color:#9a6700;font-weight:700}.level-error{color:#b42318;font-weight:700}
     </style>
 </head>
 <body>
@@ -49,6 +51,32 @@
             <div class="card"><h3>ReportHistory</h3><div><b>{{ diagnostics.counts.report_history_count }}</b> رکورد</div></div>
             <div class="card"><h3>ReportValues</h3><div><b>{{ diagnostics.counts.report_values_count }}</b> رکورد</div></div>
             <div class="card"><h3>TrendMinute</h3><div><b>{{ diagnostics.counts.trend_minute_count }}</b> رکورد</div></div>
+        </div>
+
+        <div class="section card">
+            <h2>EdgeTimeout — لاگ تشخیصی</h2>
+            {% if diagnostics.edge_timeout %}
+                <div class="sub" style="margin-bottom:10px">{{ diagnostics.edge_timeout_count }} رکورد آخر برای کمپانی {{ selected_company_id }}.</div>
+                <div class="scroll">
+                    <table>
+                        <tr><th>ID</th><th>زمان</th><th>سطح</th><th>پیام</th></tr>
+                        {% for r in diagnostics.edge_timeout %}
+                        <tr>
+                            <td>{{ r.LogID }}</td>
+                            <td class="edge-log-time">{{ r.Timestamp }}</td>
+                            <td>
+                                {% if r.Level == 'ERROR' %}<span class="level-error">ERROR</span>
+                                {% elif r.Level == 'WARNING' %}<span class="level-warning">WARNING</span>
+                                {% else %}<span class="level-info">INFO</span>{% endif %}
+                            </td>
+                            <td class="diag-edge">{{ r.Message }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            {% else %}
+                <div class="bad">هنوز لاگ EdgeTimeout برای این کمپانی ثبت نشده است.</div>
+            {% endif %}
         </div>
 
         <div class="section card">
