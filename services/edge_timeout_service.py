@@ -14,6 +14,7 @@ from database import get_connection
 WORKER_INTERVAL_SECONDS = 1.0
 DEFAULT_TIMEOUT_SECONDS = 10.0
 _worker_started = False
+_worker_thread = None
 _worker_lock = threading.Lock()
 
 
@@ -406,24 +407,27 @@ def _worker():
 
 
 def start_worker():
-    global _worker_started
+    global _worker_started, _worker_thread
+
     with _worker_lock:
-        if _worker_started:
+        if _worker_thread is not None and _worker_thread.is_alive():
             return
 
-        # Perform one synchronous check before creating the daemon thread.
-        # This guarantees that startup failures are surfaced immediately and
-        # that EdgeTimeoutState/diagnostic tables are created as soon as the
-        # service is started.
+        # Do not permanently mark the worker as started when the first check
+        # fails. This allows later startup retries to recover automatically.
         try:
             check_once()
         except Exception as exc:
+            _worker_started = False
+            _worker_thread = None
             print("EDGE TIMEOUT INITIAL CHECK ERROR:", exc)
+            raise
 
         _worker_started = True
-        threading.Thread(
+        _worker_thread = threading.Thread(
             target=_worker,
             name="SCADA-Edge-Timeout",
             daemon=True,
-        ).start()
+        )
+        _worker_thread.start()
         print("EDGE TIMEOUT WORKER STARTED")
