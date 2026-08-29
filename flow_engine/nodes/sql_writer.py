@@ -8,10 +8,10 @@ import json
 import time
 from datetime import datetime
 
+from database import get_company_flow, get_connection, insert_tag_value
 from services.historian_service import HistorianService
 from services.tag_registry import TagRegistry
 from services.report_service import save_report_snapshot
-from database import get_company_flow
 
 
 class SQLWriter:
@@ -71,13 +71,315 @@ class SQLWriter:
         except (TypeError, ValueError):
             return repr(value)
 
-    def _save_time_report_snapshot(self, tags, definitions, report_products, timestamp=None):
-        """Save a report snapshot when any selected ReportOutput tag is TIME-based.
+    def _ensure_trigger_state_table(self):
+        conn = get_connection()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS FlowTriggerState (
+                    CompanyID INTEGER NOT NULL,
+                    TriggerRegister TEXT NOT NULL,
+                    LastValue REAL,
+                    UpdatedAt TEXT NOT NULL,
+                    PRIMARY KEY (CompanyID, TriggerRegister)
+                )
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
-        ReportOutput.products is the sole source of report columns. The
-        storage mode for each selected tag comes from the TagMapper definition
-        in the same saved Flow. No other tags are introduced.
-        """
+    def _trigger_rising_edge(self, trigger_register, current, target):
+        """Persist trigger state and return True only for 0 -> target."""
+        self._ensure_trigger_state_table()
+
+        conn = get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+
+            register_key = str(trigger_register)
+            row = conn.execute(
+                """
+                SELECT LastValue
+                FROM FlowTriggerState
+                WHERE CompanyID = ?
+                  AND TriggerRegister = ?
+                """,
+                (
+                    int(self.company_id),
+                    register_key,
+                ),
+            ).fetchone()
+
+            previous = (
+                None
+                if row is None
+                else row["LastValue"]
+            )
+
+            try:
+                current_number = float(current)
+                target_number = float(target)
+                previous_number = (
+                    None
+                    if previous is None
+                    else float(previous)
+                )
+
+                rising = (
+                    previous_number == 0.0
+                    and current_number == target_number
+                )
+
+                stored_value = current_number
+
+            except (TypeError, ValueError):
+                rising = (
+                    previous == 0
+                    and current == target
+                )
+                stored_value = current
+
+            conn.execute(
+                """
+                INSERT INTO FlowTriggerState
+                (
+                    CompanyID,
+                    TriggerRegister,
+                    LastValue,
+                    UpdatedAt
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(CompanyID, TriggerRegister)
+                DO UPDATE SET
+                    LastValue = excluded.LastValue,
+                    UpdatedAt = excluded.UpdatedAt
+                """,
+                (
+                    int(self.company_id),
+                    register_key,
+                    stored_value,
+                    datetime.now().strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                ),
+            )
+
+            conn.commit()
+
+            print(
+                "TRIGGER STATE:",
+                "Company=", self.company_id,
+                "Register=", register_key,
+                "Previous=", previous,
+                "Current=", current,
+                "Target=", target,
+                "RISING=", rising,
+            )
+
+            return rising
+
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    def _register_value(self, registers, trigger_register):
+        key = str(trigger_register)
+
+        if key in registers:
+            return registers[key]
+
+        if trigger_register in registers:
+            return registers[trigger_register]
+
+        return None
+
+    def _process_trigger_tags(
+        self,
+        tags,
+        definitions,
+        registers,
+        report_products,
+        timestamp=None,
+    ):
+        """Store trigger tags only when their shared trigger register rises 0 -> target."""
+        trigger_groups = {}
+
+        report_tag_set = {
+            str(item.get("tag", "")).strip().lower()
+            for item in (report_products or [])
+            if isinstance(item, dict)
+            and str(item.get("tag", "")).strip()
+        }
+
+        for definition in definitions or []:
+            if not isinstance(definition, dict):
+                continue
+
+            if str(
+                definition.get("storage", "")
+            ).strip().upper() != "TRIGGER":
+                continue
+
+            name = str(
+                definition.get("name", "")
+            ).strip()
+
+            if not name:
+                continue
+
+            trigger_register = definition.get(
+                "trigger_register"
+            )
+
+            if trigger_register in (None, ""):
+                continue
+
+            current = self._register_value(
+                registers,
+                trigger_register,
+            )
+
+            if current is None:
+                continue
+
+            key = str(trigger_register)
+            trigger_groups.setdefault(
+                key,
+                {
+                    "current": current,
+                    "items": [],
+                },
+            )[
+                "items"
+            ].append(definition)
+
+        trigger_events = []
+
+        for register_key, group in trigger_groups.items():
+            current = group["current"]
+
+            targets = []
+            for definition in group["items"]:
+                target = definition.get(
+                    "trigger_value"
+                )
+                if target in targets:
+                    continue
+                targets.append(target)
+
+            if not targets:
+                continue
+
+            event_target = None
+
+            for target in targets:
+                if self._trigger_rising_edge(
+                    register_key,
+                    current,
+                    target,
+                ):
+                    event_target = target
+                    break
+
+            if event_target is None:
+                continue
+
+            for definition in group["items"]:
+                target = definition.get(
+                    "trigger_value"
+                )
+
+                try:
+                    same_target = (
+                        float(current)
+                        == float(target)
+                        and float(event_target)
+                        == float(target)
+                    )
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+                    same_target = (
+                        current == target
+                        and event_target == target
+                    )
+
+                if not same_target:
+                    continue
+
+                name = str(
+                    definition.get("name", "")
+                ).strip()
+
+                if name not in tags:
+                    continue
+
+                value = tags.get(name)
+
+                if value is None:
+                    continue
+
+                insert_tag_value(
+                    self.company_id,
+                    name,
+                    value,
+                    "TRIGGER",
+                    timestamp=timestamp,
+                )
+
+                trigger_events.append(name)
+
+                print(
+                    "TRIGGER INSERT:",
+                    "Company=", self.company_id,
+                    "Tag=", name,
+                    "Value=", value,
+                    "Register=", register_key,
+                    "TriggerValue=", event_target,
+                )
+
+        report_triggered = any(
+            name.lower() in report_tag_set
+            for name in trigger_events
+        )
+
+        if (
+            report_triggered
+            and report_products
+        ):
+            report_timestamp = (
+                timestamp
+                or datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            )
+
+            report_id = save_report_snapshot(
+                self.company_id,
+                tags,
+                report_products,
+                timestamp=report_timestamp,
+            )
+
+            if report_id is not None:
+                print(
+                    "REPORT TRIGGER SNAPSHOT SAVED:",
+                    "Company=", self.company_id,
+                    "ReportID=", report_id,
+                    "Tags=", trigger_events,
+                )
+
+        return len(trigger_events)
+
+    def _save_time_report_snapshot(self, tags, definitions, report_products, timestamp=None):
+        """Save a report snapshot when any selected ReportOutput tag is TIME-based."""
         if not report_products or not isinstance(tags, dict):
             return 0
 
@@ -125,9 +427,6 @@ class SQLWriter:
         if not selected or not time_due:
             return 0
 
-        # A TIME report snapshot contains only the columns explicitly selected
-        # in ReportOutput.products, but may include mixed TIME/TRIGGER products
-        # that already have current values in the same packet.
         snapshot_tags = {}
         tag_lookup = {
             str(name).strip().lower(): (name, value)
@@ -217,35 +516,47 @@ class SQLWriter:
             )
         ]
 
-        # TRIGGER-based report snapshots keep using the existing Historian
-        # implementation. TIME-based report products are handled here so a
-        # report does not depend on a rising-edge trigger.
-        trigger_written = self.historian.process_report_group(
-            self.company_id,
+        timestamp = data.get("Timestamp")
+
+        trigger_written = self._process_trigger_tags(
             tags,
             definitions,
             registers,
-            report_products
+            report_products,
+            timestamp=timestamp,
         )
 
-        time_written = self._save_time_report_snapshot(
-            tags,
-            definitions,
-            report_products,
-            timestamp=data.get("Timestamp"),
-        ) if trigger_written == 0 else 0
+        non_trigger_definitions = [
+            definition
+            for definition in definitions
+            if str(
+                definition.get("storage", "TIME")
+            ).strip().upper() != "TRIGGER"
+        ]
 
-        report_written = trigger_written + time_written
+        report_written = 0
+
+        if trigger_written == 0:
+            report_written = self._save_time_report_snapshot(
+                tags,
+                non_trigger_definitions,
+                report_products,
+                timestamp=timestamp,
+            )
 
         written = self.historian.process(
             self.company_id,
             tags,
-            definitions,
+            non_trigger_definitions,
             registers,
-            report_tags=report_tags
+            report_tags=(
+                report_tags
+                if trigger_written == 0
+                else []
+            )
         )
 
-        data["SQL_Written"] = written + report_written
-        data["Report_Written"] = report_written
+        data["SQL_Written"] = written + trigger_written + report_written
+        data["Report_Written"] = trigger_written + report_written
 
         return data
