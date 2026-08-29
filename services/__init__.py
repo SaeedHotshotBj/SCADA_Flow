@@ -197,9 +197,33 @@ threading.Thread(target=_install_save_flow_sync_retry, name="SCADA-Flow-PLC-Hook
 threading.Thread(target=_startup_sync_retry, name="SCADA-Flow-PLC-Startup-Sync", daemon=True).start()
 
 
-# Master Logs is intentionally NOT imported here. It is imported by app.py
-# after the Flask application and database are initialized, avoiding a race
-# where the module cannot find app and /master/logs is never registered.
+# =====================================================
+# MASTER LOGS / DEBUG PAGE
+# =====================================================
+
+
+def _load_master_logs_after_app_startup():
+    """Import master_logs only after the Flask app object exists."""
+    for attempt in range(120):
+        try:
+            app_module = sys.modules.get("app") or sys.modules.get("__main__")
+            flask_app = getattr(app_module, "app", None) if app_module else None
+            if flask_app is not None:
+                if "services.master_logs" not in sys.modules:
+                    from . import master_logs  # noqa: F401
+                print("MASTER LOGS MODULE LOADED AFTER APP STARTUP")
+                return
+        except Exception as exc:
+            print("MASTER LOGS LOAD RETRY:", attempt + 1, exc)
+        time.sleep(0.5)
+    print("MASTER LOGS LOAD FAILED AFTER RETRIES")
+
+
+threading.Thread(
+    target=_load_master_logs_after_app_startup,
+    name="SCADA-Master-Logs-Loader",
+    daemon=True,
+).start()
 
 
 # =====================================================
