@@ -242,7 +242,7 @@ run_remote(
 # access or real credentials.
 # ============================================================
 
-dashboard_diagnostic = r'''cd /var/www/scada && .venv/bin/python - <<'PY'
+dashboard_diagnostic = r'''cd /var/www/scada && SCADA_SKIP_EDGE_TIMEOUT_WORKER=1 .venv/bin/python - <<'PY'
 import time
 import traceback
 
