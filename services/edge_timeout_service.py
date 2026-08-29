@@ -410,6 +410,16 @@ def start_worker():
     with _worker_lock:
         if _worker_started:
             return
+
+        # Perform one synchronous check before creating the daemon thread.
+        # This guarantees that startup failures are surfaced immediately and
+        # that EdgeTimeoutState/diagnostic tables are created as soon as the
+        # service is started.
+        try:
+            check_once()
+        except Exception as exc:
+            print("EDGE TIMEOUT INITIAL CHECK ERROR:", exc)
+
         _worker_started = True
         threading.Thread(
             target=_worker,
