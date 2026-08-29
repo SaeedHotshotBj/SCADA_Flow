@@ -1,8 +1,8 @@
-<div class="top-nav">
-    <a href="/dashboard">Dashboard</a>
-    <a href="/trend">Trend</a>
-    <a href="/report">Report</a>
-    <a href="/plc_control">PLC Control</a>
+<div class="top-nav" id="scadaTopNav">
+    <a class="flow-nav-link" data-flow-page="DashboardOutput" href="/dashboard">Dashboard</a>
+    <a class="flow-nav-link" data-flow-page="TrendOutput" href="/trend">Trend</a>
+    <a class="flow-nav-link" data-flow-page="ReportOutput" href="/report">Report</a>
+    <a class="flow-nav-link" data-flow-page="PLCControl" href="/plc_control">PLC Control</a>
     <a href="/logout">Logout</a>
 </div>
 
@@ -10,6 +10,9 @@
 .top-nav{height:58px;background:#0f172a;display:flex;align-items:center;gap:6px;padding:0 28px;box-sizing:border-box;border-bottom:1px solid #cbd5e1;box-shadow:0 3px 14px rgba(15,23,42,.12);position:relative;z-index:2000}
 .top-nav a{color:#cbd5e1;text-decoration:none;padding:10px 18px;border-radius:9px;font-size:14px;font-weight:600;transition:background .15s ease,color .15s ease}
 .top-nav a:hover{background:#1e293b;color:#fff}
+
+.flow-nav-link{display:none}
+.top-nav.flow-nav-ready .flow-nav-link.flow-nav-allowed{display:inline-block}
 
 /* =========================================================
    TREND / REPORT ONLY
@@ -85,5 +88,133 @@ body:has(#reportTable) .chart-box canvas{background:#fff!important;border:1px so
   body:has(#reportTable) .chart-box{height:390px!important}
 }
 </style>
+
+<script>
+(function () {
+    "use strict";
+
+    const nav = document.getElementById("scadaTopNav");
+    if (!nav) return;
+
+    const links = Array.from(nav.querySelectorAll(".flow-nav-link"));
+
+    function normalizeRole(value) {
+        return String(value || "").trim().toLowerCase();
+    }
+
+    function getNodes(flow) {
+        return flow && flow.drawflow && flow.drawflow.Home && flow.drawflow.Home.data
+            ? flow.drawflow.Home.data
+            : {};
+    }
+
+    function connectedRolesForPage(nodes, pageNodeName) {
+        const targetIds = new Set(
+            Object.entries(nodes)
+                .filter(([, node]) => node && node.name === pageNodeName)
+                .map(([id]) => String(id))
+        );
+
+        if (!targetIds.size) {
+            return { exists: false, connected: false, roles: [] };
+        }
+
+        const roles = [];
+        let connected = false;
+
+        Object.values(nodes).forEach((node) => {
+            if (!node || node.name !== "RolesEngaged") return;
+
+            const outputs = node.outputs || {};
+            let thisNodeConnected = false;
+
+            Object.values(outputs).forEach((output) => {
+                if (!output || !Array.isArray(output.connections)) return;
+
+                output.connections.forEach((connection) => {
+                    if (targetIds.has(String(connection && connection.node))) {
+                        thisNodeConnected = true;
+                    }
+                });
+            });
+
+            if (!thisNodeConnected) return;
+            connected = true;
+
+            let selected = node.data && node.data.roles;
+            if (typeof selected === "string") selected = [selected];
+            if (!Array.isArray(selected)) return;
+
+            selected.forEach((item) => {
+                const role = typeof item === "object" && item !== null
+                    ? item.role
+                    : item;
+                const normalized = normalizeRole(role);
+                if (normalized && !roles.includes(normalized)) roles.push(normalized);
+            });
+        });
+
+        return { exists: true, connected, roles };
+    }
+
+    function pageAllowed(nodes, pageNodeName, userRole) {
+        const info = connectedRolesForPage(nodes, pageNodeName);
+
+        // If the page has no RolesEngaged restriction in the Flow,
+        // preserve the existing behavior and keep the page visible.
+        if (!info.exists || !info.connected || !info.roles.length) return true;
+
+        return info.roles.includes(normalizeRole(userRole));
+    }
+
+    async function applyFlowNavigationAccess() {
+        try {
+            const meResponse = await fetch("/api/auth/me", {
+                credentials: "same-origin",
+                cache: "no-store"
+            });
+
+            if (!meResponse.ok) throw new Error("auth/me failed");
+            const me = await meResponse.json();
+            const userRole = normalizeRole(me.role);
+
+            // Master is unrestricted.
+            if (userRole === "master") {
+                links.forEach((link) => link.classList.add("flow-nav-allowed"));
+                nav.classList.add("flow-nav-ready");
+                return;
+            }
+
+            const flowResponse = await fetch("/flow.json", {
+                credentials: "same-origin",
+                cache: "no-store"
+            });
+
+            if (!flowResponse.ok) throw new Error("flow.json failed");
+            const flow = await flowResponse.json();
+            const nodes = getNodes(flow);
+
+            links.forEach((link) => {
+                const pageNodeName = link.dataset.flowPage;
+                if (pageAllowed(nodes, pageNodeName, userRole)) {
+                    link.classList.add("flow-nav-allowed");
+                } else {
+                    link.classList.remove("flow-nav-allowed");
+                }
+            });
+
+            nav.classList.add("flow-nav-ready");
+        } catch (error) {
+            // Fail closed: never expose page names when permission data
+            // cannot be resolved. Logout remains visible.
+            console.error("SCADA FLOW NAV ACCESS ERROR:", error);
+            links.forEach((link) => link.classList.remove("flow-nav-allowed"));
+            nav.classList.add("flow-nav-ready");
+        }
+    }
+
+    applyFlowNavigationAccess();
+})();
+</script>
 
 <script src="/static/dashboard_machine_trend.js?v=1"></script>
