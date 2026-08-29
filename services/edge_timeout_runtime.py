@@ -74,9 +74,6 @@ def _ensure_table_columns(conn, table_name, definitions):
         if column in existing:
             continue
 
-        # SQLite cannot add a second PRIMARY KEY through ALTER TABLE.
-        # CompanyID/LogID therefore must already exist in a correctly-created
-        # table; all other missing fields are safely added in-place.
         if column in ("CompanyID", "LogID"):
             continue
 
@@ -344,6 +341,42 @@ def _set_state(
     )
 
 
+def _claim_timeout(
+    conn,
+    company_id,
+    timeout,
+    last_received,
+):
+    """Atomically claim the timeout transition exactly once."""
+    timeout_at = _now_string()
+
+    cursor = conn.execute(
+        """
+        UPDATE EdgeTimeoutState
+        SET
+            TimedOut = 1,
+            LastReceivedAt = ?,
+            TimeoutSeconds = ?,
+            LastTimeoutAt = ?,
+            UpdatedAt = ?
+        WHERE CompanyID = ?
+          AND COALESCE(TimedOut, 0) = 0
+        """,
+        (
+            last_received,
+            float(timeout),
+            timeout_at,
+            timeout_at,
+            int(company_id),
+        ),
+    )
+
+    if cursor.rowcount == 1:
+        return True, timeout_at
+
+    return False, None
+
+
 def _zero_tags(conn, company_id, tags):
     stamp = _now_string()
     count = 0
@@ -414,10 +447,7 @@ def check_once():
             timeout = float(cfg["timeout"])
             tags = cfg["tags"]
 
-            state = _get_state(
-                conn,
-                company_id,
-            )
+            state = _get_state(conn, company_id)
 
             timed_out = bool(
                 state["TimedOut"]
@@ -502,20 +532,32 @@ def check_once():
                 ),
             )
 
-            if elapsed >= timeout and not timed_out:
-                count, stamp = _zero_tags(
-                    conn,
-                    company_id,
-                    tags,
-                )
+            if elapsed >= timeout:
+                if timed_out:
+                    continue
 
-                _set_state(
+                claimed, timeout_at = _claim_timeout(
                     conn,
                     company_id,
                     timeout,
                     last_received_display,
-                    True,
-                    stamp,
+                )
+
+                if not claimed:
+                    conn.commit()
+                    _log(
+                        conn,
+                        company_id,
+                        "INFO",
+                        "TIMEOUT ALREADY CLAIMED BY ANOTHER WORKER",
+                    )
+                    conn.commit()
+                    continue
+
+                count, stamp = _zero_tags(
+                    conn,
+                    company_id,
+                    tags,
                 )
 
                 _log(
@@ -543,7 +585,7 @@ def check_once():
                     count,
                 )
 
-            elif elapsed < timeout and timed_out:
+            elif timed_out:
                 _set_state(
                     conn,
                     company_id,
@@ -571,7 +613,8 @@ def check_once():
                 "ERROR",
                 (
                     "Worker exception: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"{type(exc).__name__}: "
+                    f"{exc}"
                 ),
             )
             conn.commit()
