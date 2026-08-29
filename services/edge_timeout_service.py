@@ -102,6 +102,25 @@ def _write_diagnostic_log(conn, company_id, level, message):
         print("EDGE TIMEOUT DIAGNOSTIC LOG ERROR:", exc)
 
 
+def _safe_bootstrap_log(message, level="ERROR"):
+    """Write a last-resort Worker diagnostic using a fresh DB connection."""
+    conn = None
+    try:
+        conn = get_connection()
+        _ensure_state_table(conn)
+        _ensure_diagnostic_log_table(conn)
+        _write_diagnostic_log(conn, 0, level, message)
+        conn.commit()
+    except Exception as exc:
+        print("EDGE TIMEOUT FALLBACK LOG ERROR:", exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def _load_company_timeout_configs(conn):
     rows = conn.execute(
         """
@@ -137,37 +156,48 @@ def _load_company_timeout_configs(conn):
         tag_names = []
 
         for node in nodes.values():
-            if node.get("name") == "EdgeTimeout":
-                data = node.get("data", {}) or {}
-                config = data.get("config", data) or {}
-                try:
-                    timeout = float(
-                        config.get(
-                            "timeout_seconds",
-                            DEFAULT_TIMEOUT_SECONDS,
-                        )
+            if not isinstance(node, dict):
+                continue
+            if node.get("name") != "EdgeTimeout":
+                continue
+
+            data = node.get("data", {}) or {}
+            config = data.get("config", data) or {}
+
+            try:
+                timeout = float(
+                    config.get(
+                        "timeout_seconds",
+                        DEFAULT_TIMEOUT_SECONDS,
                     )
-                except (TypeError, ValueError):
-                    timeout = DEFAULT_TIMEOUT_SECONDS
-                if timeout <= 0:
-                    timeout = DEFAULT_TIMEOUT_SECONDS
-                break
+                )
+            except (TypeError, ValueError):
+                timeout = DEFAULT_TIMEOUT_SECONDS
+
+            if timeout <= 0:
+                timeout = DEFAULT_TIMEOUT_SECONDS
+            break
 
         if timeout is None:
             continue
 
         seen_tags = set()
         for node in nodes.values():
+            if not isinstance(node, dict):
+                continue
             if node.get("name") != "TagMapper":
                 continue
 
             data = node.get("data", {}) or {}
             mappings = data.get("mappings", []) or []
+
             for mapping in mappings:
                 if not isinstance(mapping, dict):
                     continue
+
                 name = str(mapping.get("name", "")).strip()
                 key = name.lower()
+
                 if name and key not in seen_tags:
                     tag_names.append(name)
                     seen_tags.add(key)
@@ -280,12 +310,20 @@ def check_once():
             last_timeout_at = state["LastTimeoutAt"] if state else None
 
             latest_edge = _latest_edge_timestamp(conn, company_id)
-            if latest_edge is not None:
-                if previous_last_received != latest_edge:
-                    timed_out = False
+
+            if latest_edge is not None and latest_edge != previous_last_received:
+                timed_out = False
                 previous_last_received = latest_edge
 
             if previous_last_received is None:
+                _upsert_state(
+                    conn,
+                    company_id,
+                    timeout_seconds,
+                    None,
+                    False,
+                    last_timeout_at,
+                )
                 _write_diagnostic_log(
                     conn,
                     company_id,
@@ -337,8 +375,8 @@ def check_once():
                     company_id,
                     timeout_seconds,
                     previous_last_received,
-                    timed_out=True,
-                    last_timeout_at=timeout_timestamp,
+                    True,
+                    timeout_timestamp,
                 )
 
                 _write_diagnostic_log(
@@ -359,14 +397,14 @@ def check_once():
                     "ZeroRows=", written,
                 )
 
-            elif latest_edge is not None and timed_out and latest_edge != state["LastReceivedAt"]:
+            elif latest_edge is not None and timed_out and state is not None and latest_edge != state["LastReceivedAt"]:
                 _upsert_state(
                     conn,
                     company_id,
                     timeout_seconds,
                     latest_edge,
-                    timed_out=False,
-                    last_timeout_at=last_timeout_at,
+                    False,
+                    last_timeout_at,
                 )
                 _write_diagnostic_log(
                     conn,
@@ -381,8 +419,11 @@ def check_once():
                 )
 
         conn.commit()
+
     except Exception as exc:
         try:
+            _ensure_state_table(conn)
+            _ensure_diagnostic_log_table(conn)
             _write_diagnostic_log(
                 conn,
                 0,
@@ -393,6 +434,7 @@ def check_once():
         except Exception:
             pass
         raise
+
     finally:
         conn.close()
 
@@ -407,20 +449,22 @@ def _worker():
 
 
 def start_worker():
+    """Start EdgeTimeout once; permit later startup retries after any failure."""
     global _worker_started, _worker_thread
 
     with _worker_lock:
         if _worker_thread is not None and _worker_thread.is_alive():
             return
 
-        # Do not permanently mark the worker as started when the first check
-        # fails. This allows later startup retries to recover automatically.
         try:
             check_once()
         except Exception as exc:
             _worker_started = False
             _worker_thread = None
             print("EDGE TIMEOUT INITIAL CHECK ERROR:", exc)
+            _safe_bootstrap_log(
+                f"INITIAL CHECK FAILED: {type(exc).__name__}: {exc}"
+            )
             raise
 
         _worker_started = True
