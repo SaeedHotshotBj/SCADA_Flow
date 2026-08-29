@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 
 from database import get_company_flow
 
@@ -156,9 +158,6 @@ def get_dashboard_widgets(company_id):
                         if isinstance(item, dict)
                     )
 
-        # Keep all DashboardOutput widgets first. Machine cards are appended
-        # after them so the dashboard always renders machine cards below the
-        # normal DashboardOutput cards.
         for machine in machines:
             widgets.append({
                 "_dashboard_type": "machine",
@@ -176,10 +175,23 @@ def get_dashboard_widgets(company_id):
 # START EDGE TIMEOUT WORKER
 # =====================================================
 
-try:
-    from services.edge_timeout_service import start_worker as start_edge_timeout_worker
+def _start_edge_timeout_with_retry():
+    """Start EdgeTimeout only after the application/database have had time to initialize."""
+    for attempt in range(12):
+        try:
+            from services.edge_timeout_service import start_worker
+            start_worker()
+            print("EDGE TIMEOUT WORKER STARTED FROM DASHBOARD SERVICE RETRY", attempt + 1)
+            return
+        except Exception as exc:
+            print("EDGE TIMEOUT RETRY START ERROR:", attempt + 1, exc)
+        time.sleep(2)
 
-    start_edge_timeout_worker()
-    print("EDGE TIMEOUT WORKER STARTED FROM DASHBOARD SERVICE")
-except Exception as exc:
-    print("EDGE TIMEOUT START ERROR:", exc)
+    print("EDGE TIMEOUT WORKER RETRY START FAILED")
+
+
+threading.Thread(
+    target=_start_edge_timeout_with_retry,
+    name="SCADA-Edge-Timeout-Bootstrap",
+    daemon=True,
+).start()
