@@ -17,7 +17,7 @@ _lock = threading.Lock()
 
 
 STATE_COLUMNS = {
-    "CompanyID": "INTEGER PRIMARY KEY",
+    "CompanyID": "INTEGER",
     "LastReceivedAt": "TEXT",
     "TimeoutSeconds": "REAL NOT NULL DEFAULT 10.0",
     "TimedOut": "INTEGER NOT NULL DEFAULT 0",
@@ -312,35 +312,58 @@ def _set_state(
     timed_out,
     last_timeout_at=None,
 ):
-    conn.execute(
+    """Persist state without relying on an existing UNIQUE constraint."""
+    company_id = int(company_id)
+    now = _now_string()
+
+    row = conn.execute(
         """
-        INSERT INTO EdgeTimeoutState
-        (
-            CompanyID,
-            LastReceivedAt,
-            TimeoutSeconds,
-            TimedOut,
-            LastTimeoutAt,
-            UpdatedAt
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(CompanyID)
-        DO UPDATE SET
-            LastReceivedAt = excluded.LastReceivedAt,
-            TimeoutSeconds = excluded.TimeoutSeconds,
-            TimedOut = excluded.TimedOut,
-            LastTimeoutAt = excluded.LastTimeoutAt,
-            UpdatedAt = excluded.UpdatedAt
+        SELECT rowid
+        FROM EdgeTimeoutState
+        WHERE CompanyID = ?
+        LIMIT 1
         """,
-        (
-            int(company_id),
-            last_received,
-            float(timeout),
-            1 if timed_out else 0,
-            last_timeout_at,
-            _now_string(),
-        ),
+        (company_id,),
+    ).fetchone()
+
+    values = (
+        last_received,
+        float(timeout),
+        1 if timed_out else 0,
+        last_timeout_at,
+        now,
     )
+
+    if row is None:
+        conn.execute(
+            """
+            INSERT INTO EdgeTimeoutState
+            (
+                CompanyID,
+                LastReceivedAt,
+                TimeoutSeconds,
+                TimedOut,
+                LastTimeoutAt,
+                UpdatedAt
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (company_id, *values),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE EdgeTimeoutState
+            SET
+                LastReceivedAt = ?,
+                TimeoutSeconds = ?,
+                TimedOut = ?,
+                LastTimeoutAt = ?,
+                UpdatedAt = ?
+            WHERE rowid = ?
+            """,
+            (*values, row["rowid"]),
+        )
 
 
 def _claim_timeout(
@@ -361,7 +384,13 @@ def _claim_timeout(
             TimeoutSeconds = ?,
             LastTimeoutAt = ?,
             UpdatedAt = ?
-        WHERE CompanyID = ?
+        WHERE rowid = (
+            SELECT rowid
+            FROM EdgeTimeoutState
+            WHERE CompanyID = ?
+            ORDER BY rowid
+            LIMIT 1
+        )
           AND COALESCE(TimedOut, 0) = 0
         """,
         (
