@@ -228,13 +228,31 @@ def _install():
                 except Exception as exc:
                     out["errors"].append(f"EdgeTimeout logs: {exc}")
 
-                for table, key in (
-                    ("PLC_Data", "plc_data_count"),
-                    ("ReportHistory", "report_history_count"),
-                    ("ReportValues", "report_values_count"),
-                ):
-                    cursor.execute(f"SELECT COUNT(*) AS C FROM {table} WHERE CompanyID = ?", (company_id,))
-                    out["counts"][key] = int(cursor.fetchone()["C"])
+                # Count tables using the schema they actually expose.
+                cursor.execute(
+                    "SELECT COUNT(*) AS C FROM PLC_Data WHERE CompanyID = ?",
+                    (company_id,),
+                )
+                out["counts"]["plc_data_count"] = int(cursor.fetchone()["C"])
+
+                cursor.execute(
+                    "SELECT COUNT(*) AS C FROM ReportHistory WHERE CompanyID = ?",
+                    (company_id,),
+                )
+                out["counts"]["report_history_count"] = int(cursor.fetchone()["C"])
+
+                # ReportValues belongs to a report, so CompanyID is obtained
+                # through ReportHistory rather than assumed on ReportValues.
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS C
+                    FROM ReportValues v
+                    INNER JOIN ReportHistory h ON h.ReportID = v.ReportID
+                    WHERE h.CompanyID = ?
+                    """,
+                    (company_id,),
+                )
+                out["counts"]["report_values_count"] = int(cursor.fetchone()["C"])
 
                 if company_column:
                     cursor.execute(
