@@ -43,6 +43,8 @@ def _install():
                 "report_history": [],
                 "report_values": [],
                 "trend_minute": [],
+                "edge_timeout": [],
+                "edge_timeout_count": 0,
                 "counts": {},
                 "errors": [],
             }
@@ -180,8 +182,6 @@ def _install():
                             (company_id,),
                         )
                 else:
-                    # If the historical table is not company-scoped, display
-                    # its recent rows instead of failing the entire debug page.
                     if time_column:
                         safe_time = time_column.replace('"', '""')
                         cursor.execute(
@@ -191,6 +191,27 @@ def _install():
                         cursor.execute('SELECT * FROM "TrendMinute" LIMIT 30')
 
                 out["trend_minute"] = [dict(r) for r in cursor.fetchall()]
+
+                # EdgeTimeout diagnostic log is optional so older databases
+                # continue to render the Master Logs page normally.
+                try:
+                    cursor.execute("PRAGMA table_info(EdgeTimeoutDiagnosticLog)")
+                    edge_log_columns = [r["name"] for r in cursor.fetchall()]
+                    if edge_log_columns:
+                        cursor.execute(
+                            """
+                            SELECT LogID, CompanyID, Level, Message, Timestamp
+                            FROM EdgeTimeoutDiagnosticLog
+                            WHERE CompanyID = ?
+                            ORDER BY LogID DESC
+                            LIMIT 100
+                            """,
+                            (company_id,),
+                        )
+                        out["edge_timeout"] = [dict(r) for r in cursor.fetchall()]
+                        out["edge_timeout_count"] = len(out["edge_timeout"])
+                except Exception as exc:
+                    out["errors"].append(f"EdgeTimeout logs: {exc}")
 
                 for table, key in (
                     ("PLC_Data", "plc_data_count"),
