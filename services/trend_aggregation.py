@@ -9,6 +9,7 @@ import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from config import DB_CONFIG
 
@@ -19,6 +20,7 @@ DAY_RETENTION_DAYS = int(os.environ.get("SCADA_TREND_DAY_RETENTION_DAYS", "3650"
 WORKER_INTERVAL_SECONDS = 30
 LEASE_SECONDS = max(WORKER_INTERVAL_SECONDS * 2, 90)
 _ALLOWED_STORAGE = ("EDGE", "TIME")
+SCADA_TIMEZONE = ZoneInfo("Asia/Tehran")
 _worker_started = False
 _worker_lock = threading.Lock()
 
@@ -315,7 +317,7 @@ def aggregate_once():
 
     conn = _connect()
     try:
-        now = datetime.now().replace(microsecond=0)
+        now = datetime.now(SCADA_TIMEZONE).replace(tzinfo=None, microsecond=0)
 
         minute_end = _minute_start(now)
         minute_start = minute_end - timedelta(minutes=1)
@@ -365,7 +367,7 @@ def get_resolution(start, end):
 
 def get_trend_series(company_id, tag_name, start=None, end=None):
     if start is None or end is None:
-        end = datetime.now()
+        end = datetime.now(SCADA_TIMEZONE).replace(tzinfo=None)
         start = end - timedelta(hours=2)
 
     resolution = get_resolution(start, end)
@@ -422,7 +424,7 @@ def get_trend_stats(company_id, tag_name, start=None, end=None):
 
     if resolution == "raw":
         parsed = [{"ts": row["Timestamp"], "value": row["Value"]} for row in rows]
-        stats = _aggregate_step_rows(parsed, start or datetime.min, end or datetime.now())
+        stats = _aggregate_step_rows(parsed, start or datetime.min, end or datetime.now(SCADA_TIMEZONE).replace(tzinfo=None))
         if stats is None:
             return {
                 "resolution": resolution,
