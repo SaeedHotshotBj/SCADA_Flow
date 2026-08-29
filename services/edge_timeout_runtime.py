@@ -2,12 +2,14 @@ import json
 import threading
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from database import get_connection
 
 
 CHECK_INTERVAL = 1.0
 DEFAULT_TIMEOUT = 10.0
+SCADA_TIMEZONE = ZoneInfo("Asia/Tehran")
 
 _started = False
 _thread = None
@@ -33,7 +35,7 @@ LOG_COLUMNS = {
 
 
 def _now_string():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(SCADA_TIMEZONE).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_timestamp(value):
