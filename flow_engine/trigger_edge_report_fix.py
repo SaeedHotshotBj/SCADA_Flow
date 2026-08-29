@@ -21,6 +21,7 @@ from services.report_service import get_report_products, save_report_snapshot
 
 
 _STATE_TABLE = "FlowEdgeTriggerEventState"
+TRIGGER_SETTLE_SECONDS = 1.5
 
 
 def _ensure_state_table():
@@ -48,6 +49,15 @@ def _row_key(row):
         str(row["Timestamp"] or ""),
         int(row["ID"] or 0),
     )
+
+
+def _timestamp_age(timestamp):
+    try:
+        text = str(timestamp or "").strip().replace("Z", "")
+        dt = datetime.fromisoformat(text)
+        return max(0.0, (datetime.now() - dt).total_seconds())
+    except Exception:
+        return TRIGGER_SETTLE_SECONDS + 1.0
 
 
 def _latest_trigger_rows(company_id, definitions):
@@ -193,6 +203,18 @@ def enrich_plc_reader_result(original_execute, reader, data):
         newest = max(rows.values(), key=_row_key)
         event_key = _row_key(newest)
 
+        # Edge sends B1/B2/B3 as separate HTTP requests. Wait until the
+        # newest row is stable before declaring one trigger event. This
+        # prevents one PLC trigger from producing multiple reports while
+        # the three tag requests are arriving milliseconds apart.
+        if _timestamp_age(newest["Timestamp"]) < TRIGGER_SETTLE_SECONDS:
+            for row in rows.values():
+                name = str(row["TagName"]).strip()
+                value = row["Value"]
+                if name and value is not None:
+                    tags[name] = value
+            continue
+
         is_new = _event_is_new(
             company_id,
             register,
@@ -247,6 +269,8 @@ def save_edge_trigger_reports(original_execute, writer, data):
     if not products:
         return result
 
+    saved = 0
+
     for event in events:
         event_tags = event.get("tags", {})
         if not isinstance(event_tags, dict) or not event_tags:
@@ -283,6 +307,7 @@ def save_edge_trigger_reports(original_execute, writer, data):
         )
 
         if report_id is not None:
+            saved += 1
             print(
                 "EDGE TRIGGER REPORT SAVED:",
                 "Company=", writer.company_id,
@@ -292,7 +317,7 @@ def save_edge_trigger_reports(original_execute, writer, data):
                 "Tags=", list(event_tags.keys()),
             )
 
-    result["Report_Written"] = int(result.get("Report_Written", 0) or 0) + len(events)
+    result["Report_Written"] = int(result.get("Report_Written", 0) or 0) + saved
     return result
 
 
