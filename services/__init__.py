@@ -450,3 +450,38 @@ threading.Thread(
     name="SCADA-Flow-Company-Routes",
     daemon=True,
 ).start()
+
+
+# =====================================================
+# EDGE TIMEOUT WORKER BOOTSTRAP
+# =====================================================
+
+def _start_edge_timeout_worker_retry():
+    """Start EdgeTimeout reliably after the database is available."""
+    for attempt in range(120):
+        try:
+            from .edge_timeout_service import start_worker
+            start_worker()
+            print(
+                "EDGE TIMEOUT BOOTSTRAP OK:",
+                "attempt=",
+                attempt + 1,
+            )
+            return
+        except Exception as exc:
+            print(
+                "EDGE TIMEOUT BOOTSTRAP RETRY:",
+                attempt + 1,
+                "ERROR=",
+                exc,
+            )
+        time.sleep(1)
+
+    print("EDGE TIMEOUT BOOTSTRAP FAILED AFTER 120 ATTEMPTS")
+
+
+threading.Thread(
+    target=_start_edge_timeout_worker_retry,
+    name="SCADA-Edge-Timeout-Bootstrap",
+    daemon=True,
+).start()
