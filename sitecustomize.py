@@ -221,45 +221,206 @@ def _sync_all_saved_flows_to_plcs():
             _original_print("PLC FLOW STARTUP SYNC ERROR:", exc)
 
 
-def _normalize_drawflow_node_ids(flow_data):
-    """Normalize persisted Drawflow node IDs to their object keys.
+LEGACY_MANAGEMENT_NODE_NAMES = {
+    "ManagementRolesEngaged",
+    "ManagementPanelOutput",
+    "ManagementInput",
+    "ContractRepository",
+    "ProductBOMRepository",
+    "ManagementCostCalculator",
+    "ManagementOutput",
+}
 
-    Drawflow stores each node under a dictionary key and also stores an internal
-    node.id. These must agree for imports/connections to work. Older saved flows
-    may contain mismatched values (for example key '32' with id 1).
-    """
+
+def _sanitize_company_flow(flow_data):
+    """Repair persisted Drawflow and remove only accidental legacy management nodes."""
     if not isinstance(flow_data, dict):
         return flow_data, False
 
-    drawflow = flow_data.get("drawflow")
-    if not isinstance(drawflow, dict):
-        return flow_data, False
-
-    home = drawflow.get("Home")
-    if not isinstance(home, dict):
-        return flow_data, False
-
-    nodes = home.get("data")
+    home = (
+        flow_data.get("drawflow", {})
+        .get("Home", {})
+    )
+    nodes = home.get("data") if isinstance(home, dict) else None
     if not isinstance(nodes, dict):
         return flow_data, False
 
-    normalized = json.loads(json.dumps(flow_data, ensure_ascii=False))
-    normalized_nodes = (
-        normalized.get("drawflow", {})
+    cleaned = json.loads(json.dumps(flow_data, ensure_ascii=False))
+    cleaned_nodes = (
+        cleaned.get("drawflow", {})
         .get("Home", {})
         .get("data", {})
     )
 
     changed = False
-    for node_key, node in normalized_nodes.items():
-        if not isinstance(node, dict):
-            continue
-        key_id = str(node_key)
-        if str(node.get("id", "")) != key_id:
-            node["id"] = int(key_id) if key_id.isdigit() else key_id
+
+    # Remove the management nodes accidentally persisted in today's Flow.
+    remove_ids = {
+        str(node_key)
+        for node_key, node in cleaned_nodes.items()
+        if isinstance(node, dict)
+        and str(node.get("name", "")).strip() in LEGACY_MANAGEMENT_NODE_NAMES
+    }
+
+    for node_key in list(cleaned_nodes.keys()):
+        if str(node_key) in remove_ids:
+            del cleaned_nodes[node_key]
             changed = True
 
-    return normalized, changed
+    # Make Drawflow's dictionary key and node.id agree.
+    key_id_map = {}
+    for node_key, node in cleaned_nodes.items():
+        if not isinstance(node, dict):
+            continue
+        old_id = str(node.get("id", node_key))
+        new_id = str(node_key)
+        key_id_map[old_id] = new_id
+        if old_id != new_id:
+            node["id"] = int(new_id) if new_id.isdigit() else new_id
+            changed = True
+
+    # Drop connections to deleted nodes and repair references to normalized IDs.
+    for node in cleaned_nodes.values():
+        if not isinstance(node, dict):
+            continue
+        for output in (node.get("outputs", {}) or {}).values():
+            if not isinstance(output, dict):
+                continue
+            connections = output.get("connections", [])
+            if isinstance(connections, list):
+                repaired = []
+                for connection in connections:
+                    if not isinstance(connection, dict):
+                        continue
+                    target = str(connection.get("node", ""))
+                    if target in remove_ids:
+                        changed = True
+                        continue
+                    mapped = key_id_map.get(target, target)
+                    if mapped != target:
+                        connection["node"] = mapped
+                        changed = True
+                    repaired.append(connection)
+                output["connections"] = repaired
+        for input_item in (node.get("inputs", {}) or {}).values():
+            if not isinstance(input_item, dict):
+                continue
+            connections = input_item.get("connections", [])
+            if isinstance(connections, list):
+                repaired = []
+                for connection in connections:
+                    if not isinstance(connection, dict):
+                        continue
+                    source = str(connection.get("node", ""))
+                    if source in remove_ids:
+                        changed = True
+                        continue
+                    mapped = key_id_map.get(source, source)
+                    if mapped != source:
+                        connection["node"] = mapped
+                        changed = True
+                    repaired.append(connection)
+                input_item["connections"] = repaired
+
+    return cleaned, changed
+
+
+def _load_company_flow_object(company_id):
+    from database import get_connection
+
+    if company_id is None:
+        return None
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT FlowID, FlowJson
+            FROM Flows
+            WHERE CompanyID = ?
+            ORDER BY FlowID DESC
+            LIMIT 1
+            """,
+            (int(company_id),),
+        ).fetchone()
+        if not row:
+            return None
+
+        raw = row["FlowJson"]
+        flow = json.loads(raw or "{}")
+        cleaned, changed = _sanitize_company_flow(flow)
+
+        if changed:
+            conn.execute(
+                """
+                UPDATE Flows
+                SET FlowJson = ?,
+                    LastModified = datetime('now', 'localtime')
+                WHERE FlowID = ?
+                """,
+                (json.dumps(cleaned, ensure_ascii=False), row["FlowID"]),
+            )
+            conn.commit()
+            _original_print(
+                "COMPANY FLOW REPAIRED:",
+                "CompanyID=", company_id,
+                "FlowID=", row["FlowID"],
+            )
+
+        return cleaned
+    finally:
+        conn.close()
+
+
+def _install_flow_json_guard():
+    """Serve sanitized DB-backed company Flow before the legacy /flow.json route."""
+    app_module = sys.modules.get("app") or sys.modules.get("__main__")
+    if app_module is None:
+        return False
+    flask_app = getattr(app_module, "app", None)
+    if flask_app is None:
+        return False
+    if getattr(flask_app, "_company_flow_json_guard_installed", False):
+        return True
+
+    from flask import jsonify, request, session
+
+    @flask_app.before_request
+    def _company_flow_json_guard():
+        if request.path != "/flow.json" or request.method != "GET":
+            return None
+
+        company_id = _resolve_company_id(request, session)
+        if company_id is None:
+            return jsonify({"error": "Company not selected"}), 403
+
+        try:
+            flow = _load_company_flow_object(company_id)
+        except Exception as exc:
+            _original_print("COMPANY FLOW JSON GUARD ERROR:", exc)
+            return jsonify({
+                "status": "error",
+                "message": str(exc),
+            }), 500
+
+        if flow is None:
+            return jsonify({
+                "drawflow": {
+                    "Home": {
+                        "data": {}
+                    }
+                }
+            })
+
+        response = jsonify(flow)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+    flask_app._company_flow_json_guard_installed = True
+    _original_print("COMPANY FLOW JSON GUARD ENABLED")
+    return True
 
 
 def _install_drawflow_id_normalizer():
@@ -276,7 +437,7 @@ def _install_drawflow_id_normalizer():
 
     def _safe_get_flow_data(company_id):
         flow = original_get_flow_data(company_id)
-        normalized, changed = _normalize_drawflow_node_ids(flow)
+        normalized, changed = _sanitize_company_flow(flow)
         if not changed:
             return flow
 
@@ -295,13 +456,13 @@ def _install_drawflow_id_normalizer():
                 )
                 conn.commit()
                 _original_print(
-                    "DRAWFLOW ID NORMALIZED:",
+                    "DRAWFLOW FLOW SANITIZED:",
                     "CompanyID=", company_id,
                 )
             finally:
                 conn.close()
         except Exception as exc:
-            _original_print("DRAWFLOW ID NORMALIZE SAVE ERROR:", exc)
+            _original_print("DRAWFLOW FLOW SANITIZE SAVE ERROR:", exc)
 
         return normalized
 
@@ -380,6 +541,7 @@ def _wait_for_app_and_patch():
                 fallback_disabled = _disable_file_flow_fallback()
             if not hooks_installed:
                 hooks_installed = _install_save_flow_hooks()
+            _install_flow_json_guard()
             _install_drawflow_id_normalizer()
             _sync_all_saved_flows_to_plcs()
             if hooks_installed and fallback_disabled:
@@ -393,8 +555,9 @@ def _wait_for_app_and_patch():
                 fallback_disabled = _disable_file_flow_fallback()
             if not hooks_installed:
                 hooks_installed = _install_save_flow_hooks()
+            _install_flow_json_guard()
             _install_drawflow_id_normalizer()
-            if hooks_installed:
+            if hooks_installed and fallback_disabled:
                 return
         except Exception as exc:
             _original_print("PLC FLOW PATCH ERROR:", exc)
