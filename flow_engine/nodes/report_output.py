@@ -71,6 +71,57 @@ class ReportOutput:
             print("REPORT FLOW DEFINITION LOAD ERROR:", exc)
             return self._flow_definitions
 
+    def _management_context_tags(self, data):
+        """Resolve ContractCode/ProductCode from ManagementPanel registers.
+
+        Register addresses are configured per company inside the Flow's
+        ManagementPanel node. Nothing is hard-coded here.
+        """
+        if self.company_id is None:
+            return {}
+
+        registers = data.get("Registers", {}) or {}
+        if not isinstance(registers, dict):
+            return {}
+
+        try:
+            flow = get_company_flow(self.company_id)
+            if isinstance(flow, str):
+                flow = json.loads(flow)
+            nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
+
+            config = {}
+            for node in nodes.values():
+                if not isinstance(node, dict) or node.get("name") != "ManagementPanel":
+                    continue
+                raw = node.get("data", {}) or {}
+                config = raw.get("config", raw) or {}
+                break
+
+            def read_register(field):
+                address = config.get(field)
+                if address in (None, ""):
+                    return None
+                key = str(address).strip()
+                if key in registers:
+                    return registers[key]
+                try:
+                    return registers.get(str(int(float(key))))
+                except (TypeError, ValueError):
+                    return None
+
+            result = {}
+            contract = read_register("contract_code_register")
+            product = read_register("product_code_register")
+            if contract is not None:
+                result["ContractCode"] = contract
+            if product is not None:
+                result["ProductCode"] = product
+            return result
+        except Exception as exc:
+            print("REPORT MANAGEMENT REGISTER LOAD ERROR:", exc)
+            return {}
+
     @staticmethod
     def normalize_date(value, calendar):
         if not value:
@@ -349,15 +400,28 @@ class ReportOutput:
 
         self._trigger_initialized = True
         tags = self._runtime_tags_for_products(data)
+        tags.update(self._management_context_tags(data))
         if not tags:
             print("REPORT SNAPSHOT SKIPPED: no runtime values")
             return 0
+
+        report_products = list(self.products)
+        if "ContractCode" in tags and not any(
+            isinstance(item, dict) and str(item.get("context_role", "")).strip().lower() in ("contract", "contract_code", "contractid", "contract_id")
+            for item in report_products
+        ):
+            report_products.append({"tag": "ContractCode", "name": "ContractCode", "context_role": "contract_code"})
+        if "ProductCode" in tags and not any(
+            isinstance(item, dict) and str(item.get("context_role", "")).strip().lower() in ("product", "product_code", "productid", "product_id")
+            for item in report_products
+        ):
+            report_products.append({"tag": "ProductCode", "name": "ProductCode", "context_role": "product_code"})
 
         timestamp = data.get("Timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         report_id = save_report_snapshot(
             self.company_id,
             tags,
-            self.products,
+            report_products,
             timestamp=timestamp,
         )
         if report_id is None:
