@@ -10,14 +10,17 @@ REALTIME_SKIP_NODE_TYPES = {
     "TrendReader",
     "TrendDatabaseReader",
     "TrendOutput",
+    "ManagementRolesEngaged",
+    "ManagementPanelOutput",
+    "ManagementInput",
+    "ContractRepository",
+    "ProductBOMRepository",
+    "ManagementCostCalculator",
+    "ManagementOutput",
 }
 
 
 class FlowRunner:
-
-    # =====================================================
-    # INIT
-    # =====================================================
 
     def __init__(self, flow_data, company_id):
         if company_id is None:
@@ -30,10 +33,6 @@ class FlowRunner:
         self.company_id = int(company_id)
         self.load_flow()
 
-    # =====================================================
-    # CONFIG
-    # =====================================================
-
     def get_node_config(self, node):
         data = node.get("data", {})
         if "config" in data:
@@ -43,20 +42,12 @@ class FlowRunner:
         config["company_id"] = self.company_id
         return config
 
-    # =====================================================
-    # LOAD FLOW
-    # =====================================================
-
     def load_flow(self):
         flow = self.flow_data
         if not flow or "drawflow" not in flow:
             return
 
-        home = (
-            flow.get("drawflow", {})
-            .get("Home", {})
-            .get("data", {})
-        )
+        home = flow.get("drawflow", {}).get("Home", {}).get("data", {})
 
         for node_id, node in home.items():
             node_type = node.get("name")
@@ -123,12 +114,18 @@ class FlowRunner:
                     if target is not None:
                         self.connections[source_id].append(str(target))
 
-    # =====================================================
-    # START NODES
-    # =====================================================
-
     def get_start_nodes(self, realtime=False):
-        ignored_types = {"Roles", "RolesEngaged"}
+        ignored_types = {
+            "Roles",
+            "RolesEngaged",
+            "ManagementRolesEngaged",
+            "ManagementPanelOutput",
+            "ManagementInput",
+            "ContractRepository",
+            "ProductBOMRepository",
+            "ManagementCostCalculator",
+            "ManagementOutput",
+        }
 
         all_nodes = {
             node_id
@@ -159,10 +156,6 @@ class FlowRunner:
     def next_nodes(self, node_id):
         return self.connections.get(str(node_id), [])
 
-    # =====================================================
-    # NORMAL FLOW EXECUTION
-    # =====================================================
-
     def execute_node(self, node_id, data, visited=None, realtime=False):
         if visited is None:
             visited = set()
@@ -191,15 +184,10 @@ class FlowRunner:
             flow_status.node_error(node_id, exc)
 
         children = self.next_nodes(node_id)
-
         if not children:
             return data
 
-        # Every outgoing Drawflow connection receives its own snapshot.
-        # This is essential for fan-out flows such as:
-        # TagMapper -> Dashboard / Trend / Report.
         branch_results = []
-
         for child in children:
             if (
                 realtime
@@ -217,23 +205,9 @@ class FlowRunner:
             )
             branch_results.append(child_result)
 
-        # Preserve the current node's own data as the return value.
-        # Side-effect nodes (DB, dashboard, reports) have already executed.
-        # The request executor below selects the branch containing ChartData.
         return data
 
-    # =====================================================
-    # HISTORICAL TREND BRANCH EXECUTION
-    # =====================================================
-
     def execute_trend_branch(self, node_id, data, visited=None):
-        """Execute exactly the connected branch graph and return the first
-        descendant result that contains ChartData.
-
-        Connection topology remains the only routing mechanism. Each branch
-        gets an isolated data snapshot, so Dashboard/Report branches cannot
-        corrupt the Trend request state.
-        """
         if visited is None:
             visited = set()
 
@@ -285,13 +259,8 @@ class FlowRunner:
 
         return None
 
-    # =====================================================
-    # REALTIME ENGINE
-    # =====================================================
-
     def run(self):
         flow_status.start()
-
         start_nodes = self.get_start_nodes(realtime=True)
 
         try:
@@ -323,10 +292,6 @@ class FlowRunner:
                 time.sleep(remaining)
             else:
                 time.sleep(0.01)
-
-    # =====================================================
-    # TREND REQUEST ENGINE
-    # =====================================================
 
     def execute_request(self, request):
         start_nodes = self.get_start_nodes(realtime=False)
@@ -391,17 +356,9 @@ class FlowRunner:
 
         return request
 
-    # =====================================================
-    # STOP
-    # =====================================================
-
     def stop(self):
         self.running = False
         flow_status.stop()
-
-    # =====================================================
-    # ROLE ACCESS
-    # =====================================================
 
     def get_flow_roles(self):
         roles = []
@@ -417,15 +374,11 @@ class FlowRunner:
 
         return roles
 
-    # =====================================================
-    # PAGE ACCESS
-    # =====================================================
-
     def get_page_access(self):
         access = {}
 
         for node_id, node in self.nodes.items():
-            if node["type"] != "RolesEngaged":
+            if node["type"] not in ("RolesEngaged", "ManagementRolesEngaged"):
                 continue
 
             instance = node["instance"]
@@ -450,10 +403,6 @@ class FlowRunner:
                         access[target].append(role)
 
         return access
-
-    # =====================================================
-    # CHECK PAGE ACCESS
-    # =====================================================
 
     def can_access_page(self, node_id, user_role):
         access = self.get_page_access()
