@@ -221,6 +221,96 @@ def _sync_all_saved_flows_to_plcs():
             _original_print("PLC FLOW STARTUP SYNC ERROR:", exc)
 
 
+def _normalize_drawflow_node_ids(flow_data):
+    """Normalize persisted Drawflow node IDs to their object keys.
+
+    Drawflow stores each node under a dictionary key and also stores an internal
+    node.id. These must agree for imports/connections to work. Older saved flows
+    may contain mismatched values (for example key '32' with id 1).
+    """
+    if not isinstance(flow_data, dict):
+        return flow_data, False
+
+    drawflow = flow_data.get("drawflow")
+    if not isinstance(drawflow, dict):
+        return flow_data, False
+
+    home = drawflow.get("Home")
+    if not isinstance(home, dict):
+        return flow_data, False
+
+    nodes = home.get("data")
+    if not isinstance(nodes, dict):
+        return flow_data, False
+
+    normalized = json.loads(json.dumps(flow_data, ensure_ascii=False))
+    normalized_nodes = (
+        normalized.get("drawflow", {})
+        .get("Home", {})
+        .get("data", {})
+    )
+
+    changed = False
+    for node_key, node in normalized_nodes.items():
+        if not isinstance(node, dict):
+            continue
+        key_id = str(node_key)
+        if str(node.get("id", "")) != key_id:
+            node["id"] = int(key_id) if key_id.isdigit() else key_id
+            changed = True
+
+    return normalized, changed
+
+
+def _install_drawflow_id_normalizer():
+    """Normalize company flows before the Flask app consumes/imports them."""
+    app_module = sys.modules.get("app") or sys.modules.get("__main__")
+    if app_module is None:
+        return False
+    flask_app = getattr(app_module, "app", None)
+    original_get_flow_data = getattr(app_module, "get_flow_data", None)
+    if flask_app is None or original_get_flow_data is None:
+        return False
+    if getattr(flask_app, "_drawflow_id_normalizer_installed", False):
+        return True
+
+    def _safe_get_flow_data(company_id):
+        flow = original_get_flow_data(company_id)
+        normalized, changed = _normalize_drawflow_node_ids(flow)
+        if not changed:
+            return flow
+
+        try:
+            from database import get_connection
+            conn = get_connection()
+            try:
+                conn.execute(
+                    """
+                    UPDATE Flows
+                    SET FlowJson = ?,
+                        LastModified = datetime('now', 'localtime')
+                    WHERE CompanyID = ?
+                    """,
+                    (json.dumps(normalized, ensure_ascii=False), int(company_id)),
+                )
+                conn.commit()
+                _original_print(
+                    "DRAWFLOW ID NORMALIZED:",
+                    "CompanyID=", company_id,
+                )
+            finally:
+                conn.close()
+        except Exception as exc:
+            _original_print("DRAWFLOW ID NORMALIZE SAVE ERROR:", exc)
+
+        return normalized
+
+    app_module.get_flow_data = _safe_get_flow_data
+    flask_app._drawflow_id_normalizer_installed = True
+    _original_print("DRAWFLOW ID NORMALIZER ENABLED")
+    return True
+
+
 def _disable_file_flow_fallback():
     """Prevent legacy flow.json from becoming a company configuration source."""
     app_module = sys.modules.get("app") or sys.modules.get("__main__")
@@ -290,6 +380,7 @@ def _wait_for_app_and_patch():
                 fallback_disabled = _disable_file_flow_fallback()
             if not hooks_installed:
                 hooks_installed = _install_save_flow_hooks()
+            _install_drawflow_id_normalizer()
             _sync_all_saved_flows_to_plcs()
             if hooks_installed and fallback_disabled:
                 break
@@ -302,6 +393,7 @@ def _wait_for_app_and_patch():
                 fallback_disabled = _disable_file_flow_fallback()
             if not hooks_installed:
                 hooks_installed = _install_save_flow_hooks()
+            _install_drawflow_id_normalizer()
             if hooks_installed:
                 return
         except Exception as exc:
