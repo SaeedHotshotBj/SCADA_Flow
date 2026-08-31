@@ -1538,6 +1538,7 @@ def get_flow_json():
 
         ensure_management_flow(company_id)
         ensure_management_flow(company_id)
+        ensure_management_flow(company_id)
         flow_json = get_company_flow(company_id)
 
         if not flow_json:
