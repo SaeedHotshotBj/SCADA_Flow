@@ -1,9 +1,26 @@
 # SCADA_FLOW EDITOR NODE REGISTRY WRAPPER
-# Preserve the existing registry and extend it with the management node.
+# Preserve the existing registry and extend it with the management node
+# and report context selectors.
 
+from copy import deepcopy
 from flow_engine import node_registry_legacy as _legacy
 
-NODE_REGISTRY = dict(_legacy.NODE_REGISTRY)
+NODE_REGISTRY = deepcopy(_legacy.NODE_REGISTRY)
+
+report = NODE_REGISTRY.get("ReportOutput")
+if isinstance(report, dict):
+    for definition in report.get("config", []):
+        if definition.get("name") != "products":
+            continue
+        columns = definition.setdefault("columns", [])
+        if not any(column.get("name") == "context_role" for column in columns):
+            columns.append({
+                "name": "context_role",
+                "label": "Context Role",
+                "type": "select",
+                "options": ["", "contract_code", "product_code"],
+            })
+
 NODE_REGISTRY["ManagementPanel"] = {
     "config": [
         {

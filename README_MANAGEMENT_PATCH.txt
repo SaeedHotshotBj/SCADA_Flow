@@ -1,1 +1,0 @@
-Management panel is Flow-configured. Add a ManagementPanel node and connect RolesEngaged for allowed roles. ReportOutput entries can use context_role values contract_code and product_code.
