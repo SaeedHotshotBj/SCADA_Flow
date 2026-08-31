@@ -85,122 +85,76 @@ NODE_REGISTRY = {
 
     "MachineCard": {
         "config": [
-            {
-                "name": "machines",
-                "label": "Machines",
-                "type": "machine_cards"
-            },
-            {
-                "name": "icon_library",
-                "label": "Icon Library",
-                "type": "icon_library"
-            }
+            {"name": "machines", "label": "Machines", "type": "machine_cards"},
+            {"name": "icon_library", "label": "Icon Library", "type": "icon_library"}
         ]
     },
 
     "DashboardOutput": {
         "config": [
-            {
-                "name": "widgets",
-                "label": "Dashboard Widgets",
-                "type": "table",
-                "columns": [
-                    {"name": "tag", "label": "Tag", "type": "text"},
-                    {"name": "title", "label": "Title", "type": "text"},
-                    {"name": "unit", "label": "Unit", "type": "text"}
-                ]
-            },
-            {
-                "name": "timeout",
-                "label": "Edge Timeout (sec)",
-                "type": "number",
-                "default": 10
-            }
+            {"name": "widgets", "label": "Dashboard Widgets", "type": "table", "columns": [
+                {"name": "tag", "label": "Tag", "type": "text"},
+                {"name": "title", "label": "Title", "type": "text"},
+                {"name": "unit", "label": "Unit", "type": "text"}
+            ]},
+            {"name": "timeout", "label": "Edge Timeout (sec)", "type": "number", "default": 10}
         ]
     },
 
     "EdgeTimeout": {
         "config": [
-            {
-                "name": "timeout_seconds",
-                "label": "Edge Timeout (sec)",
-                "type": "number",
-                "default": 10
-            }
+            {"name": "timeout_seconds", "label": "Edge Timeout (sec)", "type": "number", "default": 10}
         ]
     },
 
     "AlarmNode": {
         "config": [
-            {
-                "name": "alarms",
-                "label": "Alarm Rules",
-                "type": "table",
-                "columns": [
-                    {"name": "tag", "label": "Tag", "type": "text"},
-                    {"name": "condition", "label": "Condition", "type": "select", "options": [">", "<", "=="]},
-                    {"name": "limit", "label": "Limit", "type": "number"},
-                    {"name": "message", "label": "Message", "type": "text"}
-                ]
-            }
+            {"name": "alarms", "label": "Alarm Rules", "type": "table", "columns": [
+                {"name": "tag", "label": "Tag", "type": "text"},
+                {"name": "condition", "label": "Condition", "type": "select", "options": [">", "<", "=="]},
+                {"name": "limit", "label": "Limit", "type": "number"},
+                {"name": "message", "label": "Message", "type": "text"}
+            ]}
         ]
     },
 
-    "TrendReader": {
-        "config": [
-            {"name": "company_id", "label": "Company ID", "type": "number", "default": ""}
-        ]
-    },
-
-    "TrendDatabaseReader": {
-        "config": [
-            {"name": "company_id", "label": "Company ID", "type": "number", "default": ""}
-        ]
-    },
+    "TrendReader": {"config": [{"name": "company_id", "label": "Company ID", "type": "number", "default": ""}]},
+    "TrendDatabaseReader": {"config": [{"name": "company_id", "label": "Company ID", "type": "number", "default": ""}]},
 
     "TrendOutput": {
-        "config": [
-            {
-                "name": "DatePicker",
-                "label": "Date Type",
-                "type": "select",
-                "options": ["GregorianPicker", "JalaliPicker"],
-                "default": "JalaliPicker"
-            }
-        ]
+        "config": [{"name": "DatePicker", "label": "Date Type", "type": "select", "options": ["GregorianPicker", "JalaliPicker"], "default": "JalaliPicker"}]
     },
 
     "ReportOutput": {
         "config": [
-            {
-                "name": "DatePicker",
-                "label": "Date Type",
-                "type": "select",
-                "options": ["GregorianPicker", "JalaliPicker"],
-                "default": "JalaliPicker"
-            },
-            {
-                "name": "products",
-                "label": "Report Tags",
-                "type": "table",
-                "columns": [
-                    {"name": "name", "label": "Column Name", "type": "text"},
-                    {"name": "tag", "label": "Tag From TagMapper", "type": "text"},
-                    {"name": "unit", "label": "Unit", "type": "text"}
-                ]
-            }
+            {"name": "DatePicker", "label": "Date Type", "type": "select", "options": ["GregorianPicker", "JalaliPicker"], "default": "JalaliPicker"},
+            {"name": "products", "label": "Report Tags", "type": "table", "columns": [
+                {"name": "name", "label": "Column Name", "type": "text"},
+                {"name": "tag", "label": "Tag From TagMapper", "type": "text"},
+                {"name": "unit", "label": "Unit", "type": "text"}
+            ]}
         ]
     },
 
     "DateConverter": {
+        "config": [{"name": "direction", "label": "Direction", "type": "select", "options": ["J2G", "G2J"], "default": "G2J"}]
+    },
+
+    "ManagementInput": {"config": []},
+    "ContractRepository": {"config": [{"name": "company_id", "label": "Company ID", "type": "number"}]},
+    "ProductBOMRepository": {"config": [{"name": "company_id", "label": "Company ID", "type": "number"}]},
+    "ManagementCostCalculator": {"config": []},
+    "ManagementOutput": {"config": []},
+
+    "ManagementPanelOutput": {
         "config": [
-            {
-                "name": "direction",
-                "label": "Direction",
-                "type": "select",
-                "options": ["J2G", "G2J"],
-                "default": "G2J"
-            }
+            {"name": "title", "label": "Panel Title", "type": "text", "default": "Contract & Cost Management"},
+            {"name": "contract_fields", "label": "Contract Fields", "type": "field_schema"},
+            {"name": "contract_item_fields", "label": "Contract Product Fields", "type": "field_schema"},
+            {"name": "filter_fields", "label": "Filter Fields", "type": "field_schema"},
+            {"name": "bom_product_fields", "label": "BOM Product Fields", "type": "field_schema"},
+            {"name": "bom_item_fields", "label": "BOM Item Fields", "type": "field_schema"},
+            {"name": "table_columns", "label": "Result Table Columns", "type": "field_schema"}
         ]
     }
 }
