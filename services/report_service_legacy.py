@@ -1,0 +1,1 @@
+# Legacy placeholder; replaced atomically in the implementation tree.
