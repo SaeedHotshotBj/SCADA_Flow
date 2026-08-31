@@ -44,64 +44,57 @@ from flow_engine.nodes.report_output import ReportOutput
 from flow_engine.nodes.date_converter import DateConverterNode
 from services.edge_timeout_service import start_worker as start_edge_timeout_worker
 
+# =====================================================
+# MANAGEMENT NODES
+# =====================================================
+
+from flow_engine.nodes.management_nodes import (
+    ManagementInput,
+    ContractRepository,
+    ProductBOMRepository,
+    ManagementCostCalculator,
+    ManagementOutput,
+    ManagementPanelOutput,
+)
 
 # =====================================================
 # NODE CLASS MAP
 # =====================================================
 
 NODE_CLASSES = {
-
     # REAL TIME
-    "PLCReader":
-        PLCReader,
-
-    "TagMapper":
-        TagMapper,
-
-    "ExpressionNode":
-        ExpressionNode,
-
-    "SQLWriter":
-        SQLWriter,
-
-    "DashboardOutput":
-        DashboardOutput,
-
-    "MachineCard":
-        MachineCard,
-
-    "AlarmNode":
-        AlarmNode,
-
-    "EdgeTimeout":
-        EdgeTimeout,
+    "PLCReader": PLCReader,
+    "TagMapper": TagMapper,
+    "ExpressionNode": ExpressionNode,
+    "SQLWriter": SQLWriter,
+    "DashboardOutput": DashboardOutput,
+    "MachineCard": MachineCard,
+    "AlarmNode": AlarmNode,
+    "EdgeTimeout": EdgeTimeout,
 
     # ROLES
-    "Roles":
-        Roles,
-
-    "RolesEngaged":
-        RolesEngaged,
+    "Roles": Roles,
+    "RolesEngaged": RolesEngaged,
 
     # TREND
-    "TrendReader":
-        TrendReader,
-
-    "TrendDatabaseReader":
-        TrendDatabaseReader,
-
-    "TrendOutput":
-        TrendOutput,
+    "TrendReader": TrendReader,
+    "TrendDatabaseReader": TrendDatabaseReader,
+    "TrendOutput": TrendOutput,
 
     # REPORT
-    "ReportOutput":
-        ReportOutput,
+    "ReportOutput": ReportOutput,
 
     # DATE
-    "DateConverter":
-        DateConverterNode
-}
+    "DateConverter": DateConverterNode,
 
+    # MANAGEMENT
+    "ManagementInput": ManagementInput,
+    "ContractRepository": ContractRepository,
+    "ProductBOMRepository": ProductBOMRepository,
+    "ManagementCostCalculator": ManagementCostCalculator,
+    "ManagementOutput": ManagementOutput,
+    "ManagementPanelOutput": ManagementPanelOutput,
+}
 
 # =====================================================
 # START BACKGROUND WORKERS
@@ -119,22 +112,13 @@ try:
 except Exception as exc:
     print("EDGE TIMEOUT START ERROR:", exc)
 
-
 # =====================================================
 # GET NODE CLASS
 # =====================================================
 
 def get_node_class(name):
-
     node = NODE_CLASSES.get(name)
-
     if node is None:
-
-        print(
-            "UNKNOWN NODE TYPE:",
-            name
-        )
-
+        print("UNKNOWN NODE TYPE:", name)
         return None
-
     return node
