@@ -1,0 +1,31 @@
+name: Activate management panel
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  activate:
+    if: ${{ !contains(github.event.head_commit.message, '[management-activated]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply management wiring
+        run: python scripts/activate_management.py
+
+      - name: Commit activation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py templates/nav.html
+          if git diff --cached --quiet; then
+            echo "No activation changes required."
+            exit 0
+          fi
+          git commit -m "management: wire management panel [management-activated]"
+          git push
