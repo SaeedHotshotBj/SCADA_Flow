@@ -37,6 +37,14 @@ from socket_manager import init_socketio
 
 from services.dashboard_service import get_dashboard_widgets
 
+from services.management_service import (
+    ensure_management_flow,
+    get_management_config,
+    init_management_database,
+)
+from services.management_runner import execute_management_flow
+from services.management_access import allowed as management_access_allowed
+
 from database import (
     get_connection,
     get_company_flow,
@@ -120,6 +128,7 @@ def _auth_no_cache(response):
 # =====================================================
 
 init_database()
+init_management_database()
 
 
 # =====================================================
@@ -1731,6 +1740,60 @@ def master_companies():
                 conn.close()
             except Exception:
                 pass
+
+
+# =====================================================
+# MANAGEMENT PANEL
+# =====================================================
+
+@app.route("/management")
+@login_required
+def management_page():
+    company_id = get_request_company_id()
+    if company_id is None:
+        return jsonify({"status": "error", "message": "Company is required"}), 403
+
+    ensure_management_flow(company_id)
+    if not management_access_allowed(company_id, session.get("role")):
+        return render_template("access_denied.html"), 403
+
+    return render_template("management.html")
+
+
+@app.route("/management/config")
+@login_required
+def management_config_api():
+    company_id = get_request_company_id()
+    if company_id is None:
+        return jsonify({"status": "error", "message": "Company is required"}), 403
+
+    ensure_management_flow(company_id)
+    if not management_access_allowed(company_id, session.get("role")):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+
+    config = get_management_config(company_id)
+    return jsonify(config)
+
+
+@app.route("/management/request", methods=["POST"])
+@login_required
+def management_request_api():
+    company_id = get_request_company_id()
+    if company_id is None:
+        return jsonify({"status": "error", "message": "Company is required"}), 403
+
+    ensure_management_flow(company_id)
+    if not management_access_allowed(company_id, session.get("role")):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+
+    flow = get_flow_data(company_id)
+    if not flow:
+        return jsonify({"status": "error", "message": "Management Flow not configured"}), 409
+
+    payload = request.get_json() or {}
+    result = execute_management_flow(flow, company_id, {"ManagementRequest": payload})
+    status_code = 200 if result.get("status") == "ok" else 400
+    return jsonify(result), status_code
 
 
 # =====================================================

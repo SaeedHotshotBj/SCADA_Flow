@@ -2,6 +2,7 @@
     <a class="flow-nav-link" data-flow-page="DashboardOutput" href="/dashboard">Dashboard</a>
     <a class="flow-nav-link" data-flow-page="TrendOutput" href="/trend">Trend</a>
     <a class="flow-nav-link" data-flow-page="ReportOutput" href="/report">Report</a>
+    <a class="flow-nav-link" data-flow-page="ManagementPanelOutput" href="/management">Management</a>
     <a class="flow-nav-link" data-flow-page="PLCControl" href="/plc_control">PLC Control</a>
     <a href="/logout">Logout</a>
 </div>
@@ -123,7 +124,7 @@ body:has(#reportTable) .chart-box canvas{background:#fff!important;border:1px so
         let connected = false;
 
         Object.values(nodes).forEach((node) => {
-            if (!node || node.name !== "RolesEngaged") return;
+            if (!node || (node.name !== "RolesEngaged" && node.name !== "ManagementRolesEngaged")) return;
 
             const outputs = node.outputs || {};
             let thisNodeConnected = false;
