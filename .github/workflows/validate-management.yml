@@ -1,0 +1,44 @@
+name: Validate management module
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile management Python
+        run: |
+          python -m py_compile \
+            services/management_service.py \
+            services/management_runner.py \
+            services/management_access.py \
+            flow_engine/nodes/management_nodes.py \
+            flow_engine/registry.py \
+            flow_engine/node_registry.py \
+            scripts/activate_management.py \
+            scripts/fix_management_navigation.py
+      - name: Validate management Flow JSON
+        run: python -c "import json; json.load(open('management_flow_template.json', encoding='utf-8'))"
+      - name: Validate management template references
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          flow = json.loads(Path('management_flow_template.json').read_text(encoding='utf-8'))
+          nodes = flow['drawflow']['Home']['data']
+          names = {node['name'] for node in nodes.values()}
+          required = {'ManagementRolesEngaged','ManagementPanelOutput','ManagementInput','ContractRepository','ProductBOMRepository','ManagementCostCalculator','ManagementOutput'}
+          missing = required - names
+          if missing:
+              raise SystemExit(f'Missing management nodes: {sorted(missing)}')
+          print('Management Flow topology OK')
+          PY
