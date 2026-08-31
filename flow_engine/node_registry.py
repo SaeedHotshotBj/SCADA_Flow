@@ -1,6 +1,5 @@
 # SCADA_FLOW EDITOR NODE REGISTRY WRAPPER
-# Preserve the existing registry and extend it with the management node
-# and report context selectors.
+# Preserve the existing registry and extend it with management configuration.
 
 from copy import deepcopy
 from flow_engine import node_registry_legacy as _legacy
@@ -29,6 +28,18 @@ NODE_REGISTRY["ManagementPanel"] = {
             "type": "select",
             "options": ["GregorianPicker", "JalaliPicker"],
             "default": "JalaliPicker",
+        },
+        {
+            "name": "contract_code_register",
+            "label": "Contract Code PLC Register",
+            "type": "number",
+            "default": "",
+        },
+        {
+            "name": "product_code_register",
+            "label": "Product Code PLC Register",
+            "type": "number",
+            "default": "",
         },
         {
             "name": "calculations",
