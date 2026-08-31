@@ -1,0 +1,157 @@
+{
+  "drawflow": {
+    "Home": {
+      "data": {
+        "1": {
+          "id": 1,
+          "name": "RolesEngaged",
+          "data": {
+            "roles": [
+              {"role": "CEO"},
+              {"role": "Accountant"}
+            ]
+          },
+          "class": "roles-engaged",
+          "html": "<div class=\"title-box\">RolesEngaged</div>",
+          "typenode": false,
+          "inputs": {"input_1": {"connections": []}},
+          "outputs": {"output_1": {"connections": [{"node": "2", "output": "output_1", "data": {}}]}},
+          "pos_x": 60,
+          "pos_y": 120
+        },
+        "2": {
+          "id": 2,
+          "name": "ManagementPanelOutput",
+          "data": {
+            "config": {
+              "title": "Contract & Cost Management",
+              "contract_fields": [
+                {"name": "contract_code", "label": "Contract Code", "type": "text", "required": true},
+                {"name": "contract_date", "label": "Contract Date", "type": "jalali_date", "required": true},
+                {"name": "contract_name", "label": "Contract Name", "type": "text", "required": true},
+                {"name": "description", "label": "Description", "type": "textarea", "required": false}
+              ],
+              "contract_item_fields": [
+                {"name": "product_name", "label": "Product", "type": "product_select", "required": true},
+                {"name": "quantity", "label": "Order Quantity", "type": "number", "required": true},
+                {"name": "unit", "label": "Unit", "type": "text", "required": true},
+                {"name": "weight_kg", "label": "Weight (kg)", "type": "number", "required": false},
+                {"name": "length_meter", "label": "Length (m)", "type": "number", "required": false},
+                {"name": "delivery_date", "label": "Delivery Date", "type": "jalali_date", "required": true},
+                {"name": "description", "label": "Item Description", "type": "textarea", "required": false}
+              ],
+              "filter_fields": [
+                {"name": "contract_code", "label": "Contract Code", "type": "text"},
+                {"name": "contract_date_from", "label": "Contract Date From", "type": "jalali_date"},
+                {"name": "contract_date_to", "label": "Contract Date To", "type": "jalali_date"},
+                {"name": "contract_name", "label": "Contract Name", "type": "text"},
+                {"name": "product_name", "label": "Product", "type": "product_select"},
+                {"name": "quantity_min", "label": "Minimum Quantity", "type": "number"},
+                {"name": "quantity_max", "label": "Maximum Quantity", "type": "number"},
+                {"name": "delivery_date_from", "label": "Delivery Date From", "type": "jalali_date"},
+                {"name": "delivery_date_to", "label": "Delivery Date To", "type": "jalali_date"},
+                {"name": "description", "label": "Description", "type": "text"}
+              ],
+              "bom_product_fields": [
+                {"name": "product_code", "label": "Product Code", "type": "text"},
+                {"name": "product_name", "label": "Product Name", "type": "text", "required": true},
+                {"name": "unit", "label": "Default Unit", "type": "text"},
+                {"name": "cost_basis", "label": "Cost Basis", "type": "select", "options": ["KG", "METER"]}
+              ],
+              "bom_item_fields": [
+                {"name": "material_name", "label": "Material", "type": "text", "required": true},
+                {"name": "basis", "label": "Basis", "type": "select", "options": ["KG", "METER"], "required": true},
+                {"name": "quantity", "label": "Consumption", "type": "number", "required": true},
+                {"name": "unit_cost", "label": "Unit Cost", "type": "number", "required": true},
+                {"name": "unit", "label": "Unit", "type": "text"}
+              ],
+              "table_columns": [
+                {"name": "ContractCode", "label": "Contract Code"},
+                {"name": "ContractDate", "label": "Contract Date"},
+                {"name": "ContractName", "label": "Contract Name"},
+                {"name": "ProductName", "label": "Product"},
+                {"name": "Quantity", "label": "Quantity"},
+                {"name": "Unit", "label": "Unit"},
+                {"name": "WeightKg", "label": "Weight (kg)"},
+                {"name": "LengthMeter", "label": "Length (m)"},
+                {"name": "DeliveryDate", "label": "Delivery Date"},
+                {"name": "CostPerKg", "label": "Cost / kg"},
+                {"name": "CostPerMeter", "label": "Cost / m"},
+                {"name": "EstimatedCost", "label": "Estimated Cost"},
+                {"name": "Description", "label": "Description"}
+              ]
+            }
+          },
+          "class": "management-panel-output",
+          "html": "<div class=\"title-box\">ManagementPanelOutput</div>",
+          "typenode": false,
+          "inputs": {"input_1": {"connections": [{"node": "1", "input": "output_1", "data": {}}]}},
+          "outputs": {"output_1": {"connections": [{"node": "3", "output": "output_1", "data": {}}, {"node": "4", "output": "output_1", "data": {}}]}},
+          "pos_x": 300,
+          "pos_y": 120
+        },
+        "3": {
+          "id": 3,
+          "name": "ManagementInput",
+          "data": {},
+          "class": "management-input",
+          "html": "<div class=\"title-box\">ManagementInput</div>",
+          "typenode": false,
+          "inputs": {"input_1": {"connections": [{"node": "2", "input": "output_1", "data": {}}]}},
+          "outputs": {"output_1": {"connections": [{"node": "5", "output": "output_1", "data": {}}]}},
+          "pos_x": 560,
+          "pos_y": 120
+        },
+        "4": {
+          "id": 4,
+          "name": "ContractRepository",
+          "data": {},
+          "class": "contract-repository",
+          "html": "<div class=\"title-box\">ContractRepository</div>",
+          "typenode": false,
+          "inputs": {"input_1": {"connections": [{"node": "3", "input": "output_1", "data": {}}]}},
+          "outputs": {"output_1": {"connections": [{"node": "6", "output": "output_1", "data": {}}]}},
+          "pos_x": 800,
+          "pos_y": 70
+        },
+        "5": {
+          "id": 5,
+          "name": "ProductBOMRepository",
+          "data": {},
+          "class": "product-bom-repository",
+          "html": "<div class=\"title-box\">ProductBOMRepository</div>",
+          "typenode": false,
+          "inputs": {"input_1": {"connections": [{"node": "3", "input": "output_1", "data": {}}]}},
+          "outputs": {"output_1": {"connections": [{"node": "7", "output": "output_1", "data": {}}]}},
+          "pos_x": 800,
+          "pos_y": 230
+        },
+        "6": {
+          "id": 6,
+          "name": "ManagementCostCalculator",
+          "data": {},
+          "class": "management-cost-calculator",
+          "html": "<div class=\"title-box\">ManagementCostCalculator</div>",
+          "typenode": false,
+          "inputs": {"input_1": {"connections": [{"node": "4", "input": "output_1", "data": {}}]}},
+          "outputs": {"output_1": {"connections": [{"node": "7", "output": "output_1", "data": {}}]}},
+          "pos_x": 1040,
+          "pos_y": 70
+        },
+        "7": {
+          "id": 7,
+          "name": "ManagementOutput",
+          "data": {},
+          "class": "management-output",
+          "html": "<div class=\"title-box\">ManagementOutput</div>",
+          "typenode": false,
+          "inputs": {"input_1": {"connections": [{"node": "6", "input": "output_1", "data": {}}, {"node": "5", "input": "output_1", "data": {}}]}},
+          "outputs": {"output_1": {"connections": []}},
+          "pos_x": 1280,
+          "pos_y": 150
+        }
+      }
+    }
+  },
+  "scan_interval": 1
+}
