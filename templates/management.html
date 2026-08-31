@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>پنل مدیریت قرارداد و بهای تمام‌شده</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f4f7fb;color:#172033;font-family:Tahoma,Arial,sans-serif}
+.page{width:min(1500px,calc(100% - 32px));margin:22px auto 40px}
+.header{background:#fff;border:1px solid #e3e9f1;border-radius:16px;padding:20px 24px;box-shadow:0 8px 24px rgba(15,23,42,.06);margin-bottom:16px}
+.header h1{margin:0 0 6px;font-size:22px}.header p{margin:0;color:#66768a}
+.tabs{display:flex;gap:8px;margin-bottom:16px}.tab{border:1px solid #cfd8e3;background:#fff;border-radius:10px;padding:11px 18px;cursor:pointer;font-weight:700}.tab.active{background:#1d6fa5;color:#fff;border-color:#1d6fa5}
+.panel{display:none}.panel.active{display:block}
+.card{background:#fff;border:1px solid #e3e9f1;border-radius:16px;padding:18px;box-shadow:0 8px 24px rgba(15,23,42,.05);margin-bottom:16px}
+.form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.field{min-width:0}.field label{display:block;font-size:13px;font-weight:700;color:#536273;margin-bottom:6px}.field input,.field textarea,.field select{width:100%;border:1px solid #ccd6e1;border-radius:9px;padding:10px;background:#fff;color:#182334;min-height:42px}.field textarea{min-height:90px;resize:vertical}
+.section-title{font-size:16px;font-weight:800;margin-bottom:12px;border-right:3px solid #1d6fa5;padding-right:9px}
+.actions{display:flex;gap:8px;justify-content:flex-start;flex-wrap:wrap;margin-top:14px}.btn{border:1px solid #cfd8e3;background:#fff;border-radius:9px;padding:10px 16px;cursor:pointer;font-weight:700}.btn.primary{background:#1d6fa5;color:#fff;border-color:#1d6fa5}.btn.danger{background:#fff4f4;color:#9b2222;border-color:#e8b4b4}
+.table-wrap{overflow:auto;border:1px solid #e4eaf1;border-radius:12px}.grid{width:100%;border-collapse:separate;border-spacing:0;min-width:1000px}.grid th{background:#f3f6fa;color:#34495a;padding:11px;border-bottom:1px solid #dfe6ee;text-align:right;white-space:nowrap}.grid td{padding:10px;border-bottom:1px solid #edf1f5;color:#334155;text-align:right;vertical-align:top}.grid tbody tr:hover td{background:#f8fbfd}
+.items-head,.item-row{display:grid;gap:8px;grid-template-columns:1.2fr .8fr .7fr .8fr .8fr 1fr 1.3fr auto}.items-head{font-size:12px;color:#5b6b7c;font-weight:700;margin-bottom:5px}.item-row{margin-bottom:7px}.item-row input,.item-row select,.item-row textarea{width:100%;padding:9px;border:1px solid #ccd6e1;border-radius:8px}.item-row textarea{min-height:42px}.remove{border:1px solid #e3b0b0;background:#fff6f6;color:#9b2222;border-radius:8px;cursor:pointer}
+.bom-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.bom-items{margin-top:14px}.bom-head,.bom-row{display:grid;grid-template-columns:1.5fr .8fr .8fr .8fr .8fr auto;gap:8px}.bom-head{font-size:12px;color:#5b6b7c;font-weight:700;margin-bottom:5px}.bom-row{margin-bottom:7px}.bom-row input,.bom-row select{width:100%;padding:9px;border:1px solid #ccd6e1;border-radius:8px}
+.cost-badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#eef6fb;color:#1d5f84;font-weight:700;font-size:12px}.empty{padding:25px;text-align:center;color:#7a8898}.status{margin-top:10px;font-size:13px;color:#5d6b7b;min-height:20px}
+@media(max-width:1100px){.form-grid,.bom-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.items-head,.item-row{grid-template-columns:1.3fr .8fr .8fr .8fr .8fr 1fr auto}.items-head>*:nth-child(7){display:none}}
+@media(max-width:700px){.page{width:calc(100% - 16px);margin:10px auto 25px}.form-grid,.bom-grid{grid-template-columns:1fr}.tabs{overflow:auto}.items-head{display:none}.item-row{grid-template-columns:1fr 1fr}.grid{min-width:1250px}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@majidh1/jalalidatepicker@0.9.0/dist/jalalidatepicker.min.js"></script>
+</head>
+<body>
+{% include 'nav.html' %}
+<div class="page" id="managementRoot">
+  <div class="header">
+    <h1 id="panelTitle">پنل مدیریت</h1>
+    <p>مدیریت قراردادها، محصولات، BOM و محاسبه بهای تمام‌شده بر اساس Flow شرکت.</p>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-panel="contractsPanel">قراردادها</button>
+    <button class="tab" data-panel="bomPanel">محصول و BOM</button>
+  </div>
+
+  <section id="contractsPanel" class="panel active">
+    <div class="card">
+      <div class="section-title">قرارداد جدید</div>
+      <div id="contractForm" class="form-grid"></div>
+      <div class="section-title" style="margin-top:18px">محصولات قرارداد</div>
+      <div class="items-head" id="itemHeaders"></div>
+      <div id="contractItems"></div>
+      <div class="actions">
+        <button class="btn" id="addItemBtn">افزودن محصول</button>
+        <button class="btn primary" id="saveContractBtn">ذخیره قرارداد</button>
+        <button class="btn danger" id="clearContractBtn">پاک کردن فرم</button>
+      </div>
+      <div class="status" id="contractStatus"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">فیلتر قراردادها</div>
+      <div id="filterForm" class="form-grid"></div>
+      <div class="actions"><button class="btn primary" id="filterBtn">اعمال فیلتر</button><button class="btn" id="resetFilterBtn">حذف فیلتر</button></div>
+      <div class="status" id="filterStatus"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">نتایج</div>
+      <div class="table-wrap"><table class="grid"><thead id="resultHead"></thead><tbody id="resultBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="bomPanel" class="panel">
+    <div class="card">
+      <div class="section-title">تعریف محصول و نسخه جدید BOM</div>
+      <div id="bomProductForm" class="bom-grid"></div>
+      <div class="bom-items">
+        <div class="bom-head" id="bomHeaders"></div>
+        <div id="bomRows"></div>
+      </div>
+      <div class="actions">
+        <button class="btn" id="addBomBtn">افزودن ردیف BOM</button>
+        <button class="btn primary" id="saveBomBtn">ذخیره BOM</button>
+        <button class="btn danger" id="clearBomBtn">پاک کردن فرم</button>
+      </div>
+      <div class="status" id="bomStatus"></div>
+    </div>
+    <div class="card"><div class="section-title">کاتالوگ محصولات و قیمت محاسبه‌شده</div><div class="table-wrap"><table class="grid"><thead><tr><th>کد</th><th>محصول</th><th>واحد</th><th>مبنای قیمت</th><th>قیمت/kg</th><th>قیمت/m</th><th>BOM</th></tr></thead><tbody id="productBody"></tbody></table></div></div>
+  </section>
+</div>
+
+<script>
+(function(){
+  const cfgUrl='/management/config';
+  const reqUrl='/management/request';
+  let config={};
+  let products=[];
+  let contractItems=[];
+  let bomItems=[];
+  let filterFields=[];
+
+  const $=id=>document.getElementById(id);
+  const esc=v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#039;');
+
+  function fieldControl(field, value='', extraClass=''){
+    const type=String(field.type||'text');
+    const name=String(field.name||'');
+    let control='';
+    if(type==='textarea') control=`<textarea data-key="${esc(name)}" class="${esc(extraClass)}">${esc(value)}</textarea>`;
+    else if(type==='select') control=`<select data-key="${esc(name)}" class="${esc(extraClass)}">${(field.options||[]).map(o=>`<option value="${esc(o)}" ${String(o)===String(value)?'selected':''}>${esc(o)}</option>`).join('')}</select>`;
+    else if(type==='product_select') control=`<select data-key="${esc(name)}" class="${esc(extraClass)} product-select"><option value="">انتخاب محصول</option>${products.map(p=>`<option value="${esc(p.ProductName)}" ${String(p.ProductName)===String(value)?'selected':''}>${esc(p.ProductName)}</option>`).join('')}</select>`;
+    else {
+      const inputType=type==='number'?'number':'text';
+      const dateAttrs=type==='jalali_date'?' data-jdp placeholder="YYYY/MM/DD"':'';
+      control=`<input type="${inputType}" data-key="${esc(name)}" class="${esc(extraClass)}" value="${esc(value)}"${dateAttrs}>`;
+    }
+    return `<div class="field"><label>${esc(field.label||name)}${field.required?' *':''}</label>${control}</div>`;
+  }
+
+  function renderFields(container, fields, values={}){
+    $(container).innerHTML=(fields||[]).map(f=>fieldControl(f,values[f.name]??'')).join('');
+    if(window.jalaliDatepicker){jalaliDatepicker.startWatch({selector:'[data-jdp]',autoHide:false,showTodayBtn:true,showGotoToday:true});}
+  }
+
+  function readContainer(container){
+    const out={}; $(container).querySelectorAll('[data-key]').forEach(el=>out[el.dataset.key]=el.value); return out;
+  }
+
+  function addContractItem(values={}){
+    const wrap=document.createElement('div'); wrap.className='item-row';
+    const fields=config.contract_item_fields||[];
+    fields.forEach(f=>{const holder=document.createElement('div'); holder.innerHTML=fieldControl(f,values[f.name]??''); wrap.appendChild(holder.firstElementChild);});
+    const remove=document.createElement('button'); remove.type='button'; remove.className='remove'; remove.textContent='حذف'; remove.onclick=()=>{wrap.remove();}; wrap.appendChild(remove);
+    $('contractItems').appendChild(wrap);
+    if(window.jalaliDatepicker) jalaliDatepicker.startWatch({selector:'[data-jdp]',autoHide:false,showTodayBtn:true,showGotoToday:true});
+  }
+
+  function collectItems(){
+    const fields=config.contract_item_fields||[]; return Array.from($('contractItems').querySelectorAll('.item-row')).map(row=>{const obj={}; row.querySelectorAll('[data-key]').forEach(el=>obj[el.dataset.key]=el.value); return obj;});
+  }
+
+  function renderItemHeaders(){ $('itemHeaders').innerHTML=(config.contract_item_fields||[]).map(f=>`<div>${esc(f.label||f.name)}</div>`).join('')+'<div></div>'; }
+
+  function renderFilter(){ renderFields('filterForm',config.filter_fields||{}); filterFields=config.filter_fields||[]; }
+
+  function renderResultTable(rows){
+    const cols=config.table_columns||[]; $('resultHead').innerHTML='<tr>'+cols.map(c=>`<th>${esc(c.label||c.name)}</th>`).join('')+'</tr>';
+    if(!rows.length){$('resultBody').innerHTML='<tr><td class="empty" colspan="99">داده‌ای پیدا نشد.</td></tr>';return;}
+    $('resultBody').innerHTML=rows.map(r=>'<tr>'+cols.map(c=>`<td>${esc(formatCell(c.name,r[c.name]))}</td>`).join('')+'</tr>').join('');
+  }
+
+  function formatCell(key,v){
+    if(v===null||v===undefined||v==='') return '';
+    if(['CostPerKg','CostPerMeter','EstimatedCost'].includes(key)){const n=Number(v);return Number.isFinite(n)?n.toLocaleString('en-US',{maximumFractionDigits:3}):v;}
+    return v;
+  }
+
+  async function callFlow(resource,operation,payload={}){
+    const r=await fetch(reqUrl,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({resource,operation,...payload})});
+    const data=await r.json(); if(!r.ok) throw new Error(data.message||'Request failed'); if(data.status!=='ok') throw new Error(data.message||'Flow error'); return data;
+  }
+
+  async function loadProducts(){ const data=await callFlow('products','catalog'); products=data.products||[]; renderFields('contractForm',config.contract_fields||{}); renderFilter(); renderBomProductForm(); }
+
+  function renderBomProductForm(){ renderFields('bomProductForm',config.bom_product_fields||{}); }
+  function renderBomHeaders(){ $('bomHeaders').innerHTML=(config.bom_item_fields||[]).map(f=>`<div>${esc(f.label||f.name)}</div>`).join('')+'<div></div>'; }
+  function addBomRow(values={}){
+    const row=document.createElement('div'); row.className='bom-row';
+    (config.bom_item_fields||[]).forEach(f=>{const h=document.createElement('div');h.innerHTML=fieldControl(f,values[f.name]??'');row.appendChild(h.firstElementChild);});
+    const btn=document.createElement('button');btn.type='button';btn.className='remove';btn.textContent='حذف';btn.onclick=()=>row.remove();row.appendChild(btn);$('bomRows').appendChild(row);
+  }
+  function collectBomRows(){return Array.from($('bomRows').querySelectorAll('.bom-row')).map(row=>{const obj={};row.querySelectorAll('[data-key]').forEach(el=>obj[el.dataset.key]=el.value);return obj;});}
+
+  async function refreshContracts(){
+    $('filterStatus').textContent='در حال دریافت...';
+    try{const data=await callFlow('contracts','filter',{filters:readContainer('filterForm')});renderResultTable(data.rows||[]);$('filterStatus').textContent=`${(data.rows||[]).length} ردیف نمایش داده شد.`;}catch(e){$('filterStatus').textContent=e.message;}
+  }
+
+  async function refreshCatalog(){
+    try{const data=await callFlow('products','catalog');products=data.products||[];$('productBody').innerHTML=products.length?products.map(p=>`<tr><td>${esc(p.ProductCode)}</td><td>${esc(p.ProductName)}</td><td>${esc(p.Unit)}</td><td><span class="cost-badge">${esc(p.CostBasis)}</span></td><td>${Number(p.CostPerKg||0).toLocaleString('en-US',{maximumFractionDigits:3})}</td><td>${Number(p.CostPerMeter||0).toLocaleString('en-US',{maximumFractionDigits:3})}</td><td>${p.BOM?('v'+esc(p.BOM.VersionNo)):'-'}</td></tr>`).join(''):'<tr><td class="empty" colspan="7">محصولی تعریف نشده است.</td></tr>';}catch(e){$('productBody').innerHTML=`<tr><td class="empty" colspan="7">${esc(e.message)}</td></tr>`;}
+  }
+
+  async function saveContract(){
+    $('contractStatus').textContent='در حال ذخیره...';
+    try{const data=await callFlow('contracts','save',{payload:{contract:readContainer('contractForm'),items:collectItems()}});$('contractStatus').textContent=`قرارداد با شناسه ${data.result.ContractID} ذخیره شد.`;await refreshContracts();$('contractItems').innerHTML='';addContractItem();}catch(e){$('contractStatus').textContent=e.message;}
+  }
+
+  async function saveBom(){
+    $('bomStatus').textContent='در حال ذخیره BOM...';
+    try{const data=await callFlow('bom','save',{payload:{product:readContainer('bomProductForm'),items:collectBomRows()}});$('bomStatus').textContent=`BOM نسخه ${data.result.VersionNo} ذخیره شد. قیمت/kg=${data.result.CostPerKg} و قیمت/m=${data.result.CostPerMeter}`;await refreshCatalog();}catch(e){$('bomStatus').textContent=e.message;}
+  }
+
+  async function init(){
+    const r=await fetch(cfgUrl,{credentials:'same-origin',cache:'no-store'}); if(!r.ok){location.href='/login';return;} config=await r.json();
+    $('panelTitle').textContent=config.title||'پنل مدیریت';
+    renderItemHeaders(); renderBomHeaders(); renderFields('contractForm',config.contract_fields||{}); renderFilter(); renderBomProductForm(); addContractItem(); addBomRow();
+    await loadProducts(); await refreshContracts(); await refreshCatalog();
+    document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.panel).classList.add('active');});
+    $('addItemBtn').onclick=()=>addContractItem();$('saveContractBtn').onclick=saveContract;$('clearContractBtn').onclick=()=>{renderFields('contractForm',config.contract_fields||{});$('contractItems').innerHTML='';addContractItem();};
+    $('filterBtn').onclick=refreshContracts;$('resetFilterBtn').onclick=()=>{renderFilter();refreshContracts();};
+    $('addBomBtn').onclick=()=>addBomRow();$('saveBomBtn').onclick=saveBom;$('clearBomBtn').onclick=()=>{renderBomProductForm();$('bomRows').innerHTML='';addBomRow();};
+  }
+  document.addEventListener('DOMContentLoaded',()=>init().catch(e=>{console.error(e);$('contractStatus').textContent=e.message;}));
+})();
+</script>
+</body>
+</html>
