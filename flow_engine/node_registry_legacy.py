@@ -1,0 +1,1 @@
+# placeholder; atomically replaced by the original registry blob
