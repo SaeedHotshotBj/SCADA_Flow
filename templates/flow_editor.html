@@ -113,7 +113,7 @@ async function init(){
         status('NEW COMPANY READY - DESIGN THEN SAVE COMPANY FLOW');
     }else{
         await loadCompanyFlow();
-        status('SCADA FLOW EDITOR READY');
+        if(document.getElementById('status').textContent!=='LOAD ERROR') status('SCADA FLOW EDITOR READY');
     }
 }
 
@@ -155,7 +155,7 @@ function switchCompany(){
 async function loadRegistry(){
     try{
         const r=await fetch('/node_registry');
-        if(!r.ok) throw new Error('Registry request failed');
+        if(!r.ok) throw new Error('Registry request failed: HTTP '+r.status);
         nodeRegistry=await r.json();
         const box=document.getElementById('node_buttons');
         box.innerHTML='';
@@ -165,7 +165,7 @@ async function loadRegistry(){
             b.onclick=()=>addNode(name);
             box.appendChild(b);
         });
-    }catch(e){console.error(e);status('NODE REGISTRY ERROR')}
+    }catch(e){console.error('NODE REGISTRY ERROR',e);status('NODE REGISTRY ERROR')}
 }
 
 function addNode(name){
@@ -202,7 +202,7 @@ async function refreshRoles(){
             const data=await r.json();
             if(Array.isArray(data)) server=data.map(x=>String(x.role||'').trim()).filter(Boolean);
         }
-    }catch(e){}
+    }catch(e){console.warn('FLOW ROLES LOAD ERROR',e)}
     flowRoles=[...new Set([...server,...local])];
     if(selectedNodeId){
         const node=editor.getNodeFromId(selectedNodeId);
@@ -210,16 +210,137 @@ async function refreshRoles(){
     }
 }
 
+function cloneJson(value){
+    return JSON.parse(JSON.stringify(value));
+}
+
+function sanitizeCompanyFlow(flow){
+    if(!flow || typeof flow!=='object') throw new Error('Server returned non-object Flow JSON');
+    if(!flow.drawflow || typeof flow.drawflow!=='object') throw new Error('Missing drawflow object');
+    if(!flow.drawflow.Home || typeof flow.drawflow.Home!=='object') throw new Error('Missing drawflow.Home object');
+    if(!flow.drawflow.Home.data || typeof flow.drawflow.Home.data!=='object') throw new Error('Missing drawflow.Home.data object');
+
+    const cleaned=cloneJson(flow);
+    const data=cleaned.drawflow.Home.data;
+    const managementNames=new Set([
+        'ManagementRolesEngaged',
+        'ManagementPanelOutput',
+        'ManagementInput',
+        'ContractRepository',
+        'ProductBOMRepository',
+        'ManagementCostCalculator',
+        'ManagementOutput',
+        'management-roles-engaged',
+        'management-panel-output',
+        'management-input',
+        'contract-repository',
+        'product-bom-repository',
+        'management-cost-calculator',
+        'management-output'
+    ]);
+
+    const removedIds=new Set();
+    const normalized={};
+    let removedCount=0;
+
+    Object.entries(data).forEach(([key,node])=>{
+        if(!node || typeof node!=='object') return;
+        const nodeName=String(node.name||node.class||'').trim();
+        if(managementNames.has(nodeName)){
+            removedIds.add(String(key));
+            removedCount++;
+            return;
+        }
+
+        const copy=cloneJson(node);
+        copy.id=/^\d+$/.test(String(key)) ? Number(key) : String(key);
+        normalized[String(key)]=copy;
+    });
+
+    Object.values(normalized).forEach(node=>{
+        ['inputs','outputs'].forEach(side=>{
+            if(!node[side] || typeof node[side]!=='object') return;
+            Object.values(node[side]).forEach(port=>{
+                if(!port || !Array.isArray(port.connections)) return;
+                port.connections=port.connections.filter(connection=>{
+                    if(!connection || typeof connection!=='object') return false;
+                    return !removedIds.has(String(connection.node));
+                });
+            });
+        });
+    });
+
+    cleaned.drawflow.Home.data=normalized;
+    return {flow:cleaned,removedCount};
+}
+
 async function loadCompanyFlow(){
+    const url='/flow.json?company_id='+encodeURIComponent(currentCompanyId);
     try{
-        const r=await fetch('/flow.json?company_id='+encodeURIComponent(currentCompanyId));
-        if(!r.ok) throw new Error('Flow load failed');
-        const flow=await r.json();
+        status('LOADING COMPANY FLOW '+currentCompanyId+'...');
+        console.groupCollapsed('SCADA FLOW LOAD DEBUG company='+currentCompanyId);
+        console.log('Request URL:',url);
+
+        const r=await fetch(url,{cache:'no-store',headers:{'Accept':'application/json'}});
+        console.log('HTTP status:',r.status,r.statusText);
+        console.log('Content-Type:',r.headers.get('content-type'));
+        const raw=await r.text();
+        console.log('Response length:',raw.length);
+        console.log('Response preview:',raw.slice(0,1000));
+
+        if(!r.ok) throw new Error('Flow HTTP '+r.status+' '+r.statusText+' :: '+raw.slice(0,300));
+
+        let flow;
+        try{
+            flow=JSON.parse(raw);
+        }catch(parseError){
+            console.error('FLOW JSON PARSE ERROR:',parseError);
+            throw new Error('Invalid Flow JSON returned by server: '+parseError.message);
+        }
+
+        console.log('Top-level keys:',Object.keys(flow||{}));
+        const beforeNodes=flow?.drawflow?.Home?.data||{};
+        console.log('Raw node count:',Object.keys(beforeNodes).length);
+        console.table(Object.entries(beforeNodes).map(([key,node])=>({
+            key,
+            id:node?.id,
+            name:node?.name,
+            class:node?.class,
+            inputs:Object.keys(node?.inputs||{}).length,
+            outputs:Object.keys(node?.outputs||{}).length
+        })));
+
+        const sanitized=sanitizeCompanyFlow(flow);
+        console.log('Removed legacy management nodes:',sanitized.removedCount);
+        console.log('Sanitized node count:',Object.keys(sanitized.flow.drawflow.Home.data).length);
+        console.table(Object.entries(sanitized.flow.drawflow.Home.data).map(([key,node])=>({key,id:node.id,name:node.name})));
+
         editor.clear();
-        if(flow && flow.drawflow) editor.import(flow);
+        try{
+            editor.import(sanitized.flow);
+        }catch(importError){
+            console.error('DRAWFLOW IMPORT ERROR:',importError);
+            console.error('FLOW SENT TO DRAWFLOW:',sanitized.flow);
+            throw new Error('Drawflow import failed: '+(importError?.message||importError));
+        }
+
         await refreshRoles();
-        status('COMPANY FLOW LOADED: '+currentCompanyId);
-    }catch(e){console.error(e);status('LOAD ERROR');alert('Could not load company flow.')}
+        console.log('FLOW IMPORT SUCCESS');
+        console.groupEnd();
+
+        if(sanitized.removedCount>0){
+            status('COMPANY FLOW LOADED - '+sanitized.removedCount+' OLD MANAGEMENT NODES REMOVED FROM VIEW');
+        }else{
+            status('COMPANY FLOW LOADED: '+currentCompanyId);
+        }
+        return true;
+    }catch(e){
+        console.error('COMPANY FLOW LOAD FAILED:',e);
+        try{console.groupEnd()}catch(_e){}
+        status('LOAD ERROR: '+(e?.message||e));
+        alert('Could not load company flow. Open F12 > Console for the exact error.\n\n'+(e?.message||e));
+        return false;
+    }
 }
 
 async function saveCompanyFlow(){
@@ -231,7 +352,7 @@ async function saveCompanyFlow(){
         status('COMPANY FLOW SAVED: COMPANY '+currentCompanyId);
         await refreshRoles();
         history.replaceState({},'', '/flow?company_id='+encodeURIComponent(currentCompanyId));
-    }catch(e){console.error(e);status('SAVE ERROR');alert(e.message||'Could not save company flow.')}
+    }catch(e){console.error('SAVE FLOW ERROR',e);status('SAVE ERROR');alert(e.message||'Could not save company flow.')}
 }
 
 function newCompanyFlow(){
