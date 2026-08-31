@@ -72,7 +72,7 @@ def management_product_save():
     try:
         payload = request.get_json(silent=True) or {}
         product_id = save_product(company_id, payload)
-        return jsonify({"status": "ok", "ProductID": product_id})
+        return jsonify({"status": "ok", "ProductID": product_id}), 201
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
 
