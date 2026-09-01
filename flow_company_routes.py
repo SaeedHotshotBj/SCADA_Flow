@@ -59,7 +59,7 @@ def management_page():
         '<script>window.SCADA_MANAGEMENT_COMPANY_ID = '
         + str(int(company_id))
         + ';</script>'
-        '<script src="/static/management_dropdowns.js?v=20260901"></script>'
+        '<script src="/static/management_dropdowns.js?v=20260902"></script>'
     )
     if "</body>" in html:
         html = html.replace("</body>", dropdown_bootstrap + "</body>", 1)
