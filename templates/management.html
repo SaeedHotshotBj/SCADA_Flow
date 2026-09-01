@@ -7,50 +7,494 @@
 <script src="https://unpkg.com/persian-datepicker@1.2.0/dist/js/persian-datepicker.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/persian-datepicker@1.2.0/dist/css/persian-datepicker.min.css">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>پنل مدیریت قرارداد و تولید</title>
+<title>پنل مدیریت قرارداد و محصولات</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#15191d;color:#eee;font-family:Tahoma,Arial,sans-serif}.top{padding:18px 24px;background:#1d2329;border-bottom:1px solid #39414a;display:flex;justify-content:space-between;align-items:center;gap:16px}.top h1{margin:0;font-size:21px}.top small{color:#9aa5af}.wrap{padding:20px;max-width:1800px;margin:auto}.toolbar,.filters,.modal-card{background:#20262c;border:1px solid #3d4650;border-radius:10px;padding:16px;margin-bottom:16px}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid #52606d;background:#2c353e;color:#fff;border-radius:7px;padding:9px 14px;cursor:pointer}.btn.primary{background:#1677ff;border-color:#1677ff}.btn.good{background:#216e48}.grid{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:10px}.field label{display:block;color:#b9c1c8;font-size:12px;margin-bottom:5px}.field input,.field select,.field textarea{width:100%;padding:9px;border-radius:6px;border:1px solid #505b65;background:#13171b;color:#fff}.field textarea{min-height:70px;resize:vertical}.filter-actions{display:flex;gap:8px;margin-top:12px}.table-wrap{overflow:auto;background:#20262c;border:1px solid #3d4650;border-radius:10px}.table{width:100%;border-collapse:collapse;min-width:1100px}.table th,.table td{border-bottom:1px solid #343d46;padding:8px;text-align:right;vertical-align:top}.table th{background:#2a323a;color:#cfd6dc;position:sticky;top:0}.muted{color:#8e99a3}.modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;padding:20px;z-index:50}.modal.open{display:flex}.modal-card{width:min(1100px,100%);max-height:90vh;overflow:auto}.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.modal-head h2{margin:0;font-size:18px}.products-table{width:100%;border-collapse:collapse;margin-top:12px}.products-table th,.products-table td{border:1px solid #3b444d;padding:6px}.products-table input{width:100%;padding:7px;background:#15191d;border:1px solid #4b5661;color:#fff;border-radius:5px}.summary{padding:8px 0;color:#9ca7b0;font-size:13px}.tag-list{white-space:pre-wrap;max-width:260px}.status{position:fixed;left:18px;bottom:18px;padding:10px 14px;border-radius:8px;background:#252d34;border:1px solid #48545f;display:none}.status.show{display:block}.jalali-date{direction:ltr;text-align:center;cursor:pointer}.datepicker-plot-area{z-index:10000!important}.datepicker-plot-area .datepicker-time-view{display:block!important}
+*{box-sizing:border-box}body{margin:0;background:#15191d;color:#eee;font-family:Tahoma,Arial,sans-serif}.top{padding:18px 24px;background:#1d2329;border-bottom:1px solid #39414a;display:flex;justify-content:space-between;align-items:center;gap:16px}.top h1{margin:0;font-size:21px}.top small{color:#9aa5af}.wrap{padding:20px;max-width:1800px;margin:auto}.toolbar,.filters,.modal-card{background:#20262c;border:1px solid #3d4650;border-radius:10px;padding:16px;margin-bottom:16px}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid #52606d;background:#2c353e;color:#fff;border-radius:7px;padding:9px 14px;cursor:pointer}.btn:hover{filter:brightness(1.08)}.btn.primary{background:#1677ff;border-color:#1677ff}.btn.good{background:#216e48}.btn.danger{background:#8f3030;border-color:#a44040}.btn.small{padding:6px 9px;font-size:12px}.grid{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:10px}.field label{display:block;color:#b9c1c8;font-size:12px;margin-bottom:5px}.field input,.field select,.field textarea{width:100%;padding:9px;border-radius:6px;border:1px solid #505b65;background:#13171b;color:#fff}.field textarea{min-height:70px;resize:vertical}.filter-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}..table-wrap{overflow:auto;background:#20262c;border:1px solid #3d4650;border-radius:10px}.table{width:100%;border-collapse:collapse;min-width:1200px}.table th,.table td{border-bottom:1px solid #343d46;padding:8px;text-align:right;vertical-align:top}.table th{background:#2a323a;color:#cfd6dc;position:sticky;top:0;z-index:2}.muted{color:#8e99a3}.tag-list{white-space:pre-wrap;max-width:260px}.actions-cell{white-space:nowrap}.modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;padding:20px;z-index:50}.modal.open{display:flex}.modal-card{width:min(1150px,100%);max-height:92vh;overflow:auto}.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.modal-head h2{margin:0;font-size:18px}.products-table{width:100%;border-collapse:collapse;margin-top:12px}.products-table th,.products-table td{border:1px solid #3b444d;padding:6px}.products-table input{width:100%;padding:7px;background:#15191d;border:1px solid #4b5661;color:#fff;border-radius:5px}.summary{padding:8px 0;color:#9ca7b0;font-size:13px}.status{position:fixed;left:18px;bottom:18px;padding:10px 14px;border-radius:8px;background:#252d34;border:1px solid #48545f;display:none;z-index:100}.status.show{display:block}.jalali-date{direction:ltr;text-align:center;cursor:pointer}.datepicker-plot-area{z-index:10000!important}.date-cell{direction:ltr;text-align:center}
+@media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(160px,1fr))}}@media(max-width:600px){.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
 <body>
-<div class="top"><div><h1>پنل مدیریت قرارداد و محصولات</h1><small>Company ID: {{ company_id }} — محاسبات مدیریتی از Flow گرفته می‌شوند.</small></div><a class="btn" href="/dashboard">داشبورد</a></div>
-<div class="wrap">
-  <div class="toolbar"><button class="btn primary" onclick="openContract()">قرارداد جدید</button><button class="btn good" onclick="openProduct()">محصول / BOM</button><button class="btn" onclick="loadData()">بروزرسانی</button></div>
-  <div class="filters"><div class="grid">
-    <div class="field"><label>کد قرارداد</label><input id="contract_code"></div>
-    <div class="field"><label>نام قرارداد</label><input id="contract_name"></div>
-    <div class="field"><label>کد محصول</label><input id="product_code"></div>
-    <div class="field"><label>نوع محصول</label><input id="product_name"></div>
-    <div class="field"><label>تاریخ عقد از</label><input id="contract_date_from" class="jalali-date" placeholder="1405/06/01" autocomplete="off" readonly></div>
-    <div class="field"><label>تاریخ عقد تا</label><input id="contract_date_to" class="jalali-date" placeholder="1405/06/31" autocomplete="off" readonly></div>
-    <div class="field"><label>تاریخ تحویل از</label><input id="delivery_date_from" class="jalali-date" placeholder="1405/07/01" autocomplete="off" readonly></div>
-    <div class="field"><label>تاریخ تحویل تا</label><input id="delivery_date_to" class="jalali-date" placeholder="1405/07/31" autocomplete="off" readonly></div>
-    <div class="field"><label>حداقل مقدار سفارش</label><input id="min_ordered" type="number" step="any"></div>
-    <div class="field"><label>حداکثر مقدار سفارش</label><input id="max_ordered" type="number" step="any"></div>
-    <div class="field"><label>توضیحات</label><input id="description"></div>
-  </div><div class="filter-actions"><button class="btn primary" onclick="loadData()">اعمال فیلتر</button><button class="btn" onclick="clearFilters()">پاک کردن</button></div></div>
-  <div class="summary" id="summary"></div><div class="table-wrap"><table class="table"><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+<div class="top">
+  <div><h1>پنل مدیریت قرارداد و محصولات</h1><small>Company ID: {{ company_id }} — محاسبات مدیریتی از Flow گرفته می‌شوند.</small></div>
+  <a class="btn" href="/dashboard">داشبورد</a>
 </div>
-<div class="modal" id="contractModal"><div class="modal-card"><div class="modal-head"><h2>قرارداد جدید</h2><button class="btn" onclick="closeModal('contractModal')">بستن</button></div>
-  <div class="grid"><div class="field"><label>کد قرارداد</label><input id="new_contract_code"></div><div class="field"><label>تاریخ عقد قرارداد (شمسی)</label><input id="new_contract_date" class="jalali-date" placeholder="1405/06/10" autocomplete="off" readonly></div><div class="field"><label>نام قرارداد</label><input id="new_contract_name"></div><div class="field"><label>توضیحات</label><textarea id="new_contract_description"></textarea></div></div>
-  <div class="summary">محصولات سفارشی</div><table class="products-table"><thead><tr><th>کد محصول</th><th>نام محصول</th><th>مقدار سفارش</th><th>واحد</th><th>تاریخ تحویل</th><th>توضیحات</th><th></th></tr></thead><tbody id="contractProducts"></tbody></table>
-  <div class="filter-actions"><button class="btn" onclick="addContractProduct()">+ افزودن محصول</button><button class="btn primary" onclick="saveContract()">ذخیره قرارداد</button></div>
-</div></div>
-<div class="modal" id="productModal"><div class="modal-card"><div class="modal-head"><h2>محصول و BOM</h2><button class="btn" onclick="closeModal('productModal')">بستن</button></div>
-  <div class="grid"><div class="field"><label>کد محصول</label><input id="bom_product_code"></div><div class="field"><label>نام محصول</label><input id="bom_product_name"></div><div class="field"><label>واحد</label><input id="bom_unit"></div><div class="field"><label>هزینه BOM به ازای kg</label><input id="cost_per_kg" type="number" step="any"></div><div class="field"><label>هزینه BOM به ازای meter</label><input id="cost_per_meter" type="number" step="any"></div><div class="field"><label>توضیحات BOM</label><textarea id="bom_notes"></textarea></div></div>
-  <div class="filter-actions"><button class="btn primary" onclick="saveProduct()">ذخیره محصول/BOM</button></div><div class="summary">محصولات موجود</div><div class="table-wrap"><table class="table"><thead><tr><th>کد</th><th>محصول</th><th>واحد</th><th>kg</th><th>meter</th><th>یادداشت</th></tr></thead><tbody id="productsBody"></tbody></table></div>
-</div></div>
+
+<div class="wrap">
+  <div class="toolbar">
+    <button class="btn primary" type="button" onclick="openNewContract()">قرارداد جدید</button>
+    <button class="btn good" type="button" onclick="openNewProduct()">محصول / BOM جدید</button>
+    <button class="btn" type="button" onclick="loadData()">بروزرسانی</button>
+  </div>
+
+  <div class="filters">
+    <div class="grid">
+      <div class="field"><label>کد قرارداد</label><input id="contract_code"></div>
+      <div class="field"><label>نام قرارداد</label><input id="contract_name"></div>
+      <div class="field"><label>کد محصول</label><input id="product_code"></div>
+      <div class="field"><label>نوع محصول</label><input id="product_name"></div>
+      <div class="field"><label>تاریخ عقد از</label><input id="contract_date_from" class="jalali-date" placeholder="1405/06/01" autocomplete="off" readonly></div>
+      <div class="field"><label>تاریخ عقد تا</label><input id="contract_date_to" class="jalali-date" placeholder="1405/06/31" autocomplete="off" readonly></div>
+      <div class="field"><label>تاریخ تحویل از</label><input id="delivery_date_from" class="jalali-date" placeholder="1405/07/01" autocomplete="off" readonly></div>
+      <div class="field"><label>تاریخ تحویل تا</label><input id="delivery_date_to" class="jalali-date" placeholder="1405/07/31" autocomplete="off" readonly></div>
+      <div class="field"><label>حداقل مقدار سفارش</label><input id="min_ordered" type="number" step="any"></div>
+      <div class="field"><label>حداکثر مقدار سفارش</label><input id="max_ordered" type="number" step="any"></div>
+      <div class="field"><label>توضیحات</label><input id="description"></div>
+    </div>
+    <div class="filter-actions">
+      <button class="btn primary" type="button" onclick="loadData()">اعمال فیلتر</button>
+      <button class="btn" type="button" onclick="clearFilters()">پاک کردن</button>
+    </div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead id="thead"></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="modal" id="contractModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="contractModalTitle">قرارداد جدید</h2>
+      <button class="btn" type="button" onclick="closeModal('contractModal')">بستن</button>
+    </div>
+    <div class="grid">
+      <div class="field"><label>کد قرارداد</label><input id="new_contract_code"></div>
+      <div class="field"><label>تاریخ عقد قرارداد (شمسی)</label><input id="new_contract_date" class="jalali-date" placeholder="1405/06/10" autocomplete="off" readonly></div>
+      <div class="field"><label>نام قرارداد</label><input id="new_contract_name"></div>
+      <div class="field"><label>توضیحات</label><textarea id="new_contract_description"></textarea></div>
+    </div>
+    <div class="summary">محصولات قرارداد</div>
+    <table class="products-table">
+      <thead><tr><th>کد محصول</th><th>نام محصول</th><th>مقدار سفارش</th><th>واحد</th><th>تاریخ تحویل</th><th>توضیحات</th><th></th></tr></thead>
+      <tbody id="contractProducts"></tbody>
+    </table>
+    <div class="filter-actions">
+      <button class="btn" type="button" onclick="addContractProduct()">+ افزودن محصول</button>
+      <button class="btn primary" type="button" onclick="submitContract()" id="saveContractBtn">ذخیره قرارداد</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="productModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="productModalTitle">محصول و BOM جدید</h2>
+      <button class="btn" type="button" onclick="closeModal('productModal')">بستن</button>
+    </div>
+    <div class="grid">
+      <div class="field"><label>کد محصول</label><input id="bom_product_code"></div>
+      <div class="field"><label>نام محصول</label><input id="bom_product_name"></div>
+      <div class="field"><label>واحد</label><input id="bom_unit"></div>
+      <div class="field"><label>هزینه BOM به ازای kg</label><input id="cost_per_kg" type="number" step="any"></div>
+      <div class="field"><label>هزینه BOM به ازای meter</label><input id="cost_per_meter" type="number" step="any"></div>
+      <div class="field"><label>توضیحات BOM</label><textarea id="bom_notes"></textarea></div>
+    </div>
+    <div class="filter-actions">
+      <button class="btn primary" type="button" onclick="submitProduct()" id="saveProductBtn">ذخیره محصول/BOM</button>
+    </div>
+    <div class="summary">محصولات موجود</div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>کد</th><th>محصول</th><th>واحد</th><th>kg</th><th>meter</th><th>یادداشت</th><th>عملیات</th></tr></thead>
+        <tbody id="productsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <div class="status" id="status"></div>
+
 <script>
-const COMPANY_ID={{ company_id|tojson }};let config={};let productCache=[];function byId(id){return document.getElementById(id)}function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#039;')}function showStatus(msg){const el=byId('status');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),3000)}function closeModal(id){byId(id).classList.remove('open')}
-function initJalaliPicker(el){if(!el||!window.jQuery||typeof jQuery.fn.pDatepicker!=='function')return;const $el=jQuery(el);if($el.data('datepicker-ready'))return;$el.pDatepicker({format:'YYYY/MM/DD',initialValue:false,autoClose:true,observer:true,calendarType:'persian',responsive:true,position:'auto',toolbox:{enabled:true,todayButton:{enabled:true},submitButton:{enabled:false},calendarSwitch:{enabled:false}}});$el.data('datepicker-ready',true)}
-function initAllJalaliPickers(){if(!window.jQuery||typeof jQuery.fn.pDatepicker!=='function')return;document.querySelectorAll('.jalali-date').forEach(initJalaliPicker)}
-function openContract(){byId('contractModal').classList.add('open');if(!byId('contractProducts').children.length)addContractProduct();setTimeout(initAllJalaliPickers,150)}
-function openProduct(){byId('productModal').classList.add('open');renderProducts()}
-function addContractProduct(){const tr=document.createElement('tr');tr.innerHTML='<td><input data-k="product_code"></td><td><input data-k="product_name"></td><td><input data-k="ordered_quantity" type="number" step="any"></td><td><input data-k="unit"></td><td><input data-k="delivery_date" class="jalali-date" placeholder="1405/07/01" autocomplete="off" readonly></td><td><input data-k="description"></td><td><button class="btn" type="button">حذف</button></td>';tr.querySelector('button').onclick=()=>tr.remove();byId('contractProducts').appendChild(tr);setTimeout(initAllJalaliPickers,150)}
-function readContractProducts(){return [...byId('contractProducts').rows].map(tr=>{const o={};tr.querySelectorAll('[data-k]').forEach(i=>o[i.dataset.k]=i.value.trim());return o}).filter(x=>x.product_code&&x.product_name)}async function saveContract(){const payload={contract_code:byId('new_contract_code').value.trim(),contract_date:byId('new_contract_date').value.trim(),contract_name:byId('new_contract_name').value.trim(),description:byId('new_contract_description').value.trim(),products:readContractProducts()};try{const r=await fetch('/management/contracts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw Error(d.message||'خطا');showStatus('قرارداد ذخیره شد');closeModal('contractModal');['new_contract_code','new_contract_date','new_contract_name','new_contract_description'].forEach(id=>byId(id).value='');byId('contractProducts').innerHTML='';loadData()}catch(e){alert(e.message)}}async function saveProduct(){const payload={product_code:byId('bom_product_code').value.trim(),product_name:byId('bom_product_name').value.trim(),unit:byId('bom_unit').value.trim(),cost_per_kg:byId('cost_per_kg').value,cost_per_meter:byId('cost_per_meter').value,notes:byId('bom_notes').value.trim()};try{const r=await fetch('/management/products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok)throw Error(d.message||'خطا');showStatus('محصول و BOM ذخیره شد');await loadConfig();['bom_product_code','bom_product_name','bom_unit','cost_per_kg','cost_per_meter','bom_notes'].forEach(id=>byId(id).value='')}catch(e){alert(e.message)}}async function loadConfig(){const r=await fetch('/management/config?company_id='+encodeURIComponent(COMPANY_ID),{cache:'no-store'});if(!r.ok)throw Error('config');config=await r.json();productCache=config.products||[];renderProducts()}function renderProducts(){const body=byId('productsBody');body.innerHTML=productCache.map(p=>'<tr><td>'+esc(p.ProductCode)+'</td><td>'+esc(p.ProductName)+'</td><td>'+esc(p.Unit)+'</td><td>'+esc(p.CostPerKg)+'</td><td>'+esc(p.CostPerMeter)+'</td><td>'+esc(p.BOMNotes)+'</td></tr>').join('')}function params(){const p=new URLSearchParams();['contract_code','contract_name','product_code','product_name','contract_date_from','contract_date_to','delivery_date_from','delivery_date_to','min_ordered','max_ordered','description'].forEach(id=>{const v=byId(id).value.trim();if(v)p.set(id,v)});p.set('company_id',COMPANY_ID);return p}async function loadData(){try{const r=await fetch('/management/data?'+params().toString(),{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.message||'خطا');renderTable(d);byId('summary').textContent='تعداد ردیف: '+d.count}catch(e){alert(e.message)}}function renderTable(data){const th=byId('thead'),tb=byId('tbody');th.innerHTML='';tb.innerHTML='';if(!data.columns?.length)return;th.innerHTML='<tr>'+data.columns.map(c=>'<th>'+esc(c.label)+(c.unit?' ('+esc(c.unit)+')':'')+'</th>').join('')+'</tr>';tb.innerHTML=(data.rows||[]).map(row=>'<tr>'+data.columns.map(c=>'<td class="tag-list">'+formatValue(row[c.key])+'</td>').join('')+'</tr>').join('')}function formatValue(v){if(Array.isArray(v))return v.map(x=>esc(x)).join(', ');if(v===null||v===undefined||v==='')return '<span class="muted">—</span>';if(typeof v==='number')return esc(Number.isInteger(v)?v:v.toFixed(3));return esc(v)}function clearFilters(){['contract_code','contract_name','product_code','product_name','contract_date_from','contract_date_to','delivery_date_from','delivery_date_to','min_ordered','max_ordered','description'].forEach(id=>byId(id).value='');loadData()}
-function bootManagementDatePicker(){const start=Date.now();const timer=setInterval(()=>{initAllJalaliPickers();if(window.jQuery&&typeof jQuery.fn.pDatepicker==='function')clearInterval(timer);if(Date.now()-start>10000)clearInterval(timer)},100);setTimeout(initAllJalaliPickers,0);}
+const COMPANY_ID = {{ company_id|tojson }};
+let config = {};
+let productCache = [];
+let editingContractCode = null;
+let editingProductId = null;
+
+function byId(id){ return document.getElementById(id); }
+
+function esc(value){
+  return String(value ?? '')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
+}
+
+function showStatus(message){
+  const el = byId('status');
+  el.textContent = message;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 3200);
+}
+
+function closeModal(id){
+  byId(id).classList.remove('open');
+}
+
+function initJalaliPicker(el){
+  if(!el || !window.jQuery || typeof jQuery.fn.pDatepicker !== 'function'){
+    console.warn('[MANAGEMENT] Persian datepicker is not available for', el);
+    return;
+  }
+  const $el = jQuery(el);
+  if($el.data('datepicker-ready')) return;
+  $el.pDatepicker({
+    format:'YYYY/MM/DD',
+    initialValue:false,
+    autoClose:true,
+    observer:true,
+    calendarType:'persian',
+    responsive:true,
+    position:'auto',
+    toolbox:{enabled:true,todayButton:{enabled:true},submitButton:{enabled:false},calendarSwitch:{enabled:false}}
+  });
+  $el.data('datepicker-ready', true);
+}
+
+function initAllJalaliPickers(){
+  document.querySelectorAll('.jalali-date').forEach(initJalaliPicker);
+}
+
+function openNewContract(){
+  editingContractCode = null;
+  byId('contractModalTitle').textContent = 'قرارداد جدید';
+  byId('saveContractBtn').textContent = 'ذخیره قرارداد';
+  ['new_contract_code','new_contract_date','new_contract_name','new_contract_description'].forEach(id => byId(id).value='');
+  byId('contractProducts').innerHTML='';
+  addContractProduct();
+  byId('contractModal').classList.add('open');
+  setTimeout(initAllJalaliPickers, 100);
+}
+
+async function openEditContract(code){
+  try{
+    const url='/management/contracts/detail?company_id='+encodeURIComponent(COMPANY_ID)+'&contract_code='+encodeURIComponent(code);
+    console.log('[MANAGEMENT] GET contract detail:', url);
+    const response=await fetch(url,{cache:'no-store'});
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.message || 'خطا در دریافت قرارداد');
+
+    editingContractCode=code;
+    byId('contractModalTitle').textContent='ویرایش قرارداد: '+code;
+    byId('saveContractBtn').textContent='ذخیره تغییرات';
+    byId('new_contract_code').value=data.ContractCode || '';
+    byId('new_contract_date').value=data.ContractDate || '';
+    byId('new_contract_name').value=data.ContractName || '';
+    byId('new_contract_description').value=data.Description || '';
+    byId('contractProducts').innerHTML='';
+
+    (data.products || []).forEach(item => addContractProduct(item));
+    if(!data.products || !data.products.length) addContractProduct();
+
+    byId('contractModal').classList.add('open');
+    setTimeout(initAllJalaliPickers,100);
+  }catch(error){
+    console.error('[MANAGEMENT] Contract detail error:',error);
+    alert(error.message);
+  }
+}
+
+function addContractProduct(item=null){
+  const tr=document.createElement('tr');
+  tr.innerHTML=
+    '<td><input data-k="product_code"></td>'+ 
+    '<td><input data-k="product_name"></td>'+ 
+    '<td><input data-k="ordered_quantity" type="number" step="any"></td>'+ 
+    '<td><input data-k="unit"></td>'+ 
+    '<td><input data-k="delivery_date" class="jalali-date date-cell" placeholder="1405/07/01" autocomplete="off" readonly></td>'+ 
+    '<td><input data-k="description"></td>'+ 
+    '<td><button class="btn danger small" type="button">حذف</button></td>';
+
+  if(item){
+    tr.querySelector('[data-k="product_code"]').value=item.product_code || '';
+    tr.querySelector('[data-k="product_name"]').value=item.product_name || '';
+    tr.querySelector('[data-k="ordered_quantity"]').value=item.ordered_quantity ?? '';
+    tr.querySelector('[data-k="unit"]').value=item.unit || '';
+    tr.querySelector('[data-k="delivery_date"]').value=item.delivery_date || '';
+    tr.querySelector('[data-k="description"]').value=item.description || '';
+  }
+
+  tr.querySelector('button').onclick=()=>tr.remove();
+  byId('contractProducts').appendChild(tr);
+  setTimeout(initAllJalaliPickers,60);
+}
+
+function readContractProducts(){
+  return [...byId('contractProducts').rows].map(tr=>{
+    const item={};
+    tr.querySelectorAll('[data-k]').forEach(input=>item[input.dataset.k]=input.value.trim());
+    return item;
+  }).filter(item=>item.product_code && item.product_name);
+}
+
+async function submitContract(){
+  const payload={
+    contract_code:byId('new_contract_code').value.trim(),
+    contract_date:byId('new_contract_date').value.trim(),
+    contract_name:byId('new_contract_name').value.trim(),
+    description:byId('new_contract_description').value.trim(),
+    products:readContractProducts()
+  };
+
+  try{
+    const editing=Boolean(editingContractCode);
+    const url=editing
+      ? '/management/contracts/detail?company_id='+encodeURIComponent(COMPANY_ID)
+      : '/management/contracts';
+    if(editing) payload.original_contract_code=editingContractCode;
+
+    console.log('[MANAGEMENT] Contract save',editing?'PUT':'POST',payload);
+    const response=await fetch(url,{method:editing?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.message || 'خطا در ذخیره قرارداد');
+
+    showStatus(editing?'قرارداد با موفقیت ویرایش شد':'قرارداد با موفقیت ذخیره شد');
+    closeModal('contractModal');
+    editingContractCode=null;
+    await loadData();
+  }catch(error){
+    console.error('[MANAGEMENT] Contract save error:',error);
+    alert(error.message);
+  }
+}
+
+async function deleteContract(code){
+  if(!confirm('قرارداد «'+code+'» و تمام اقلام آن حذف شود؟')) return;
+  try{
+    const url='/management/contracts/detail?company_id='+encodeURIComponent(COMPANY_ID)+'&contract_code='+encodeURIComponent(code);
+    console.log('[MANAGEMENT] DELETE contract:',code);
+    const response=await fetch(url,{method:'DELETE'});
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.message || 'خطا در حذف قرارداد');
+    showStatus('قرارداد حذف شد');
+    await loadData();
+  }catch(error){
+    console.error('[MANAGEMENT] Contract delete error:',error);
+    alert(error.message);
+  }
+}
+
+function openNewProduct(){
+  editingProductId=null;
+  byId('productModalTitle').textContent='محصول و BOM جدید';
+  byId('saveProductBtn').textContent='ذخیره محصول/BOM';
+  ['bom_product_code','bom_product_name','bom_unit','cost_per_kg','cost_per_meter','bom_notes'].forEach(id=>byId(id).value='');
+  renderProducts();
+  byId('productModal').classList.add('open');
+}
+
+function openEditProduct(productId){
+  const product=productCache.find(item=>Number(item.ProductID)===Number(productId));
+  if(!product){alert('محصول پیدا نشد');return;}
+
+  editingProductId=Number(product.ProductID);
+  byId('productModalTitle').textContent='ویرایش محصول/BOM: '+(product.ProductCode || '');
+  byId('saveProductBtn').textContent='ذخیره تغییرات';
+  byId('bom_product_code').value=product.ProductCode || '';
+  byId('bom_product_name').value=product.ProductName || '';
+  byId('bom_unit').value=product.Unit || '';
+  byId('cost_per_kg').value=product.CostPerKg ?? '';
+  byId('cost_per_meter').value=product.CostPerMeter ?? '';
+  byId('bom_notes').value=product.BOMNotes || '';
+  byId('productModal').classList.add('open');
+}
+
+async function submitProduct(){
+  const payload={
+    product_code:byId('bom_product_code').value.trim(),
+    product_name:byId('bom_product_name').value.trim(),
+    unit:byId('bom_unit').value.trim(),
+    cost_per_kg:byId('cost_per_kg').value,
+    cost_per_meter:byId('cost_per_meter').value,
+    notes:byId('bom_notes').value.trim()
+  };
+
+  try{
+    const editing=editingProductId!==null;
+    const response=await fetch('/management/products?company_id='+encodeURIComponent(COMPANY_ID),{
+      method:editing?'PUT':'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(editing?Object.assign({product_id:editingProductId},payload):payload)
+    });
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.message || 'خطا در ذخیره محصول/BOM');
+
+    showStatus(editing?'محصول/BOM ویرایش شد':'محصول/BOM ذخیره شد');
+    editingProductId=null;
+    await loadConfig();
+    if(!editing){
+      ['bom_product_code','bom_product_name','bom_unit','cost_per_kg','cost_per_meter','bom_notes'].forEach(id=>byId(id).value='');
+    }
+  }catch(error){
+    console.error('[MANAGEMENT] Product save error:',error);
+    alert(error.message);
+  }
+}
+
+async function deleteProduct(productId){
+  const product=productCache.find(item=>Number(item.ProductID)===Number(productId));
+  if(!product) return;
+  if(!confirm('محصول «'+(product.ProductCode || '')+'» و BOM آن حذف شود؟')) return;
+
+  try{
+    const url='/management/products?company_id='+encodeURIComponent(COMPANY_ID)+'&product_id='+encodeURIComponent(productId);
+    console.log('[MANAGEMENT] DELETE product:',productId);
+    const response=await fetch(url,{method:'DELETE'});
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.message || 'خطا در حذف محصول/BOM');
+    showStatus('محصول/BOM حذف شد');
+    await loadConfig();
+  }catch(error){
+    console.error('[MANAGEMENT] Product delete error:',error);
+    alert(error.message);
+  }
+}
+
+async function loadConfig(){
+  const url='/management/config?company_id='+encodeURIComponent(COMPANY_ID);
+  console.log('[MANAGEMENT] GET config:',url);
+  const response=await fetch(url,{cache:'no-store'});
+  const text=await response.text();
+  let data=null;
+  try{data=JSON.parse(text);}catch(_){
+    console.error('[MANAGEMENT] Config returned non-JSON:',response.status,text.slice(0,500));
+    throw new Error('پاسخ نامعتبر از API پیکربندی مدیریت');
+  }
+  if(!response.ok) throw new Error(data.message || ('HTTP '+response.status));
+  config=data;
+  productCache=Array.isArray(data.products)?data.products:[];
+  renderProducts();
+}
+
+function renderProducts(){
+  const body=byId('productsBody');
+  body.innerHTML=productCache.map(product=>
+    '<tr>'+ 
+    '<td>'+esc(product.ProductCode)+'</td>'+ 
+    '<td>'+esc(product.ProductName)+'</td>'+ 
+    '<td>'+esc(product.Unit)+'</td>'+ 
+    '<td>'+esc(product.CostPerKg)+'</td>'+ 
+    '<td>'+esc(product.CostPerMeter)+'</td>'+ 
+    '<td>'+esc(product.BOMNotes)+'</td>'+ 
+    '<td class="actions-cell">'+ 
+      '<button class="btn small" type="button" onclick="openEditProduct('+Number(product.ProductID)+')">ویرایش</button> '+ 
+      '<button class="btn danger small" type="button" onclick="deleteProduct('+Number(product.ProductID)+')">حذف</button>'+ 
+    '</td>'+ 
+    '</tr>'
+  ).join('');
+}
+
+function buildFilterParams(){
+  const params=new URLSearchParams();
+  const ids=['contract_code','contract_name','product_code','product_name','contract_date_from','contract_date_to','delivery_date_from','delivery_date_to','min_ordered','max_ordered','description'];
+  ids.forEach(id=>{
+    const input=byId(id);
+    const value=input ? input.value.trim() : '';
+    if(value) params.set(id,value);
+  });
+  params.set('company_id',String(COMPANY_ID));
+  return params;
+}
+
+async function loadData(){
+  const params=buildFilterParams();
+  const url='/management/data?'+params.toString();
+  console.log('[MANAGEMENT] APPLY FILTER ->',url);
+  console.log('[MANAGEMENT] FILTER VALUES ->',Object.fromEntries(params.entries()));
+
+  try{
+    const started=performance.now();
+    const response=await fetch(url,{cache:'no-store',headers:{'Accept':'application/json'}});
+    const text=await response.text();
+    let data=null;
+    try{data=JSON.parse(text);}catch(_){
+      console.error('[MANAGEMENT] Filter API returned non-JSON:',response.status,text.slice(0,1000));
+      throw new Error('API فیلتر پاسخ JSON معتبر برنگرداند');
+    }
+
+    console.log('[MANAGEMENT] FILTER RESPONSE',response.status,'in',Math.round(performance.now()-started),'ms',data);
+    if(!response.ok) throw new Error(data.message || ('HTTP '+response.status));
+
+    renderTable(data);
+    byId('summary').textContent='تعداد ردیف: '+(data.count ?? 0);
+  }catch(error){
+    console.error('[MANAGEMENT] FILTER ERROR:',error);
+    byId('summary').textContent='خطا در اعمال فیلتر';
+    alert(error.message);
+  }
+}
+
+function renderTable(data){
+  const th=byId('thead');
+  const tb=byId('tbody');
+  th.innerHTML='';
+  tb.innerHTML='';
+
+  if(!data || !Array.isArray(data.columns)){
+    console.error('[MANAGEMENT] Invalid table payload:',data);
+    return;
+  }
+
+  const visibleColumns=data.columns;
+  th.innerHTML='<tr>'+ 
+    visibleColumns.map(column=>'<th>'+esc(column.label)+(column.unit?' ('+esc(column.unit)+')':'')+'</th>').join('')+ 
+    '<th>عملیات</th></tr>';
+
+  tb.innerHTML=(data.rows || []).map(row=>{
+    const contractCode=String(row.ContractCode || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return '<tr>'+ 
+      visibleColumns.map(column=>'<td class="tag-list">'+formatValue(row[column.key])+'</td>').join('')+ 
+      '<td class="actions-cell">'+ 
+        '<button class="btn small" type="button" onclick="openEditContract(\''+esc(contractCode)+'\')">ویرایش</button> '+ 
+        '<button class="btn danger small" type="button" onclick="deleteContract(\''+esc(contractCode)+'\')">حذف</button>'+ 
+      '</td>'+ 
+      '</tr>';
+  }).join('');
+}
+
+function formatValue(value){
+  if(Array.isArray(value)) return value.map(x=>esc(x)).join(', ');
+  if(value===null || value===undefined || value==='') return '<span class="muted">—</span>';
+  if(typeof value==='number') return esc(Number.isInteger(value)?value:value.toFixed(3));
+  return esc(value);
+}
+
+function clearFilters(){
+  ['contract_code','contract_name','product_code','product_name','contract_date_from','contract_date_to','delivery_date_from','delivery_date_to','min_ordered','max_ordered','description'].forEach(id=>byId(id).value='');
+  console.log('[MANAGEMENT] FILTERS CLEARED');
+  loadData();
+}
+
+function bootManagementDatePicker(){
+  const start=Date.now();
+  const timer=setInterval(()=>{
+    initAllJalaliPickers();
+    if(window.jQuery && typeof jQuery.fn.pDatepicker==='function') clearInterval(timer);
+    if(Date.now()-start>10000) clearInterval(timer);
+  },100);
+}
+
+window.addEventListener('error',event=>console.error('[MANAGEMENT] GLOBAL JS ERROR:',event.error || event.message));
+window.addEventListener('unhandledrejection',event=>console.error('[MANAGEMENT] UNHANDLED PROMISE:',event.reason));
+
 bootManagementDatePicker();
-(async()=>{try{await loadConfig();await loadData()}catch(e){alert('پیکربندی پنل مدیریت در Flow موجود نیست یا دسترسی ندارید.')}})();
+
+(async()=>{
+  try{
+    console.log('[MANAGEMENT] BOOT, COMPANY_ID=',COMPANY_ID);
+    await loadConfig();
+    await loadData();
+  }catch(error){
+    console.error('[MANAGEMENT] BOOT ERROR:',error);
+    alert('پیکربندی یا دسترسی پنل مدیریت مشکل دارد: '+error.message);
+  }
+})();
 </script>
-</body></html>
+</body>
+</html>
