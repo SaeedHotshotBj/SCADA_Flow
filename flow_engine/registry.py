@@ -6,6 +6,8 @@
 # REAL TIME NODES
 # =====================================================
 
+from datetime import datetime
+
 from flow_engine.nodes.plc_reader import PLCReader
 from flow_engine.nodes.tag_mapper import TagMapper
 from flow_engine.nodes.expression_node import ExpressionNode
@@ -105,13 +107,132 @@ NODE_CLASSES = {
 
 
 # =====================================================
+# EDGE TRIGGER SOURCE BRIDGE
+# =====================================================
+#
+# The Edge gateway persists trigger-fired tags in PLC_Data with
+# StorageType=EDGE. ReportOutput must therefore build its upstream
+# EdgeTriggerEvents from that table. The historical implementation queried
+# TagHistory, which is not the authoritative Edge trigger stream and can be
+# empty even while PLC_Data contains the correct EDGE rows.
+#
+# We patch the trigger module's lookup function here, without changing the
+# Drawflow topology and without creating a second trigger state machine.
+
+try:
+    import flow_engine.trigger_edge_report_fix as _trigger_fix
+    from database import get_connection as _trigger_get_connection
+
+    def _latest_trigger_rows_from_plc_data(company_id, definitions):
+        groups = {}
+
+        for definition in definitions or []:
+            if not isinstance(definition, dict):
+                continue
+            if str(definition.get("storage", "")).strip().upper() != "TRIGGER":
+                continue
+
+            name = str(definition.get("name", "")).strip()
+            if not name:
+                continue
+
+            register = definition.get("trigger_register")
+            if register in (None, ""):
+                continue
+
+            groups.setdefault(str(register), []).append(name)
+
+        _trigger_fix._trace(
+            "TRIGGER_PLC_DATA_QUERY_START",
+            company_id=company_id,
+            groups=groups,
+        )
+
+        if not groups:
+            _trigger_fix._trace(
+                "TRIGGER_PLC_DATA_QUERY_NO_GROUPS",
+                company_id=company_id,
+            )
+            return {}
+
+        conn = _trigger_get_connection()
+        try:
+            result = {}
+
+            for register, names in groups.items():
+                rows = {}
+                for name in names:
+                    row = conn.execute(
+                        """
+                        SELECT ID, TagName, Value, Timestamp
+                        FROM PLC_Data
+                        WHERE CompanyID = ?
+                          AND UPPER(COALESCE(StorageType, '')) = 'EDGE'
+                          AND LOWER(TagName) = LOWER(?)
+                        ORDER BY ID DESC
+                        LIMIT 1
+                        """,
+                        (int(company_id), name),
+                    ).fetchone()
+
+                    if row is not None:
+                        rows[name] = row
+                        _trigger_fix._trace(
+                            "TRIGGER_PLC_DATA_ROW",
+                            company_id=company_id,
+                            register=register,
+                            tag=name,
+                            id=row["ID"],
+                            value=row["Value"],
+                            timestamp=row["Timestamp"],
+                            age_seconds=_trigger_fix._timestamp_age(row["Timestamp"]),
+                        )
+                    else:
+                        _trigger_fix._trace(
+                            "TRIGGER_PLC_DATA_MISSING",
+                            company_id=company_id,
+                            register=register,
+                            tag=name,
+                        )
+
+                if rows:
+                    result[register] = rows
+
+            _trigger_fix._trace(
+                "TRIGGER_PLC_DATA_QUERY_END",
+                company_id=company_id,
+                result_summary={
+                    register: {
+                        name: {
+                            "id": int(row["ID"]),
+                            "value": row["Value"],
+                            "timestamp": str(row["Timestamp"] or ""),
+                        }
+                        for name, row in rows.items()
+                    }
+                    for register, rows in result.items()
+                },
+            )
+
+            return result
+        finally:
+            conn.close()
+
+    _trigger_fix._latest_trigger_rows = _latest_trigger_rows_from_plc_data
+    _trigger_fix._TRACE_VERSION = "2026-09-01-v3-PLC-DATA"
+    print("EDGE TRIGGER SOURCE PATCH: PLC_Data/EDGE")
+
+except Exception as exc:
+    print("EDGE TRIGGER SOURCE PATCH ERROR:", repr(exc))
+
+
+# =====================================================
 # REPORT SNAPSHOT OWNERSHIP
 # =====================================================
-# SQLWriter is a historian/trigger persistence node. ReportOutput owns
+# SQLWriter remains a historian/trigger persistence node. ReportOutput owns
 # ReportHistory snapshots because it is the node that contains the actual
-# report product configuration. Returning no report products here prevents
-# multiple SQLWriter branches from creating duplicate or empty snapshots.
-# Trigger tag persistence itself remains active inside SQLWriter.
+# report product configuration. Trigger tag persistence itself remains active
+# inside SQLWriter.
 
 def _disable_sqlwriter_report_snapshots():
     return []
