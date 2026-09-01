@@ -1,4 +1,4 @@
-name: Fix ManagementPanel Jalali DatePicker
+name: Add Jalali DatePickers to ManagementPanel
 
 on:
   push:
@@ -16,58 +16,65 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Patch ManagementPanel date fields
+      - name: Patch management.html
         shell: python
         run: |
           from pathlib import Path
+          p = Path('templates/management.html')
+          t = p.read_text(encoding='utf-8')
 
-          path = Path('templates/management.html')
-          text = path.read_text(encoding='utf-8')
+          if 'persian-datepicker@1.2.0' not in t:
+              t = t.replace('<meta charset="UTF-8">', '''<meta charset="UTF-8">\n<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>\n<script src="https://cdn.jsdelivr.net/npm/persian-date@1.1.0/dist/persian-date.min.js"></script>\n<script src="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/js/persian-datepicker.min.js"></script>\n<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/css/persian-datepicker.min.css">''', 1)
 
-          if 'persian-datepicker@1.2.0' not in text:
-              text = text.replace(
-                  '<meta charset="UTF-8">',
-                  '<meta charset="UTF-8">\n'
-                  '<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>\n'
-                  '<script src="https://cdn.jsdelivr.net/npm/persian-date@1.1.0/dist/persian-date.min.js"></script>\n'
-                  '<script src="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/js/persian-datepicker.min.js"></script>\n'
-                  '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/css/persian-datepicker.min.css">',
+          for field, placeholder in [
+              ('contract_date_from','1405/06/01'),
+              ('contract_date_to','1405/06/31'),
+              ('delivery_date_from','1405/07/01'),
+              ('delivery_date_to','1405/07/31'),
+              ('new_contract_date','1405/06/10'),
+          ]:
+              t = t.replace(
+                  f'id="{field}" placeholder="{placeholder}"',
+                  f'id="{field}" class="jalali-date" placeholder="{placeholder}"',
                   1,
               )
 
-          replacements = {
-              'id="contract_date_from" placeholder="1405/06/01"': 'id="contract_date_from" class="jalali-date" placeholder="1405/06/01"',
-              'id="contract_date_to" placeholder="1405/06/31"': 'id="contract_date_to" class="jalali-date" placeholder="1405/06/31"',
-              'id="delivery_date_from" placeholder="1405/07/01"': 'id="delivery_date_from" class="jalali-date" placeholder="1405/07/01"',
-              'id="delivery_date_to" placeholder="1405/07/31"': 'id="delivery_date_to" class="jalali-date" placeholder="1405/07/31"',
-              'id="new_contract_date" placeholder="1405/06/10"': 'id="new_contract_date" class="jalali-date" placeholder="1405/06/10"',
-          }
-          for old, new in replacements.items():
-              text = text.replace(old, new, 1)
+          marker = 'function addContractProduct(){'
+          if 'function initJalaliPicker' not in t:
+              helper = '''function initJalaliPicker(el){if(!el||!window.jQuery||!jQuery.fn.persianDatepicker)return;const q=jQuery(el);if(q.data("jalali-ready"))return;q.persianDatepicker({format:"YYYY/MM/DD",initialValue:false,autoClose:true,observer:true,calendarType:"persian",toolbox:{enabled:true,todayButton:{enabled:true},submitButton:{enabled:false},calendarSwitch:{enabled:false}}});q.data("jalali-ready",true)}\nfunction initAllJalaliPickers(){document.querySelectorAll(".jalali-date").forEach(initJalaliPicker)}\n'''
+              if marker not in t:
+                  raise SystemExit('addContractProduct marker not found')
+              t = t.replace(marker, helper + marker, 1)
 
-          css = '''\n.jalali-date{direction:ltr;text-align:center;cursor:pointer}\n.datepicker-plot-area{z-index:10000!important}\n.datepicker-plot-area .datepicker-time-view{display:block!important}\n'''
-          if '.jalali-date{direction:ltr' not in text:
-              text = text.replace('</style>', css + '</style>', 1)
+          old_dynamic = '<td><input data-k="delivery_date" placeholder="1405/07/01"></td>'
+          new_dynamic = '<td><input data-k="delivery_date" class="jalali-date" placeholder="1405/07/01"></td>'
+          t = t.replace(old_dynamic, new_dynamic, 1)
 
-          old_add = "function addContractProduct(){const tr=document.createElement('tr');tr.innerHTML='<td><input data-k=\"product_code\"></td><td><input data-k=\"product_name\"></td><td><input data-k=\"ordered_quantity\" type=\"number\" step=\"any\"></td><td><input data-k=\"unit\"></td><td><input data-k=\"delivery_date\" placeholder=\"1405/07/01\"></td><td><input data-k=\"description\"></td><td><button class=\"btn\" type=\"button\">حذف</button></td>';tr.querySelector('button').onclick=()=>tr.remove();$('contractProducts').appendChild(tr)}"
-          new_add = "function initJalaliPicker(el){if(!el||!window.jQuery||!jQuery.fn.persianDatepicker)return;const $el=jQuery(el);if($el.data('datepicker-initialized'))return;$el.persianDatepicker({format:'YYYY/MM/DD',initialValue:false,autoClose:true,observer:true,calendarType:'persian',toolbox:{enabled:true,todayButton:{enabled:true},submitButton:{enabled:false},calendarSwitch:{enabled:false}}});$el.data('datepicker-initialized',true)}\nfunction initAllJalaliPickers(){document.querySelectorAll('.jalali-date').forEach(initJalaliPicker)}\nfunction addContractProduct(){const tr=document.createElement('tr');tr.innerHTML='<td><input data-k=\"product_code\"></td><td><input data-k=\"product_name\"></td><td><input data-k=\"ordered_quantity\" type=\"number\" step=\"any\"></td><td><input data-k=\"unit\"></td><td><input data-k=\"delivery_date\" class=\"jalali-date\" placeholder=\"1405/07/01\"></td><td><input data-k=\"description\"></td><td><button class=\"btn\" type=\"button\">حذف</button></td>';tr.querySelector('button').onclick=()=>tr.remove();$('contractProducts').appendChild(tr);initAllJalaliPickers()}"
-          if old_add in text and 'function initJalaliPicker' not in text:
-              text = text.replace(old_add, new_add, 1)
+          add_end = "$('contractProducts').appendChild(tr)}"
+          if add_end in t:
+              t = t.replace(add_end, "$('contractProducts').appendChild(tr);initAllJalaliPickers()}", 1)
 
-          if 'initAllJalaliPickers();' not in text:
-              text = text.replace('(async()=>{try{await loadConfig();await loadData()}catch(e){alert(\'پیکربندی پنل مدیریت در Flow موجود نیست یا دسترسی ندارید.\')}})();', 'initAllJalaliPickers();\n(async()=>{try{await loadConfig();await loadData()}catch(e){alert(\'پیکربندی پنل مدیریت در Flow موجود نیست یا دسترسی ندارید.\')}})();', 1)
+          if 'initAllJalaliPickers();' not in t:
+              anchor = "(async()=>{try{await loadConfig();await loadData()}catch(e){alert('پیکربندی پنل مدیریت در Flow موجود نیست یا دسترسی ندارید.')}})();"
+              if anchor in t:
+                  t = t.replace(anchor, 'initAllJalaliPickers();\n' + anchor, 1)
 
-          path.write_text(text, encoding='utf-8')
+          if '.jalali-date{direction:ltr' not in t:
+              t = t.replace('</style>', '.jalali-date{direction:ltr;text-align:center;cursor:pointer}.datepicker-plot-area{z-index:10000!important}\n</style>', 1)
+
+          p.write_text(t, encoding='utf-8')
 
       - name: Verify
         shell: bash
         run: |
-          grep -q "persian-datepicker@1.2.0" templates/management.html
-          grep -q 'class="jalali-date"' templates/management.html
+          grep -q 'persian-datepicker@1.2.0' templates/management.html
           grep -q 'function initJalaliPicker' templates/management.html
+          grep -q 'id="new_contract_date" class="jalali-date"' templates/management.html
+          grep -q 'id="contract_date_from" class="jalali-date"' templates/management.html
+          grep -q 'data-k="delivery_date" class="jalali-date"' templates/management.html
           git diff --check
 
-      - name: Commit patch and remove temporary workflow
+      - name: Commit patch
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
