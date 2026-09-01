@@ -1,0 +1,97 @@
+name: fix-management-calculations
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'Fix ManagementPanel calculation aggregation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch management service
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('services/management_service.py')
+          text = p.read_text(encoding='utf-8')
+
+          pattern = re.compile(r"def _management_calculations\(company_id\):\n(?:    .*\n)+?\n\ndef get_config\(company_id\):", re.MULTILINE)
+          replacement = '''def _management_calculations(company_id):
+    # A company may legitimately have multiple ManagementPanel nodes in its Flow.
+    # Collect calculations from ALL ManagementPanel nodes instead of selecting only
+    # the last node. This prevents an empty/role-specific panel from hiding valid
+    # calculations configured in another ManagementPanel node.
+    configs = _management_configs(company_id)
+    result = []
+    seen = set()
+
+    for config in configs:
+        rows = config.get("calculations", []) if isinstance(config, dict) else []
+        if not isinstance(rows, list):
+            continue
+
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+
+            name = str(
+                item.get("name", item.get("result_name", item.get("resultName", "")))
+            ).strip()
+            expression = str(
+                item.get("expression", item.get("formula", ""))
+            ).strip()
+
+            if not name or not expression:
+                continue
+
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+
+            result.append({
+                "name": name,
+                "label": str(
+                    item.get("label", item.get("column_label", name))
+                ).strip() or name,
+                "expression": expression,
+                "unit": str(item.get("unit", "")).strip(),
+            })
+
+    print(
+        "MANAGEMENT CALCULATIONS:",
+        "Company=", company_id,
+        "Panels=", len(configs),
+        "Calculations=", result,
+    )
+    return result
+
+
+def get_config(company_id):'''
+
+          new_text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('Could not locate _management_calculations block')
+
+          p.write_text(new_text, encoding='utf-8')
+          print('PATCHED management_service.py')
+          PY
+
+      - name: Commit and remove workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/management_service.py .github/workflows/fix-management-calculations.yml
+          git commit -m "Fix ManagementPanel calculation aggregation"
+          git rm .github/workflows/fix-management-calculations.yml
+          git commit -m "Remove temporary calculation fix workflow"
+          git push
