@@ -1,0 +1,78 @@
+name: Fix ManagementPanel Jalali DatePicker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-management-jalali.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch ManagementPanel date fields
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('templates/management.html')
+          text = path.read_text(encoding='utf-8')
+
+          if 'persian-datepicker@1.2.0' not in text:
+              text = text.replace(
+                  '<meta charset="UTF-8">',
+                  '<meta charset="UTF-8">\n'
+                  '<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>\n'
+                  '<script src="https://cdn.jsdelivr.net/npm/persian-date@1.1.0/dist/persian-date.min.js"></script>\n'
+                  '<script src="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/js/persian-datepicker.min.js"></script>\n'
+                  '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/persian-datepicker@1.2.0/dist/css/persian-datepicker.min.css">',
+                  1,
+              )
+
+          replacements = {
+              'id="contract_date_from" placeholder="1405/06/01"': 'id="contract_date_from" class="jalali-date" placeholder="1405/06/01"',
+              'id="contract_date_to" placeholder="1405/06/31"': 'id="contract_date_to" class="jalali-date" placeholder="1405/06/31"',
+              'id="delivery_date_from" placeholder="1405/07/01"': 'id="delivery_date_from" class="jalali-date" placeholder="1405/07/01"',
+              'id="delivery_date_to" placeholder="1405/07/31"': 'id="delivery_date_to" class="jalali-date" placeholder="1405/07/31"',
+              'id="new_contract_date" placeholder="1405/06/10"': 'id="new_contract_date" class="jalali-date" placeholder="1405/06/10"',
+          }
+          for old, new in replacements.items():
+              text = text.replace(old, new, 1)
+
+          css = '''\n.jalali-date{direction:ltr;text-align:center;cursor:pointer}\n.datepicker-plot-area{z-index:10000!important}\n.datepicker-plot-area .datepicker-time-view{display:block!important}\n'''
+          if '.jalali-date{direction:ltr' not in text:
+              text = text.replace('</style>', css + '</style>', 1)
+
+          old_add = "function addContractProduct(){const tr=document.createElement('tr');tr.innerHTML='<td><input data-k=\"product_code\"></td><td><input data-k=\"product_name\"></td><td><input data-k=\"ordered_quantity\" type=\"number\" step=\"any\"></td><td><input data-k=\"unit\"></td><td><input data-k=\"delivery_date\" placeholder=\"1405/07/01\"></td><td><input data-k=\"description\"></td><td><button class=\"btn\" type=\"button\">حذف</button></td>';tr.querySelector('button').onclick=()=>tr.remove();$('contractProducts').appendChild(tr)}"
+          new_add = "function initJalaliPicker(el){if(!el||!window.jQuery||!jQuery.fn.persianDatepicker)return;const $el=jQuery(el);if($el.data('datepicker-initialized'))return;$el.persianDatepicker({format:'YYYY/MM/DD',initialValue:false,autoClose:true,observer:true,calendarType:'persian',toolbox:{enabled:true,todayButton:{enabled:true},submitButton:{enabled:false},calendarSwitch:{enabled:false}}});$el.data('datepicker-initialized',true)}\nfunction initAllJalaliPickers(){document.querySelectorAll('.jalali-date').forEach(initJalaliPicker)}\nfunction addContractProduct(){const tr=document.createElement('tr');tr.innerHTML='<td><input data-k=\"product_code\"></td><td><input data-k=\"product_name\"></td><td><input data-k=\"ordered_quantity\" type=\"number\" step=\"any\"></td><td><input data-k=\"unit\"></td><td><input data-k=\"delivery_date\" class=\"jalali-date\" placeholder=\"1405/07/01\"></td><td><input data-k=\"description\"></td><td><button class=\"btn\" type=\"button\">حذف</button></td>';tr.querySelector('button').onclick=()=>tr.remove();$('contractProducts').appendChild(tr);initAllJalaliPickers()}"
+          if old_add in text and 'function initJalaliPicker' not in text:
+              text = text.replace(old_add, new_add, 1)
+
+          if 'initAllJalaliPickers();' not in text:
+              text = text.replace('(async()=>{try{await loadConfig();await loadData()}catch(e){alert(\'پیکربندی پنل مدیریت در Flow موجود نیست یا دسترسی ندارید.\')}})();', 'initAllJalaliPickers();\n(async()=>{try{await loadConfig();await loadData()}catch(e){alert(\'پیکربندی پنل مدیریت در Flow موجود نیست یا دسترسی ندارید.\')}})();', 1)
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Verify
+        shell: bash
+        run: |
+          grep -q "persian-datepicker@1.2.0" templates/management.html
+          grep -q 'class="jalali-date"' templates/management.html
+          grep -q 'function initJalaliPicker' templates/management.html
+          git diff --check
+
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add templates/management.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Add Jalali datepickers to ManagementPanel'
+          git push origin main
