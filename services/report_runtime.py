@@ -47,7 +47,6 @@ class ReportRuntime:
             if node.get("name") != "ReportOutput":
                 continue
 
-            # ReportOutput must be connected in the saved Flow.
             inputs = node.get("inputs", {}) or {}
             connected = any(
                 isinstance(input_data, dict)
@@ -135,6 +134,99 @@ class ReportRuntime:
 
         return result
 
+    def _management_context(self, company_id):
+        """Resolve ContractCode/ProductCode from ManagementPanel settings.
+
+        The register addresses remain owned by ManagementPanel. TagMapper is
+        only the source that makes those PLC register values available in the
+        persisted PLC_Data stream.
+        """
+        result = {
+            "ContractCode": None,
+            "ProductCode": None,
+        }
+
+        nodes = self._nodes(company_id)
+        if not nodes:
+            return result
+
+        config = None
+        for node in nodes.values():
+            if not isinstance(node, dict) or node.get("name") != "ManagementPanel":
+                continue
+            data = node.get("data", {}) or {}
+            config = data.get("config", data) or {}
+            break
+
+        if not isinstance(config, dict):
+            return result
+
+        contract_register = config.get("contract_code_register")
+        product_register = config.get("product_code_register")
+
+        def latest_by_register(register):
+            if register in (None, ""):
+                return None
+
+            try:
+                register_int = int(float(register))
+            except (TypeError, ValueError):
+                return None
+
+            tag_name = None
+            for node in nodes.values():
+                if not isinstance(node, dict) or node.get("name") != "TagMapper":
+                    continue
+                mappings = (node.get("data", {}) or {}).get("mappings", [])
+                if not isinstance(mappings, list):
+                    continue
+                for mapping in mappings:
+                    if not isinstance(mapping, dict):
+                        continue
+                    try:
+                        mapping_register = int(float(mapping.get("register")))
+                    except (TypeError, ValueError):
+                        continue
+                    if mapping_register == register_int:
+                        name = str(mapping.get("name", "")).strip()
+                        if name:
+                            tag_name = name
+                            break
+                if tag_name:
+                    break
+
+            if not tag_name:
+                return None
+
+            conn = get_connection()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT Value, Timestamp
+                    FROM PLC_Data
+                    WHERE CompanyID = ?
+                      AND LOWER(TagName) = LOWER(?)
+                    ORDER BY ID DESC
+                    LIMIT 1
+                    """,
+                    (company_id, tag_name),
+                ).fetchone()
+                if row is None:
+                    return None
+                return row["Value"]
+            finally:
+                conn.close()
+
+        contract = latest_by_register(contract_register)
+        product = latest_by_register(product_register)
+
+        if contract not in (None, ""):
+            result["ContractCode"] = str(contract).strip()
+        if product not in (None, ""):
+            result["ProductCode"] = str(product).strip()
+
+        return result
+
     def _save_from_edge_row(self, row):
         company_id = int(row["CompanyID"])
         tag_name = str(row["TagName"] or "").strip()
@@ -161,7 +253,6 @@ class ReportRuntime:
             ]
             tag_keys = {tag.lower() for tag in tags}
 
-            # Only the selected ReportOutput columns can trigger/report.
             if incoming_key not in tag_keys:
                 continue
 
@@ -175,14 +266,8 @@ class ReportRuntime:
 
             latest = self._latest_values(company_id, tags)
             if len(latest) != len(tags):
-                # Wait until every selected report column has at least one
-                # value in PLC_Data. Values do NOT need matching timestamps.
                 continue
 
-            # For TIME reports, the interval belongs to the incoming
-            # ReportOutput column that caused this evaluation. Other report
-            # columns may have completely different intervals; their latest
-            # stored values are intentionally reused for the snapshot.
             if incoming_mode == "TIME":
                 try:
                     interval = float(
@@ -205,9 +290,6 @@ class ReportRuntime:
                 self.last_time_snapshot[key] = now
 
             elif incoming_mode == "TRIGGER":
-                # ReportOutput trigger columns are represented by the
-                # arrival of the configured data tag. Keep one snapshot for
-                # the current set of latest timestamps.
                 pass
             else:
                 continue
@@ -239,10 +321,41 @@ class ReportRuntime:
                 for name, item in latest.items()
             }
 
+            context = self._management_context(company_id)
+            if context.get("ContractCode") not in (None, ""):
+                values["ContractCode"] = context["ContractCode"]
+            if context.get("ProductCode") not in (None, ""):
+                values["ProductCode"] = context["ProductCode"]
+
+            snapshot_products = list(products)
+            if context.get("ContractCode") not in (None, "") and not any(
+                isinstance(item, dict)
+                and str(item.get("context_role", "")).strip().lower()
+                in ("contract", "contract_code", "contractid", "contract_id")
+                for item in snapshot_products
+            ):
+                snapshot_products.append({
+                    "tag": "ContractCode",
+                    "name": "ContractCode",
+                    "context_role": "contract_code",
+                })
+
+            if context.get("ProductCode") not in (None, "") and not any(
+                isinstance(item, dict)
+                and str(item.get("context_role", "")).strip().lower()
+                in ("product", "product_code", "productid", "product_id")
+                for item in snapshot_products
+            ):
+                snapshot_products.append({
+                    "tag": "ProductCode",
+                    "name": "ProductCode",
+                    "context_role": "product_code",
+                })
+
             report_id = save_report_snapshot(
                 company_id,
                 values,
-                products,
+                snapshot_products,
                 timestamp=timestamp,
             )
 
@@ -255,6 +368,8 @@ class ReportRuntime:
                     "ReportID=", report_id,
                     "TriggerTag=", tag_name,
                     "Mode=", incoming_mode,
+                    "ContractCode=", context.get("ContractCode"),
+                    "ProductCode=", context.get("ProductCode"),
                     "Tags=", tags,
                 )
 
