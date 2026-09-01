@@ -14,8 +14,10 @@
       product_codes: [],
       product_names: []
     },
+    managementCalculations: [],
     menus: new WeakMap(),
-    initialized: new WeakSet()
+    initialized: new WeakSet(),
+    calcFilterInitialized: false
   };
 
   function log(...args) {
@@ -37,7 +39,6 @@
   function normalizeCode(value) {
     const text = normalize(value);
     if (!text) return '';
-    // Make common numeric variants equivalent: 1, 1.0, 1.00 -> 1.
     if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(text)) {
       const numberValue = Number(text);
       if (Number.isFinite(numberValue)) return String(numberValue);
@@ -64,6 +65,16 @@
     return [...map.values()].sort((a, b) => a.localeCompare(b, 'fa'));
   }
 
+  function safeKey(value) {
+    return String(value ?? '')
+      .trim()
+      .replace(/[^a-zA-Z0-9_\-]/g, '_') || 'calc';
+  }
+
+  function calcFilterId(calculation) {
+    return 'management_calc_filter_' + safeKey(calculation.name);
+  }
+
   async function loadOptions() {
     const url = '/management/options?company_id=' + encodeURIComponent(companyId);
     log('Loading DB options:', url);
@@ -83,12 +94,40 @@
     state.options.product_codes = uniqueSorted(data.product_codes);
     state.options.product_names = uniqueSorted(data.product_names);
 
-    log('Loaded options:', {
+    log('Loaded DB options:', {
       contract_codes: state.options.contract_codes.length,
       contract_names: state.options.contract_names.length,
       product_codes: state.options.product_codes.length,
       product_names: state.options.product_names.length
     });
+  }
+
+  async function loadManagementConfig() {
+    const url = '/management/config?company_id=' + encodeURIComponent(companyId);
+    log('Loading ManagementPanel config:', url);
+
+    const response = await fetch(url, { cache: 'no-store' });
+    const contentType = response.headers.get('content-type') || '';
+    const data = contentType.includes('application/json')
+      ? await response.json()
+      : { message: await response.text() };
+
+    if (!response.ok) {
+      throw new Error(data.message || ('HTTP ' + response.status));
+    }
+
+    state.managementCalculations = (Array.isArray(data.calculations) ? data.calculations : [])
+      .filter((item) => item && String(item.name || '').trim() && String(item.expression || '').trim())
+      .map((item) => ({
+        name: String(item.name).trim(),
+        label: String(item.label || item.name).trim() || String(item.name).trim(),
+        expression: String(item.expression).trim(),
+        unit: String(item.unit || '').trim()
+      }));
+
+    log('Loaded ManagementPanel calculations:', state.managementCalculations);
+    renderCalculationFilters();
+    installDynamicCalculationFiltering();
   }
 
   function getOptionsForInput(input) {
@@ -246,6 +285,119 @@
     });
   }
 
+  function renderCalculationFilters() {
+    const grid = document.querySelector('.filters .grid');
+    if (!grid) {
+      log('Management filter grid not found yet.');
+      return;
+    }
+
+    grid.querySelectorAll('.management-calculation-filter').forEach((el) => el.remove());
+
+    state.managementCalculations.forEach((calculation) => {
+      const field = document.createElement('div');
+      field.className = 'field management-calculation-filter';
+      field.dataset.calculationName = calculation.name;
+
+      const label = document.createElement('label');
+      label.textContent = calculation.label + (calculation.unit ? ' (' + calculation.unit + ')' : '');
+
+      const input = document.createElement('input');
+      input.id = calcFilterId(calculation);
+      input.type = 'text';
+      input.placeholder = 'فیلتر ' + calculation.label;
+      input.autocomplete = 'off';
+      input.setAttribute('data-management-calculation-filter', calculation.name);
+
+      input.addEventListener('input', () => {
+        log('Management calculation filter changed:', calculation.name, input.value);
+      });
+
+      field.appendChild(label);
+      field.appendChild(input);
+      grid.appendChild(field);
+    });
+
+    state.calcFilterInitialized = true;
+    log('Rendered ManagementPanel calculation filters:', state.managementCalculations.map(x => x.name));
+  }
+
+  function getCalculationFilterValues() {
+    const result = {};
+    state.managementCalculations.forEach((calculation) => {
+      const input = document.getElementById(calcFilterId(calculation));
+      if (!input) return;
+      const value = input.value.trim();
+      if (value) result[calculation.name] = value;
+    });
+    return result;
+  }
+
+  function calculationValueMatches(value, filter) {
+    const wanted = normalize(filter);
+    if (!wanted) return true;
+
+    if (value === null || value === undefined || value === '') return false;
+
+    const valueText = normalize(value);
+    if (valueText === wanted || valueText.includes(wanted)) return true;
+
+    const valueNumber = Number(value);
+    const filterNumber = Number(normalize(filter));
+    if (Number.isFinite(valueNumber) && Number.isFinite(filterNumber)) {
+      return Math.abs(valueNumber - filterNumber) < 1e-9;
+    }
+
+    return false;
+  }
+
+  function applyCalculationFilters(data) {
+    const filters = getCalculationFilterValues();
+    const names = Object.keys(filters);
+    if (!names.length) return data;
+    if (!data || !Array.isArray(data.rows) || !Array.isArray(data.columns)) return data;
+
+    const filteredRows = data.rows.filter((row) => {
+      return names.every((name) => calculationValueMatches(row[name], filters[name]));
+    });
+
+    log('Management calculation filters applied:', {
+      filters,
+      before: data.rows.length,
+      after: filteredRows.length
+    });
+
+    return Object.assign({}, data, {
+      rows: filteredRows,
+      count: filteredRows.length
+    });
+  }
+
+  function installDynamicCalculationFiltering() {
+    if (typeof window.renderTable !== 'function' || window.renderTable.__managementCalculationFilter) {
+      return;
+    }
+
+    const originalRenderTable = window.renderTable;
+    const wrappedRenderTable = function (data) {
+      const filteredData = applyCalculationFilters(data);
+      window.__SCADA_MANAGEMENT_LAST_DATA = data;
+      window.__SCADA_MANAGEMENT_LAST_FILTERED_DATA = filteredData;
+      const result = originalRenderTable.call(this, filteredData);
+
+      const summary = document.getElementById('summary');
+      if (summary && getCalculationFilterValues() && Object.keys(getCalculationFilterValues()).length) {
+        summary.textContent = 'تعداد ردیف: ' + (filteredData.count ?? 0);
+      }
+      return result;
+    };
+
+    wrappedRenderTable.__managementCalculationFilter = true;
+    wrappedRenderTable.__managementOriginal = originalRenderTable;
+    window.renderTable = wrappedRenderTable;
+    log('ManagementPanel calculation filtering installed.');
+  }
+
   function installProductFilterGuard() {
     if (typeof window.loadData !== 'function' || window.loadData.__productFilterGuard) return;
 
@@ -265,7 +417,6 @@
 
       rows.forEach((row) => {
         const cells = row.querySelectorAll('td');
-        // Management table schema keeps ProductCode as the 4th column.
         const cell = cells.length >= 4 ? cells[3].textContent.trim() : '';
         const match = codeMatches(cell, filterValue);
         row.style.display = match ? '' : 'none';
@@ -274,9 +425,7 @@
 
       const summary = document.getElementById('summary');
       if (summary) {
-        const totalText = summary.textContent || '';
-        const suffix = totalText.includes('نمایش') ? totalText.replace(/^.*?(?=نمایش)/, '') : '';
-        summary.textContent = 'نتیجه فیلتر کد محصول: ' + visible + (suffix ? ' — ' + suffix : ' ردیف');
+        summary.textContent = 'نتیجه فیلتر کد محصول: ' + visible + ' ردیف';
       }
 
       console.log('[MANAGEMENT] PRODUCT CODE FILTER GUARD:', {
@@ -293,12 +442,34 @@
     log('Product-code filter guard installed.');
   }
 
+  function setupCalculationFilterClear() {
+    const originalClear = window.clearFilters;
+    if (typeof originalClear !== 'function' || originalClear.__managementCalculationClear) return;
+
+    const wrappedClear = function () {
+      state.managementCalculations.forEach((calculation) => {
+        const input = document.getElementById(calcFilterId(calculation));
+        if (input) input.value = '';
+      });
+      return originalClear.apply(this, arguments);
+    };
+
+    wrappedClear.__managementCalculationClear = true;
+    window.clearFilters = wrappedClear;
+    log('Management calculation filters clear hook installed.');
+  }
+
   async function refresh() {
     try {
       await loadOptions();
       scan(document);
       installProductFilterGuard();
-      log('DB-backed dropdowns initialized.');
+      setupCalculationFilterClear();
+      await loadManagementConfig();
+      scan(document);
+      installProductFilterGuard();
+      setupCalculationFilterClear();
+      log('DB-backed dropdowns and Flow-defined Management filters initialized.');
     } catch (err) {
       error('Failed to initialize management helpers:', err);
     }
@@ -307,7 +478,12 @@
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       mutation.addedNodes.forEach((node) => {
-        if (node.nodeType === Node.ELEMENT_NODE) scan(node);
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        scan(node);
+        if (!state.calcFilterInitialized && node.querySelector && node.querySelector('.filters .grid')) {
+          renderCalculationFilters();
+          installDynamicCalculationFiltering();
+        }
       });
     }
   });
