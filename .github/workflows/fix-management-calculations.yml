@@ -1,4 +1,4 @@
-name: fix-management-calculations
+name: repair-management-panel
 
 on:
   push:
@@ -8,90 +8,105 @@ permissions:
   contents: write
 
 jobs:
-  patch:
-    if: github.event.head_commit.message != 'Fix ManagementPanel calculation aggregation'
+  repair:
+    if: github.event.head_commit.message != 'Finalize ManagementPanel runtime repair'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Patch management service
+
+      - name: Patch Management service and page bootstrap
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
+          # ---- Backend: collect calculations from ALL ManagementPanel nodes ----
           p = Path('services/management_service.py')
           text = p.read_text(encoding='utf-8')
+          start = text.index('def _management_calculations(company_id):')
+          end = text.index('\ndef get_config(company_id):', start)
 
-          pattern = re.compile(r"def _management_calculations\(company_id\):\n(?:    .*\n)+?\n\ndef get_config\(company_id\):", re.MULTILINE)
           replacement = '''def _management_calculations(company_id):
-    # A company may legitimately have multiple ManagementPanel nodes in its Flow.
-    # Collect calculations from ALL ManagementPanel nodes instead of selecting only
-    # the last node. This prevents an empty/role-specific panel from hiding valid
-    # calculations configured in another ManagementPanel node.
-    configs = _management_configs(company_id)
-    result = []
-    seen = set()
+              # Every ManagementPanel node in this company's Flow contributes its
+              # explicitly configured calculations. Empty/role-specific panels must
+              # never hide calculations configured in another panel.
+              configs = _management_configs(company_id)
+              result = []
+              seen = set()
 
-    for config in configs:
-        rows = config.get("calculations", []) if isinstance(config, dict) else []
-        if not isinstance(rows, list):
-            continue
+              for config in configs:
+                  rows = config.get("calculations", []) if isinstance(config, dict) else []
+                  if not isinstance(rows, list):
+                      continue
 
-        for item in rows:
-            if not isinstance(item, dict):
-                continue
+                  for item in rows:
+                      if not isinstance(item, dict):
+                          continue
 
-            name = str(
-                item.get("name", item.get("result_name", item.get("resultName", "")))
-            ).strip()
-            expression = str(
-                item.get("expression", item.get("formula", ""))
-            ).strip()
+                      name = str(
+                          item.get("name", item.get("result_name", item.get("resultName", "")))
+                      ).strip()
+                      expression = str(
+                          item.get("expression", item.get("formula", ""))
+                      ).strip()
+                      if not name or not expression:
+                          continue
 
-            if not name or not expression:
-                continue
+                      key = name.lower()
+                      if key in seen:
+                          continue
+                      seen.add(key)
 
-            key = name.lower()
-            if key in seen:
-                continue
-            seen.add(key)
+                      result.append({
+                          "name": name,
+                          "label": str(
+                              item.get("label", item.get("column_label", name))
+                          ).strip() or name,
+                          "expression": expression,
+                          "unit": str(item.get("unit", "")).strip(),
+                      })
 
-            result.append({
-                "name": name,
-                "label": str(
-                    item.get("label", item.get("column_label", name))
-                ).strip() or name,
-                "expression": expression,
-                "unit": str(item.get("unit", "")).strip(),
-            })
+              print(
+                  "MANAGEMENT CALCULATIONS:",
+                  "Company=", company_id,
+                  "Panels=", len(configs),
+                  "Calculations=", result,
+              )
+              return result
+'''
 
-    print(
-        "MANAGEMENT CALCULATIONS:",
-        "Company=", company_id,
-        "Panels=", len(configs),
-        "Calculations=", result,
-    )
-    return result
+          text = text[:start] + replacement + text[end:]
+          p.write_text(text, encoding='utf-8')
 
+          # ---- Frontend: restore DB dropdown bootstrap ----
+          p = Path('templates/management.html')
+          text = p.read_text(encoding='utf-8')
+          marker = '<script src="{{ url_for(\'static\', filename=\'management_debug.js\') }}"></script>'
+          if marker not in text:
+              raise SystemExit('management_debug.js script marker not found')
 
-def get_config(company_id):'''
+          bootstrap = '''<script>
+          window.SCADA_MANAGEMENT_COMPANY_ID = COMPANY_ID;
+          </script>
+          <script src="{{ url_for('static', filename='management_dropdowns.js') }}"></script>
+          '''
+          if 'filename=\'management_dropdowns.js\'' not in text and 'filename="management_dropdowns.js"' not in text:
+              text = text.replace(marker, bootstrap + marker, 1)
 
-          new_text, count = pattern.subn(replacement, text, count=1)
-          if count != 1:
-              raise SystemExit('Could not locate _management_calculations block')
+          p.write_text(text, encoding='utf-8')
 
-          p.write_text(new_text, encoding='utf-8')
-          print('PATCHED management_service.py')
+          print('PATCHED ManagementPanel backend + dropdown bootstrap')
           PY
 
-      - name: Commit and remove workflow
+          python3 -m py_compile services/management_service.py
+
+      - name: Commit final repair and remove workflow
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add services/management_service.py .github/workflows/fix-management-calculations.yml
-          git commit -m "Fix ManagementPanel calculation aggregation"
+          git add services/management_service.py templates/management.html .github/workflows/fix-management-calculations.yml
+          git commit -m "Finalize ManagementPanel runtime repair"
           git rm .github/workflows/fix-management-calculations.yml
-          git commit -m "Remove temporary calculation fix workflow"
+          git commit -m "Remove temporary ManagementPanel repair workflow"
           git push
