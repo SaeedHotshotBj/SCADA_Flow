@@ -18,28 +18,30 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           path = Path('app.py')
           text = path.read_text(encoding='utf-8')
-
           marker = 'app.config["PERMANENT_SESSION_LIFETIME"] = 86400\n'
-
-          block = '''\n\n# =====================================================\n# AUTHENTICATION / PAGE CACHE PROTECTION\n# =====================================================\n\n@app.after_request\ndef _auth_no_cache(response):\n    """Prevent browsers/proxies from showing authenticated pages after logout."""\n\n    protected_paths = (\n        "/dashboard",\n        "/dashboard/latest",\n        "/home",\n    )\n\n    if (\n        request.path in protected_paths\n        or request.path.startswith("/dashboard/")\n    ):\n        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"\n        response.headers["Pragma"] = "no-cache"\n        response.headers["Expires"] = "0"\n\n    if request.path in ("/login", "/logout"):\n        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"\n        response.headers["Pragma"] = "no-cache"\n        response.headers["Expires"] = "0"\n\n    return response\n'''
-
+          block = '''\n\n# =====================================================\n# AUTHENTICATION / PAGE CACHE PROTECTION\n# =====================================================\n\n@app.after_request\ndef _auth_no_cache(response):\n    """Prevent browsers/proxies from showing authenticated pages after logout."""\n    protected_paths = (\n        "/dashboard",\n        "/dashboard/latest",\n        "/home",\n    )\n    if request.path in protected_paths or request.path.startswith("/dashboard/"):\n        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"\n        response.headers["Pragma"] = "no-cache"\n        response.headers["Expires"] = "0"\n    if request.path in ("/login", "/logout"):\n        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"\n        response.headers["Pragma"] = "no-cache"\n        response.headers["Expires"] = "0"\n    return response\n'''
           if 'def _auth_no_cache(response):' not in text:
               if marker not in text:
                   raise SystemExit('Expected Flask session configuration marker was not found')
-              text = text.replace(marker, marker + block, 1)
-              path.write_text(text, encoding='utf-8')
-          else:
-              print('Auth cache protection already present')
+              path.write_text(text.replace(marker, marker + block, 1), encoding='utf-8')
           PY
 
-      - name: Commit authentication cache fix
+      - name: Repair legacy BOM persistence
+        run: |
+          python scripts/legacy_bom_save_fix.py
+
+      - name: Remove temporary BOM workflows
+        run: |
+          rm -f .github/workflows/fix-bom-save-final.yml
+          rm -f .github/workflows/fix-bom-constraints.yml
+
+      - name: Commit fixes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app.py
+          git add app.py services/management_service.py .github/workflows/fix-bom-save-final.yml .github/workflows/fix-bom-constraints.yml
           git diff --cached --quiet && exit 0
-          git commit -m "Prevent stale dashboard after logout"
+          git commit -m "Fix legacy-safe BOM and product persistence"
           git push
