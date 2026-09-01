@@ -105,6 +105,24 @@ NODE_CLASSES = {
 
 
 # =====================================================
+# REPORT SNAPSHOT OWNERSHIP
+# =====================================================
+# SQLWriter is a historian/trigger persistence node. ReportOutput owns
+# ReportHistory snapshots because it is the node that contains the actual
+# report product configuration. Returning no report products here prevents
+# multiple SQLWriter branches from creating duplicate or empty snapshots.
+# Trigger tag persistence itself remains active inside SQLWriter.
+
+def _disable_sqlwriter_report_snapshots():
+    return []
+
+
+ManagementSQLWriter._get_report_products = (
+    lambda self: _disable_sqlwriter_report_snapshots()
+)
+
+
+# =====================================================
 # START BACKGROUND WORKERS
 # =====================================================
 
