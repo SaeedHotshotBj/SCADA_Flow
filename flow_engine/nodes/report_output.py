@@ -78,11 +78,6 @@ class ReportOutput:
             return self._flow_definitions
 
     def _management_context_tags(self, data):
-        """Resolve ContractCode/ProductCode from ManagementPanel registers.
-
-        The values are read from the same Registers map produced by PLCReader
-        and mapped by TagMapper. No hard-coded register address is used.
-        """
         if self.company_id is None:
             return {}
 
@@ -102,8 +97,6 @@ class ReportOutput:
                     continue
                 raw = node.get("data", {}) or {}
                 config = raw.get("config", raw) or {}
-                # Use the first configured ManagementPanel; its fields are the
-                # flow-level Contract/Product register settings.
                 break
 
             def read_register(field):
@@ -196,14 +189,8 @@ class ReportOutput:
 
         return previous_number == 0 and current_number == target
 
-    def _edge_trigger_event(self, data, definitions):
-        """Return the upstream rising-edge event for this report, if present.
-
-        PLCReader/trigger_edge_report_fix already performs the 0 -> 1 edge
-        detection and places the resulting event in EdgeTriggerEvents. This
-        method consumes that authoritative event instead of re-detecting it
-        from database rows or from a second in-memory edge detector.
-        """
+    def _edge_trigger_event(self, data):
+        """Return the upstream rising-edge event for this report, if present."""
         events = data.get("EdgeTriggerEvents", []) if isinstance(data, dict) else []
         if not isinstance(events, list) or not events:
             return None
@@ -239,7 +226,6 @@ class ReportOutput:
         return None
 
     def _trigger_event_due_from_edge_rows(self, products, definitions):
-        """Legacy fallback for deployments where no upstream event is present."""
         if self.company_id is None:
             return False
 
@@ -333,8 +319,6 @@ class ReportOutput:
         if not isinstance(self.products, list) or not self.products:
             return False
 
-        # Most reliable path: consume the already edge-detected event from
-        # PLCReader. This is the exact event produced for the current scan.
         if self._edge_trigger_event(data):
             return True
 
@@ -418,8 +402,6 @@ class ReportOutput:
         tags = self._runtime_tags_for_products(data)
         tags.update(self._management_context_tags(data))
 
-        # Contract/Product are already part of TagMapper's output. Preserve
-        # those exact values; do not read an older database row for context.
         if isinstance(data.get("Tags"), dict):
             for key in ("ContractCode", "ProductCode"):
                 value = data["Tags"].get(key)
