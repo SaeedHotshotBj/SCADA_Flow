@@ -10,6 +10,7 @@ from flow_engine.nodes.plc_reader import PLCReader
 from flow_engine.nodes.tag_mapper import TagMapper
 from flow_engine.nodes.expression_node import ExpressionNode
 from flow_engine.nodes.sql_writer import SQLWriter
+from services.management_context import ManagementSQLWriter
 from flow_engine.nodes.dashboard_output import DashboardOutput
 from flow_engine.nodes.machine_card import MachineCard
 from flow_engine.nodes.alarm_node import AlarmNode
@@ -62,7 +63,7 @@ NODE_CLASSES = {
         ExpressionNode,
 
     "SQLWriter":
-        SQLWriter,
+        ManagementSQLWriter,
 
     "DashboardOutput":
         DashboardOutput,
