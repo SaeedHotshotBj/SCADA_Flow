@@ -1,0 +1,53 @@
+name: Fix trigger report context
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-trigger-report-context.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch trigger report snapshot context
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('flow_engine/trigger_edge_report_fix.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''    for event in events:\n        event_tags = event.get("tags", {})\n        if not isinstance(event_tags, dict) or not event_tags:\n            continue\n'''
+
+          new = '''    for event in events:\n        event_tags = event.get("tags", {})\n        if not isinstance(event_tags, dict) or not event_tags:\n            continue\n\n        # Keep the complete TagMapper output for the report snapshot.\n        # The Edge trigger event contains B1/B2/B3 only, while ContractCode\n        # and ProductCode are already present in the SQLWriter input payload.\n        snapshot_tags = {}\n        base_tags = data.get("Tags", {}) if isinstance(data, dict) else {}\n        if isinstance(base_tags, dict):\n            snapshot_tags.update(base_tags)\n        snapshot_tags.update(event_tags)\n'''
+
+          if old not in text:
+              raise SystemExit('trigger event anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '''        report_id = save_report_snapshot(\n            writer.company_id,\n            event_tags,\n            products,\n            timestamp=timestamp,\n        )\n'''
+
+          new = '''        report_id = save_report_snapshot(\n            writer.company_id,\n            snapshot_tags,\n            products,\n            timestamp=timestamp,\n        )\n'''
+
+          if old not in text:
+              raise SystemExit('snapshot call anchor not found')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Remove temporary workflow after patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add flow_engine/trigger_edge_report_fix.py
+          git commit -m 'Fix trigger report ContractCode ProductCode context'
+          git push origin main
+          git rm .github/workflows/fix-trigger-report-context.yml
+          git commit -m 'Remove temporary trigger context patch workflow'
+          git push origin main
