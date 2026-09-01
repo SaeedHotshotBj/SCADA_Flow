@@ -25,7 +25,7 @@ def _flow_nodes(company_id):
     return flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
 
 
-def _management_config(company_id):
+def _management_configs(company_id):
     nodes = _flow_nodes(company_id)
     configs = []
     for node in nodes.values():
@@ -33,7 +33,13 @@ def _management_config(company_id):
             continue
         data = node.get("data", {}) or {}
         config = data.get("config", data) or {}
-        configs.append(config)
+        if isinstance(config, dict):
+            configs.append(config)
+    return configs
+
+
+def _management_config(company_id):
+    configs = _management_configs(company_id)
     return configs[-1] if configs else {}
 
 
@@ -351,21 +357,31 @@ def get_products(company_id):
 
 
 def _report_columns(company_id):
-    return [
-        item for item in get_report_products(company_id)
-        if not str(item.get("context_role", "")).strip()
-    ]
+    # ReportOutput definitions are intentionally NOT exposed by the ManagementPanel.
+    # Their values are still available internally to ManagementPanel calculations.
+    return []
 
 
 def _management_calculations(company_id):
+    # Prefer the newest ManagementPanel configuration, matching the flow editor's
+    # last-defined configuration for this company.
     config = _management_config(company_id)
     rows = config.get("calculations", []) if isinstance(config, dict) else []
-    return [
-        item for item in rows
-        if isinstance(item, dict)
-        and str(item.get("name", "")).strip()
-        and str(item.get("expression", "")).strip()
-    ]
+    result = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", item.get("result_name", ""))).strip()
+        expression = str(item.get("expression", "")).strip()
+        if not name or not expression:
+            continue
+        result.append({
+            "name": name,
+            "label": str(item.get("label", name)).strip() or name,
+            "expression": expression,
+            "unit": str(item.get("unit", "")).strip(),
+        })
+    return result
 
 
 def get_config(company_id):
@@ -374,7 +390,7 @@ def get_config(company_id):
     return {
         "configured": bool(config),
         "date_picker": config.get("DatePicker", "JalaliPicker"),
-        "report_columns": _report_columns(company_id),
+        "report_columns": [],
         "calculations": _management_calculations(company_id),
         "products": get_products(company_id),
     }
@@ -503,11 +519,13 @@ def get_management_data(company_id, filters=None):
         if not base_rows:
             return {"columns": [], "rows": [], "count": 0}
 
+        # ReportOutput values are used only as calculation inputs here.
         groups = _report_values_for_pairs(conn, company_id, base_rows)
-        report_columns = _report_columns(company_id)
         calculations = _management_calculations(company_id)
         expression_node = ExpressionNode({"expressions": calculations}) if calculations else None
 
+        # ManagementPanel output = fixed contract/product fields + ONLY the
+        # calculations explicitly designed in the ManagementPanel.
         columns = [
             {"key": "ContractCode", "label": "کد قرارداد", "unit": ""},
             {"key": "ContractDate", "label": "تاریخ عقد قرارداد", "unit": ""},
@@ -520,10 +538,6 @@ def get_management_data(company_id, filters=None):
             {"key": "CostPerKg", "label": "BOM / kg", "unit": ""},
             {"key": "CostPerMeter", "label": "BOM / m", "unit": ""},
         ]
-        columns.extend(
-            {"key": p["tag"], "label": p["name"], "unit": p.get("unit", "")}
-            for p in report_columns
-        )
         columns.extend(
             {
                 "key": str(item["name"]),
@@ -542,6 +556,8 @@ def get_management_data(company_id, filters=None):
             source = groups.get(pair_key, {"tags": {}})
             tags = {}
 
+            # Expose internal ReportValues tags to ManagementPanel calculations,
+            # but never expose them as table columns unless a calculation uses them.
             for tag, values in source["tags"].items():
                 numeric_values = []
                 for value in values:
@@ -549,9 +565,9 @@ def get_management_data(company_id, filters=None):
                         numeric_values.append(float(value))
                     except (TypeError, ValueError):
                         pass
-                tags[tag] = numeric_values
+                tags[tag] = numeric_values[-1] if numeric_values else 0
                 tags[f"{tag}_values"] = numeric_values
-                tags[f"{tag}_last"] = numeric_values[-1] if numeric_values else None
+                tags[f"{tag}_last"] = numeric_values[-1] if numeric_values else 0
 
             tags["OrderedQuantity"] = row["OrderedQuantity"]
             tags["CostPerKg"] = row["CostPerKg"]
@@ -561,7 +577,8 @@ def get_management_data(company_id, filters=None):
 
             calculated = {}
             if expression_node:
-                result = expression_node.execute({"Tags": tags}) or {}
+                calc_input = {"Tags": dict(tags)}
+                result = expression_node.execute(calc_input) or {}
                 calculated = dict(result.get("Tags", {}))
 
             display = {
@@ -576,10 +593,9 @@ def get_management_data(company_id, filters=None):
                 "CostPerKg": row["CostPerKg"],
                 "CostPerMeter": row["CostPerMeter"],
             }
-            for product in report_columns:
-                display[product["tag"]] = tags.get(product["tag"], [])
             for item in calculations:
-                display[str(item["name"])] = calculated.get(str(item["name"]))
+                key = str(item["name"])
+                display[key] = calculated.get(key)
             output_rows.append(display)
 
         return {"columns": columns, "rows": output_rows, "count": len(output_rows)}
