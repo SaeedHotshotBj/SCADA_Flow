@@ -27,7 +27,30 @@
   }
 
   function normalize(value) {
-    return String(value ?? '').trim().toLowerCase();
+    return String(value ?? '')
+      .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+      .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+      .trim()
+      .toLowerCase();
+  }
+
+  function normalizeCode(value) {
+    const text = normalize(value);
+    if (!text) return '';
+    // Make common numeric variants equivalent: 1, 1.0, 1.00 -> 1.
+    if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(text)) {
+      const numberValue = Number(text);
+      if (Number.isFinite(numberValue)) return String(numberValue);
+    }
+    return text;
+  }
+
+  function codeMatches(value, filter) {
+    const left = normalizeCode(value);
+    const right = normalizeCode(filter);
+    if (!right) return true;
+    if (left === right) return true;
+    return normalize(value).includes(normalize(filter));
   }
 
   function uniqueSorted(values) {
@@ -97,18 +120,20 @@
     const menu = document.createElement('div');
     menu.className = 'db-dropdown-menu';
     menu.hidden = true;
-    menu.style.position = 'absolute';
-    menu.style.top = 'calc(100% + 4px)';
-    menu.style.left = '0';
-    menu.style.right = '0';
-    menu.style.maxHeight = '240px';
-    menu.style.overflowY = 'auto';
-    menu.style.background = '#101418';
-    menu.style.border = '1px solid #52606d';
-    menu.style.borderRadius = '7px';
-    menu.style.boxShadow = '0 10px 25px rgba(0,0,0,.35)';
-    menu.style.zIndex = '100000';
-    menu.style.padding = '4px';
+    Object.assign(menu.style, {
+      position: 'absolute',
+      top: 'calc(100% + 4px)',
+      left: '0',
+      right: '0',
+      maxHeight: '240px',
+      overflowY: 'auto',
+      background: '#101418',
+      border: '1px solid #52606d',
+      borderRadius: '7px',
+      boxShadow: '0 10px 25px rgba(0,0,0,.35)',
+      zIndex: '100000',
+      padding: '4px'
+    });
     wrapper.appendChild(menu);
 
     return { wrapper, menu };
@@ -128,9 +153,7 @@
 
     if (!filtered.length) {
       const empty = document.createElement('div');
-      empty.textContent = input.id === 'contract_code' || input.id === 'contract_name' || input.id === 'product_code' || input.id === 'product_name'
-        ? 'موردی پیدا نشد'
-        : 'موردی پیدا نشد';
+      empty.textContent = 'موردی پیدا نشد';
       empty.style.padding = '8px 10px';
       empty.style.color = '#8e99a3';
       record.menu.appendChild(empty);
@@ -139,15 +162,17 @@
         const item = document.createElement('button');
         item.type = 'button';
         item.textContent = value;
-        item.style.display = 'block';
-        item.style.width = '100%';
-        item.style.padding = '8px 10px';
-        item.style.border = '0';
-        item.style.borderRadius = '5px';
-        item.style.background = 'transparent';
-        item.style.color = '#fff';
-        item.style.textAlign = 'right';
-        item.style.cursor = 'pointer';
+        Object.assign(item.style, {
+          display: 'block',
+          width: '100%',
+          padding: '8px 10px',
+          border: '0',
+          borderRadius: '5px',
+          background: 'transparent',
+          color: '#fff',
+          textAlign: 'right',
+          cursor: 'pointer'
+        });
         item.onmouseenter = () => { item.style.background = '#27313a'; };
         item.onmouseleave = () => { item.style.background = 'transparent'; };
         item.onclick = () => {
@@ -214,7 +239,6 @@
 
   function setupOutsideClick() {
     document.addEventListener('click', (event) => {
-      state.menus = state.menus;
       document.querySelectorAll('.db-dropdown-wrapper').forEach((wrapper) => {
         const input = wrapper.querySelector('input[data-db-dropdown-ready]');
         if (input && !wrapper.contains(event.target)) closeMenu(input);
@@ -222,13 +246,61 @@
     });
   }
 
+  function installProductFilterGuard() {
+    if (typeof window.loadData !== 'function' || window.loadData.__productFilterGuard) return;
+
+    const originalLoadData = window.loadData;
+    const guardedLoadData = async function () {
+      const result = await originalLoadData.apply(this, arguments);
+
+      const filterInput = document.getElementById('product_code');
+      const filterValue = filterInput ? filterInput.value.trim() : '';
+      if (!filterValue) return result;
+
+      const tbody = document.getElementById('tbody');
+      if (!tbody) return result;
+
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      let visible = 0;
+
+      rows.forEach((row) => {
+        const cells = row.querySelectorAll('td');
+        // Management table schema keeps ProductCode as the 4th column.
+        const cell = cells.length >= 4 ? cells[3].textContent.trim() : '';
+        const match = codeMatches(cell, filterValue);
+        row.style.display = match ? '' : 'none';
+        if (match) visible += 1;
+      });
+
+      const summary = document.getElementById('summary');
+      if (summary) {
+        const totalText = summary.textContent || '';
+        const suffix = totalText.includes('نمایش') ? totalText.replace(/^.*?(?=نمایش)/, '') : '';
+        summary.textContent = 'نتیجه فیلتر کد محصول: ' + visible + (suffix ? ' — ' + suffix : ' ردیف');
+      }
+
+      console.log('[MANAGEMENT] PRODUCT CODE FILTER GUARD:', {
+        requested: filterValue,
+        visibleRows: visible,
+        totalRows: rows.length
+      });
+
+      return result;
+    };
+
+    guardedLoadData.__productFilterGuard = true;
+    window.loadData = guardedLoadData;
+    log('Product-code filter guard installed.');
+  }
+
   async function refresh() {
     try {
       await loadOptions();
       scan(document);
+      installProductFilterGuard();
       log('DB-backed dropdowns initialized.');
     } catch (err) {
-      error('Failed to load DB dropdown options:', err);
+      error('Failed to initialize management helpers:', err);
     }
   }
 
@@ -240,8 +312,10 @@
     }
   });
 
-  observer.observe(document.body, { childList: true, subtree: true });
-  setupOutsideClick();
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
 
+  setupOutsideClick();
   refresh();
 })();
