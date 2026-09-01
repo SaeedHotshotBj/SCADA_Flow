@@ -329,6 +329,20 @@ def init_socketio(socketio):
     _install_authentication_guard(socketio)
     _install_socket_handlers(socketio)
 
+    # The company blueprint is kept separate from app.py so all
+    # legacy company/report routes and the management panel remain together.
+    # socketio.init_app(app) has already run before this function is called,
+    # therefore socketio.app is the active Flask application here.
+    try:
+        flask_app = getattr(socketio, "app", None)
+        if flask_app is not None:
+            from flow_company_routes import flow_company_bp
+            if "flow_company" not in flask_app.blueprints:
+                flask_app.register_blueprint(flow_company_bp)
+                print("FLOW COMPANY BLUEPRINT REGISTERED")
+    except Exception as exc:
+        print("FLOW COMPANY BLUEPRINT REGISTRATION ERROR:", exc)
+
 
 # =====================================================
 # SEND DASHBOARD DATA
