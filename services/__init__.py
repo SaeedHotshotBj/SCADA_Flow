@@ -5,21 +5,11 @@ import threading
 import time
 import sys
 
-
-# =====================================================
-# TREND AGGREGATION
-# =====================================================
-
 try:
     from .trend_runtime_fix import start as _start_trend_aggregation
     _start_trend_aggregation()
 except Exception as _trend_exc:
     print("TREND AGGREGATION START ERROR:", _trend_exc)
-
-
-# =====================================================
-# PLC CONFIGURATION FROM SAVED FLOW
-# =====================================================
 
 
 def _extract_plc_reader(flow_data):
@@ -54,7 +44,6 @@ def _sync_flow_plc(flow_data, company_id):
     except (TypeError, ValueError):
         slave_id = 1
     plc_name = str(data.get("name") or data.get("PLC_Name") or "PLC").strip()
-
     conn = cursor = None
     try:
         from database import get_connection
@@ -64,15 +53,9 @@ def _sync_flow_plc(flow_data, company_id):
         row = cursor.fetchone()
         if row:
             plc_id = int(row["PLC_ID"])
-            cursor.execute(
-                "UPDATE PLCs SET PLC_Name = ?, PLC_IP = ?, PLC_Port = ?, Slave_ID = ? WHERE PLC_ID = ?",
-                (plc_name, plc_ip, plc_port, slave_id, plc_id),
-            )
+            cursor.execute("UPDATE PLCs SET PLC_Name = ?, PLC_IP = ?, PLC_Port = ?, Slave_ID = ? WHERE PLC_ID = ?", (plc_name, plc_ip, plc_port, slave_id, plc_id))
         else:
-            cursor.execute(
-                "INSERT INTO PLCs (CompanyID, PLC_Name, PLC_IP, PLC_Port, Slave_ID) VALUES (?, ?, ?, ?, ?)",
-                (int(company_id), plc_name, plc_ip, plc_port, slave_id),
-            )
+            cursor.execute("INSERT INTO PLCs (CompanyID, PLC_Name, PLC_IP, PLC_Port, Slave_ID) VALUES (?, ?, ?, ?, ?)", (int(company_id), plc_name, plc_ip, plc_port, slave_id))
             plc_id = cursor.lastrowid
         conn.commit()
         print("PLC FLOW SYNC OK:", "CompanyID=", company_id, "PLC_ID=", plc_id, "IP=", plc_ip, "PORT=", plc_port, "SLAVE=", slave_id)
@@ -104,9 +87,7 @@ def _sync_all_saved_flows():
         from database import get_connection
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT FlowID, CompanyID, FlowJson FROM Flows WHERE CompanyID IS NOT NULL AND FlowJson IS NOT NULL AND TRIM(FlowJson) <> '' ORDER BY FlowID"
-        )
+        cursor.execute("SELECT FlowID, CompanyID, FlowJson FROM Flows WHERE CompanyID IS NOT NULL AND FlowJson IS NOT NULL AND TRIM(FlowJson) <> '' ORDER BY FlowID")
         rows = cursor.fetchall()
         print("PLC FLOW STARTUP SYNC FLOWS:", len(rows))
         for row in rows:
@@ -197,20 +178,14 @@ threading.Thread(target=_install_save_flow_sync_retry, name="SCADA-Flow-PLC-Hook
 threading.Thread(target=_startup_sync_retry, name="SCADA-Flow-PLC-Startup-Sync", daemon=True).start()
 
 
-# =====================================================
-# MASTER LOGS / DEBUG PAGE
-# =====================================================
-
-
 def _load_master_logs_after_app_startup():
-    """Import master_logs only after the Flask app object exists."""
     for attempt in range(120):
         try:
             app_module = sys.modules.get("app") or sys.modules.get("__main__")
             flask_app = getattr(app_module, "app", None) if app_module else None
             if flask_app is not None:
                 if "services.master_logs" not in sys.modules:
-                    from . import master_logs  # noqa: F401
+                    from . import master_logs
                 print("MASTER LOGS MODULE LOADED AFTER APP STARTUP")
                 return
         except Exception as exc:
@@ -219,16 +194,8 @@ def _load_master_logs_after_app_startup():
     print("MASTER LOGS LOAD FAILED AFTER RETRIES")
 
 
-threading.Thread(
-    target=_load_master_logs_after_app_startup,
-    name="SCADA-Master-Logs-Loader",
-    daemon=True,
-).start()
+threading.Thread(target=_load_master_logs_after_app_startup, name="SCADA-Master-Logs-Loader", daemon=True).start()
 
-
-# =====================================================
-# FLOW COMPANY BLUEPRINT REGISTRATION
-# =====================================================
 
 def _install_flow_company_blueprint():
     app_module = sys.modules.get("app") or sys.modules.get("__main__")
@@ -262,10 +229,6 @@ def _install_flow_company_blueprint_retry():
 threading.Thread(target=_install_flow_company_blueprint_retry, name="SCADA-Flow-Company-Routes", daemon=True).start()
 
 
-# =====================================================
-# EDGE TIMEOUT WORKER BOOTSTRAP
-# =====================================================
-
 def _start_edge_timeout_worker_retry():
     for attempt in range(120):
         try:
@@ -280,3 +243,63 @@ def _start_edge_timeout_worker_retry():
 
 
 threading.Thread(target=_start_edge_timeout_worker_retry, name="SCADA-Edge-Timeout-Bootstrap", daemon=True).start()
+
+
+# =====================================================
+# REPORT CONTEXT WIRING
+# =====================================================
+
+
+def _install_report_context_wiring():
+    """Prefer ContractCode/ProductCode already produced by TagMapper."""
+    for _ in range(120):
+        try:
+            module = sys.modules.get("flow_engine.nodes.report_output")
+            if module is None:
+                time.sleep(0.5)
+                continue
+
+            report_output = getattr(module, "ReportOutput", None)
+            if report_output is None:
+                time.sleep(0.5)
+                continue
+
+            if getattr(report_output, "_management_context_wiring_installed", False):
+                return
+
+            original = report_output._management_context_tags
+
+            def _wired_management_context(self, data):
+                result = {}
+                tags = data.get("Tags", {}) if isinstance(data, dict) else {}
+                if isinstance(tags, dict):
+                    lookup = {
+                        str(name).strip().lower(): value
+                        for name, value in tags.items()
+                    }
+                    for result_key, aliases in {
+                        "ContractCode": ("contractcode", "contract_code", "contract code"),
+                        "ProductCode": ("productcode", "product_code", "product code"),
+                    }.items():
+                        for alias in aliases:
+                            value = lookup.get(alias)
+                            if value not in (None, ""):
+                                result[result_key] = str(value).strip()
+                                break
+
+                if result:
+                    return result
+                return original(self, data)
+
+            report_output._management_context_tags = _wired_management_context
+            report_output._management_context_wiring_installed = True
+            print("REPORT MANAGEMENT CONTEXT WIRING INSTALLED")
+            return
+        except Exception as exc:
+            print("REPORT MANAGEMENT CONTEXT WIRING RETRY:", exc)
+        time.sleep(0.5)
+
+    print("REPORT MANAGEMENT CONTEXT WIRING FAILED")
+
+
+threading.Thread(target=_install_report_context_wiring, name="SCADA-Report-Management-Context-Wiring", daemon=True).start()
