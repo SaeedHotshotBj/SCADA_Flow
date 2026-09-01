@@ -57,10 +57,7 @@ def _register_value(registers, register):
 
 
 def _read_context(company_id, registers):
-    result = {
-        "ContractCode": None,
-        "ProductCode": None,
-    }
+    result = {"ContractCode": None, "ProductCode": None}
 
     try:
         flow_json = get_company_flow(company_id)
@@ -68,11 +65,7 @@ def _read_context(company_id, registers):
             return result
 
         flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
-        nodes = (
-            flow.get("drawflow", {})
-            .get("Home", {})
-            .get("data", {})
-        )
+        nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
 
         management_config = None
         for node in nodes.values():
@@ -84,11 +77,14 @@ def _read_context(company_id, registers):
         if not isinstance(management_config, dict):
             return result
 
-        contract_register = management_config.get("contract_code_register")
-        product_register = management_config.get("product_code_register")
-
-        contract_value = _register_value(registers or {}, contract_register)
-        product_value = _register_value(registers or {}, product_register)
+        contract_value = _register_value(
+            registers or {},
+            management_config.get("contract_code_register"),
+        )
+        product_value = _register_value(
+            registers or {},
+            management_config.get("product_code_register"),
+        )
 
         if contract_value not in (None, ""):
             result["ContractCode"] = str(contract_value).strip()
@@ -145,6 +141,7 @@ def _store_tag_history(company_id, tag, value, timestamp, context):
 
 
 def _context_aware_insert(company_id, tag, value, storage_type, timestamp=None):
+    # Preserve the existing PLC_Data write exactly as before.
     _database_insert_tag_value(
         company_id,
         tag,
@@ -178,7 +175,7 @@ def _context_aware_insert(company_id, tag, value, storage_type, timestamp=None):
 
 
 def install():
-    """Patch historian/SQLWriter insert calls once, without changing their storage logic."""
+    """Patch only the historian/SQLWriter insert references."""
     global _installed
     if _installed:
         return
@@ -192,9 +189,7 @@ def install():
             (sql_writer_module, "insert_tag_value"),
         ):
             original = getattr(module, name, None)
-            if original is None:
-                continue
-            if original is _context_aware_insert:
+            if original is None or original is _context_aware_insert:
                 continue
             _originals[(module.__name__, name)] = original
             setattr(module, name, _context_aware_insert)
@@ -203,3 +198,29 @@ def install():
         print("MANAGEMENT CONTEXT PATCH INSTALLED")
     except Exception as exc:
         print("MANAGEMENT CONTEXT PATCH ERROR:", exc)
+
+
+# =====================================================
+# SQL WRITER WRAPPER
+# =====================================================
+
+from flow_engine.nodes.sql_writer import SQLWriter as _BaseSQLWriter
+
+
+class ManagementSQLWriter(_BaseSQLWriter):
+    """Existing SQLWriter plus ManagementPanel Contract/Product context."""
+
+    def __init__(self, config=None):
+        install()
+        super().__init__(config)
+
+    def execute(self, data=None):
+        payload = data if isinstance(data, dict) else {}
+        registers = payload.get("Registers", payload.get("registers", {})) or {}
+        company_id = self.company_id
+
+        set_context(company_id, registers)
+        try:
+            return super().execute(data)
+        finally:
+            clear_context()
