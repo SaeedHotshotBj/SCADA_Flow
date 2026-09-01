@@ -1,0 +1,61 @@
+name: Fix ManagementPanel jQuery dollar collision
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-management-jquery-dollar.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rename local dollar helper and stabilize datepicker init
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path('templates/management.html')
+          text = path.read_text(encoding='utf-8')
+
+          # The page had a global function named `$`, which overwrote jQuery's
+          # global `$`. Persian-datepicker uses $.extend internally, so this
+          # caused: "$.extend is not a function".
+          text = text.replace(
+              'function $(id){return document.getElementById(id)}',
+              'function byId(id){return document.getElementById(id)}',
+              1,
+          )
+
+          # Rename page helper calls only. Do not touch jQuery variables such as $el.
+          text = re.sub(r"\$\('([A-Za-z0-9_-]+)'\)", r"byId('\1')", text)
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Verify
+        shell: bash
+        run: |
+          grep -q 'function byId(id)' templates/management.html
+          if grep -q 'function $(id)' templates/management.html; then exit 1; fi
+          grep -q 'persian-datepicker@1.2.0' templates/management.html
+          grep -q 'jQuery.fn.persianDatepicker' templates/management.html
+          git diff --check
+
+      - name: Commit
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add templates/management.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Fix jQuery dollar collision in ManagementPanel datepicker'
+          git push origin main
