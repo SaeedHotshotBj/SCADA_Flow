@@ -17,6 +17,13 @@ from services.management_service import (
     get_products,
 )
 from services.management_migration import ensure_management_schema
+from services.management_crud import (
+    get_contract_by_code,
+    update_contract,
+    delete_contract,
+    update_product,
+    delete_product,
+)
 
 
 def _management_company_id():
@@ -72,6 +79,48 @@ def management_contract_create():
         return jsonify({"status": "error", "message": str(exc)}), 400
 
 
+@flow_company_bp.get("/management/contracts/detail")
+def management_contract_detail():
+    company_id = _management_company_id()
+    if company_id is None or not _management_allowed(company_id):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+    try:
+        _prepare_management_db()
+        contract_code = request.args.get("contract_code", "")
+        return jsonify(get_contract_by_code(company_id, contract_code))
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+
+
+@flow_company_bp.put("/management/contracts/detail")
+def management_contract_update():
+    company_id = _management_company_id()
+    if company_id is None or not _management_allowed(company_id):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+    try:
+        payload = request.get_json(silent=True) or {}
+        original_code = str(payload.pop("original_contract_code", "")).strip()
+        _prepare_management_db()
+        contract_id = update_contract(company_id, original_code, payload)
+        return jsonify({"status": "ok", "ContractID": contract_id})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@flow_company_bp.delete("/management/contracts/detail")
+def management_contract_delete():
+    company_id = _management_company_id()
+    if company_id is None or not _management_allowed(company_id):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+    try:
+        _prepare_management_db()
+        contract_code = request.args.get("contract_code", "")
+        contract_id = delete_contract(company_id, contract_code)
+        return jsonify({"status": "ok", "ContractID": contract_id})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
 @flow_company_bp.post("/management/products")
 def management_product_save():
     company_id = _management_company_id()
@@ -84,6 +133,35 @@ def management_product_save():
         return jsonify({"status": "ok", "ProductID": product_id}), 201
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@flow_company_bp.put("/management/products")
+def management_product_update():
+    company_id = _management_company_id()
+    if company_id is None or not _management_allowed(company_id):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+    try:
+        payload = request.get_json(silent=True) or {}
+        product_id = payload.pop("product_id", None)
+        _prepare_management_db()
+        product_id = update_product(company_id, product_id, payload)
+        return jsonify({"status": "ok", "ProductID": product_id})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@flow_company_bp.delete("/management/products")
+def management_product_delete():
+    company_id = _management_company_id()
+    if company_id is None or not _management_allowed(company_id):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+    try:
+        product_id = request.args.get("product_id", type=int)
+        _prepare_management_db()
+        deleted_id = delete_product(company_id, product_id)
+        return jsonify({"status": "ok", "ProductID": deleted_id})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 409
 
 
 @flow_company_bp.get("/management/products")
