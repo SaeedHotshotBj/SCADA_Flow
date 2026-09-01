@@ -1,0 +1,53 @@
+name: Apply ManagementPanel jQuery collision fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fix global dollar collision
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path('templates/management.html')
+          text = path.read_text(encoding='utf-8')
+
+          text = text.replace(
+              'function $(id){return document.getElementById(id)}',
+              'function byId(id){return document.getElementById(id)}',
+              1,
+          )
+          text = re.sub(r"\$\('([A-Za-z0-9_-]+)'\)", r"byId('\1')", text)
+
+          if 'function $(id)' in text:
+              raise SystemExit('Global $ helper remains')
+          if 'function byId(id)' not in text:
+              raise SystemExit('byId helper missing')
+          if 'jQuery.fn.pDatepicker' not in text:
+              raise SystemExit('Persian datepicker initialization missing')
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          git add templates/management.html
+          git diff --cached --quiet && exit 0
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Fix ManagementPanel jQuery dollar collision'
+          git push origin main
