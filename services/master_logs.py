@@ -299,7 +299,7 @@ def _install():
                 diagnostics=data,
             )
 
-        # FLOW-DRIVEN REPORT DATA ENDPOINT
+        # REPORT TRIGGER TRACE VIEWER\n        @flask_app.get("/master/report-trigger-log")\n        def master_report_trigger_log():\n            from flask import session as flask_session, Response\n            if flask_session.get("role", "").strip().lower() != "master":\n                return redirect(url_for("login", next=request.path))\n\n            import os\n            log_path = os.path.join(\n                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),\n                "logs",\n                "report_trigger_trace.log",\n            )\n\n            try:\n                with open(log_path, "r", encoding="utf-8", errors="replace") as handle:\n                    lines = handle.readlines()[-500:]\n                body = "".join(lines)\n                if not body:\n                    body = "REPORT TRIGGER TRACE LOG IS EMPTY\\n"\n            except Exception as exc:\n                body = f"REPORT TRIGGER TRACE LOG READ ERROR: {exc}\\n"\n\n            return Response(\n                body,\n                mimetype="text/plain; charset=utf-8",\n            )\n\n        # FLOW-DRIVEN REPORT DATA ENDPOINT
         @flask_app.post("/flow_report")
         def flow_report_runtime_endpoint():
             from flask import jsonify, session as flask_session
