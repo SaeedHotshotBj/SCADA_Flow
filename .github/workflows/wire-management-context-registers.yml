@@ -19,33 +19,39 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-
           path = Path('flow_engine/nodes/report_output.py')
           text = path.read_text(encoding='utf-8')
-
           anchor = '''    @staticmethod\n    def normalize_date(value, calendar):\n'''
-
-          methods = '''    def _management_context_tags(self, data):\n        """Resolve ContractCode/ProductCode from ManagementPanel registers.\n\n        Register addresses are configured per company inside the Flow's\n        ManagementPanel node. Nothing is hard-coded here.\n        """\n        if self.company_id is None:\n            return {}\n\n        registers = data.get("Registers", {}) or {}\n        if not isinstance(registers, dict):\n            return {}\n\n        try:\n            flow = get_company_flow(self.company_id)\n            if isinstance(flow, str):\n                flow = json.loads(flow)\n            nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})\n\n            config = {}\n            for node in nodes.values():\n                if not isinstance(node, dict) or node.get("name") != "ManagementPanel":\n                    continue\n                raw = node.get("data", {}) or {}\n                config = raw.get("config", raw) or {}\n                break\n\n            def read_register(field):\n                address = config.get(field)\n                if address in (None, ""):\n                    return None\n                key = str(address).strip()\n                if key in registers:\n                    return registers[key]\n                try:\n                    return registers.get(str(int(float(key))))\n                except (TypeError, ValueError):\n                    return None\n\n            result = {}\n            contract = read_register("contract_code_register")\n            product = read_register("product_code_register")\n            if contract is not None:\n                result["ContractCode"] = contract\n            if product is not None:\n                result["ProductCode"] = product\n            return result\n        except Exception as exc:\n            print("REPORT MANAGEMENT REGISTER LOAD ERROR:", exc)\n            return {}\n\n'''
-
+          methods = '''    def _management_context_tags(self, data):\n        """Resolve ContractCode/ProductCode from ManagementPanel settings."""\n        if self.company_id is None:\n            return {}\n        try:\n            flow = get_company_flow(self.company_id)\n            if isinstance(flow, str):\n                flow = json.loads(flow)\n            nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})\n            config = {}\n            for node in nodes.values():\n                if not isinstance(node, dict):\n                    continue\n                raw = node.get("data", {}) or {}\n                if node.get("name") == "ManagementPanel":\n                    config = raw.get("config", raw) or {}\n                    break\n            tags = data.get("Tags", {}) or {}\n            if not isinstance(tags, dict):\n                tags = {}\n            lookup = {str(k).strip().lower(): v for k, v in tags.items()}\n            result = {}\n            for key, aliases in {\n                "ContractCode": ("contractcode", "contract_code", "contract code"),\n                "ProductCode": ("productcode", "product_code", "product code"),\n            }.items():\n                for alias in aliases:\n                    value = lookup.get(alias)\n                    if value not in (None, ""):\n                        result[key] = str(value).strip()\n                        break\n            if result:\n                return result\n            registers = data.get("Registers", {}) or {}\n            mappings = []\n            for node in nodes.values():\n                if isinstance(node, dict) and node.get("name") == "TagMapper":\n                    mappings = (node.get("data", {}) or {}).get("mappings", [])\n                    break\n            register_to_tag = {}\n            for mapping in mappings if isinstance(mappings, list) else []:\n                if not isinstance(mapping, dict):\n                    continue\n                try:\n                    register_to_tag[int(float(mapping.get("register")))] = str(mapping.get("name", "")).strip()\n                except (TypeError, ValueError):\n                    pass\n            for key, field in (("ContractCode", "contract_code_register"), ("ProductCode", "product_code_register")):\n                try:\n                    address = int(float(config.get(field)))\n                except (TypeError, ValueError):\n                    continue\n                tag_name = register_to_tag.get(address)\n                if tag_name and tag_name.lower() in lookup:\n                    result[key] = str(lookup[tag_name.lower()]).strip()\n                elif str(address) in registers:\n                    result[key] = str(registers[str(address)]).strip()\n            return result\n        except Exception as exc:\n            print("REPORT MANAGEMENT REGISTER LOAD ERROR:", exc)\n            return {}\n\n'''
           if methods not in text:
               if anchor not in text:
                   raise SystemExit('normalize_date anchor not found')
               text = text.replace(anchor, methods + anchor, 1)
-
           old = '''        tags = self._runtime_tags_for_products(data)\n        if not tags:\n            print("REPORT SNAPSHOT SKIPPED: no runtime values")\n            return 0\n\n        timestamp = data.get("Timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")\n        report_id = save_report_snapshot(\n            self.company_id,\n            tags,\n            self.products,\n            timestamp=timestamp,\n        )\n'''
-
           new = '''        tags = self._runtime_tags_for_products(data)\n        tags.update(self._management_context_tags(data))\n        if not tags:\n            print("REPORT SNAPSHOT SKIPPED: no runtime values")\n            return 0\n\n        report_products = list(self.products)\n        if "ContractCode" in tags and not any(\n            isinstance(item, dict) and str(item.get("context_role", "")).strip().lower() in ("contract", "contract_code", "contractid", "contract_id")\n            for item in report_products\n        ):\n            report_products.append({"tag": "ContractCode", "name": "ContractCode", "context_role": "contract_code"})\n        if "ProductCode" in tags and not any(\n            isinstance(item, dict) and str(item.get("context_role", "")).strip().lower() in ("product", "product_code", "productid", "product_id")\n            for item in report_products\n        ):\n            report_products.append({"tag": "ProductCode", "name": "ProductCode", "context_role": "product_code"})\n\n        timestamp = data.get("Timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")\n        report_id = save_report_snapshot(\n            self.company_id,\n            tags,\n            report_products,\n            timestamp=timestamp,\n        )\n'''
-
           if old not in text:
               raise SystemExit('snapshot block not found')
           text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+
+      - name: Patch report service direct context fallback
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('services/report_service.py')
+          text = path.read_text(encoding='utf-8')
+          anchor = '''    if product_code in (None, ""):\n        product_code = management_context.get(\n            "ProductCode"\n        )\n\n    values = []\n'''
+          replacement = '''    if product_code in (None, ""):\n        product_code = management_context.get(\n            "ProductCode"\n        )\n\n    # TagMapper already exposes these two context tags. They must override\n    # the optional ReportOutput context-role configuration when present.\n    direct_lookup = {\n        str(name).strip().lower(): value\n        for name, value in tags.items()\n    }\n    if contract_code in (None, "") and direct_lookup.get("contractcode") not in (None, ""):\n        contract_code = str(direct_lookup["contractcode"]).strip()\n    if product_code in (None, "") and direct_lookup.get("productcode") not in (None, ""):\n        product_code = str(direct_lookup["productcode"]).strip()\n\n    values = []\n'''
+          if anchor not in text:
+              raise SystemExit('report service anchor not found')
+          text = text.replace(anchor, replacement, 1)
           path.write_text(text, encoding='utf-8')
 
       - name: Commit patch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add flow_engine/nodes/report_output.py
+          git add flow_engine/nodes/report_output.py services/report_service.py
           git diff --cached --quiet && exit 0
-          git commit -m 'Wire ManagementPanel PLC registers into report snapshots'
+          git commit -m 'Fix ManagementPanel ContractCode ProductCode report context'
           git push origin main
