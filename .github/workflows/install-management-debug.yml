@@ -1,0 +1,45 @@
+name: install-management-debug
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: contains(github.event.head_commit.message, 'Install visible ManagementPanel debug') == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch management template
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('templates/management.html')
+          text = p.read_text(encoding='utf-8')
+          tag = '<script src="{{ url_for(\'static\', filename=\'management_debug.js\') }}"></script>'
+          if tag not in text:
+              marker = '</body>'
+              if marker not in text:
+                  raise SystemExit('management.html: </body> not found')
+              text = text.replace(marker, tag + '\n' + marker, 1)
+              p.write_text(text, encoding='utf-8')
+              print('VISIBLE MANAGEMENT DEBUG SCRIPT INSTALLED')
+          else:
+              print('VISIBLE MANAGEMENT DEBUG SCRIPT ALREADY INSTALLED')
+          PY
+
+      - name: Commit and remove workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add templates/management.html static/management_debug.js
+          git rm .github/workflows/install-management-debug.yml
+          git commit -m "Install visible ManagementPanel debug"
+          git push
