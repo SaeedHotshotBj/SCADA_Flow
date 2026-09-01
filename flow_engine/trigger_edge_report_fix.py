@@ -276,6 +276,15 @@ def save_edge_trigger_reports(original_execute, writer, data):
         if not isinstance(event_tags, dict) or not event_tags:
             continue
 
+        # Keep the complete TagMapper output for the report snapshot.
+        # The Edge trigger event contains B1/B2/B3 only, while ContractCode
+        # and ProductCode are already present in the SQLWriter input payload.
+        snapshot_tags = {}
+        base_tags = data.get("Tags", {}) if isinstance(data, dict) else {}
+        if isinstance(base_tags, dict):
+            snapshot_tags.update(base_tags)
+        snapshot_tags.update(event_tags)
+
         timestamp = event.get("timestamp")
         if not timestamp:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -301,7 +310,7 @@ def save_edge_trigger_reports(original_execute, writer, data):
 
         report_id = save_report_snapshot(
             writer.company_id,
-            event_tags,
+            snapshot_tags,
             products,
             timestamp=timestamp,
         )
