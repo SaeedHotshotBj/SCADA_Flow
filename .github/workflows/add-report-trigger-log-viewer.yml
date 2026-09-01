@@ -1,0 +1,44 @@
+name: Add report trigger log viewer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/add-report-trigger-log-viewer.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch master logs with report trigger log viewer
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('services/master_logs.py')
+          text = path.read_text(encoding='utf-8')
+
+          if '/master/report-trigger-log' in text:
+              raise SystemExit('viewer already present')
+
+          anchor = '''        # FLOW-DRIVEN REPORT DATA ENDPOINT\n'''
+          if anchor not in text:
+              raise SystemExit('anchor not found')
+
+          block = r'''        # REPORT TRIGGER TRACE VIEWER\n        @flask_app.get("/master/report-trigger-log")\n        def master_report_trigger_log():\n            from flask import session as flask_session, Response\n            if flask_session.get("role", "").strip().lower() != "master":\n                return redirect(url_for("login", next=request.path))\n\n            import os\n            log_path = os.path.join(\n                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),\n                "logs",\n                "report_trigger_trace.log",\n            )\n\n            try:\n                with open(log_path, "r", encoding="utf-8", errors="replace") as handle:\n                    lines = handle.readlines()[-500:]\n                body = "".join(lines)\n                if not body:\n                    body = "REPORT TRIGGER TRACE LOG IS EMPTY\\n"\n            except Exception as exc:\n                body = f"REPORT TRIGGER TRACE LOG READ ERROR: {exc}\\n"\n\n            return Response(\n                body,\n                mimetype="text/plain; charset=utf-8",\n            )\n\n'''
+
+          text = text.replace(anchor, block + anchor, 1)
+          path.write_text(text, encoding='utf-8')
+
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add services/master_logs.py
+          git commit -m 'Add report trigger trace browser viewer'
+          git push origin main
