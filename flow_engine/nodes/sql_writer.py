@@ -126,10 +126,7 @@ class SQLWriter:
             def register_value(address):
                 if address is None:
                     return None
-                for key in (
-                    str(address),
-                    address,
-                ):
+                for key in (str(address), address):
                     if key in registers:
                         value = registers[key]
                         if value not in (None, ""):
@@ -293,13 +290,14 @@ class SQLWriter:
         tags,
         edge_trigger_events,
         report_products,
+        registers=None,
     ):
-        """Create the Trigger Report from the event produced by PLCReader.
+        """Create each Trigger Report with Management context already attached.
 
-        Edge-trigger detection is already performed upstream by
-        trigger_edge_report_fix.py. Those events are the authoritative trigger
-        signal for the historian-backed Edge deployment, so this function is
-        the single SQLWriter-owned ReportHistory persistence path for them.
+        IMPORTANT:
+        EdgeTriggerEvents may arrive after the normal TagMapper payload that
+        contained ContractCode/ProductCode. The report must therefore resolve
+        ManagementPanel context BEFORE save_report_snapshot(), not afterward.
         """
         if not report_products or not isinstance(edge_trigger_events, list):
             return 0
@@ -316,6 +314,13 @@ class SQLWriter:
 
         saved = 0
 
+        # Resolve context once from the SAME runtime registers used by this
+        # SQLWriter call. This is deterministic and does not depend on the
+        # ordering of separate Edge HTTP requests.
+        management_context = self._get_management_context_tags(
+            registers if isinstance(registers, dict) else {}
+        )
+
         for event in edge_trigger_events:
             if not isinstance(event, dict):
                 continue
@@ -331,14 +336,34 @@ class SQLWriter:
             if not matched_tags.intersection(report_tag_set):
                 continue
 
-            snapshot_tags = dict(tags) if isinstance(tags, dict) else {}
+            snapshot_tags = (
+                dict(tags)
+                if isinstance(tags, dict)
+                else {}
+            )
+
+            # ManagementPanel context MUST be applied before the report
+            # snapshot is inserted. Direct TagMapper values are preferred
+            # over register-derived values when both are available.
+            for context_name, context_value in management_context.items():
+                if context_value not in (None, ""):
+                    snapshot_tags.setdefault(
+                        context_name,
+                        context_value,
+                    )
+
             for name, value in event_tags.items():
                 if value is not None:
                     snapshot_tags[str(name).strip()] = value
 
-            # The ManagementPanel context comes from the same TagMapper payload.
-            # Do not replace it with the historical event payload because the
-            # event intentionally contains only the Trigger report tags.
+            # Re-apply authoritative ManagementPanel values after adding the
+            # event tags. Edge event payloads contain only Trigger tags and
+            # therefore normally do not contain context, but this guarantees
+            # that the register-derived context wins if needed.
+            for context_name, context_value in management_context.items():
+                if context_value not in (None, ""):
+                    snapshot_tags[context_name] = context_value
+
             contract_code = snapshot_tags.get("ContractCode")
             product_code = snapshot_tags.get("ProductCode")
 
@@ -730,12 +755,11 @@ class SQLWriter:
 
         # EdgeTriggerEvents are already edge-detected upstream. They are the
         # authoritative Trigger signal for the historian-backed Edge path.
-        # Use them directly so a missing raw trigger register cannot suppress
-        # the report. The existing raw-register path remains as a fallback.
         edge_report_written = self._save_edge_trigger_events(
             tags,
             edge_trigger_events,
             report_products,
+            registers=registers,
         )
 
         trigger_written = 0
