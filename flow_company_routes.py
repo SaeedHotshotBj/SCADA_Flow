@@ -16,6 +16,7 @@ from services.management_service import (
     save_product,
     get_products,
 )
+from services.management_migration import ensure_management_schema
 
 
 def _management_company_id():
@@ -32,6 +33,11 @@ def _management_allowed(company_id):
     )
 
 
+def _prepare_management_db():
+    ensure_management_tables()
+    ensure_management_schema()
+
+
 @flow_company_bp.get("/management")
 def management_page():
     company_id = _management_company_id()
@@ -39,7 +45,7 @@ def management_page():
         return jsonify({"status": "error", "message": "Company is required"}), 403
     if not _management_allowed(company_id):
         return render_template("access_denied.html"), 403
-    ensure_management_tables()
+    _prepare_management_db()
     return render_template("management.html", company_id=company_id)
 
 
@@ -48,6 +54,7 @@ def management_config():
     company_id = _management_company_id()
     if company_id is None or not _management_allowed(company_id):
         return jsonify({"status": "error", "message": "Access denied"}), 403
+    _prepare_management_db()
     return jsonify(get_management_config(company_id))
 
 
@@ -58,6 +65,7 @@ def management_contract_create():
         return jsonify({"status": "error", "message": "Access denied"}), 403
     try:
         payload = request.get_json(silent=True) or {}
+        _prepare_management_db()
         contract_id = save_contract(company_id, payload)
         return jsonify({"status": "ok", "ContractID": contract_id}), 201
     except Exception as exc:
@@ -71,6 +79,7 @@ def management_product_save():
         return jsonify({"status": "error", "message": "Access denied"}), 403
     try:
         payload = request.get_json(silent=True) or {}
+        _prepare_management_db()
         product_id = save_product(company_id, payload)
         return jsonify({"status": "ok", "ProductID": product_id}), 201
     except Exception as exc:
@@ -82,6 +91,7 @@ def management_products():
     company_id = _management_company_id()
     if company_id is None or not _management_allowed(company_id):
         return jsonify({"status": "error", "message": "Access denied"}), 403
+    _prepare_management_db()
     return jsonify(get_products(company_id))
 
 
@@ -91,6 +101,7 @@ def management_data():
     if company_id is None or not _management_allowed(company_id):
         return jsonify({"status": "error", "message": "Access denied"}), 403
     try:
+        _prepare_management_db()
         return jsonify(get_management_data(company_id, request.args.to_dict(flat=True)))
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
