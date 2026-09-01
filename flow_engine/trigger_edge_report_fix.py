@@ -32,7 +32,7 @@ _TRACE_PATH = os.path.join(
     "logs",
     "report_trigger_trace.log",
 )
-_TRACE_VERSION = "2026-09-01-v1"
+_TRACE_VERSION = "2026-09-01-v2"
 
 
 def _trace(message, **fields):
@@ -396,6 +396,101 @@ def _report_history_latest(company_id):
         conn.close()
 
 
+def _attach_exact_report_context(company_id, report_id, snapshot_tags, trace_id):
+    """Write ManagementPanel context onto the exact new ReportHistory row.
+
+    The context is taken from the same TagMapper payload used to build the
+    report snapshot. This avoids any dependency on ReportOutput context-role
+    configuration and avoids touching older report rows.
+    """
+    if report_id is None or not isinstance(snapshot_tags, dict):
+        return None
+
+    lookup = {
+        str(name).strip().lower(): value
+        for name, value in snapshot_tags.items()
+    }
+
+    contract_code = lookup.get("contractcode")
+    product_code = lookup.get("productcode")
+
+    if contract_code in (None, "") and product_code in (None, ""):
+        _trace(
+            "REPORT_CONTEXT_NOT_PRESENT",
+            trace_id=trace_id,
+            company_id=company_id,
+            report_id=report_id,
+            available_tags=list(snapshot_tags.keys()),
+        )
+        return None
+
+    conn = get_connection()
+    try:
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                'PRAGMA table_info("ReportHistory")'
+            ).fetchall()
+        }
+
+        if "ContractCode" not in columns or "ProductCode" not in columns:
+            _trace(
+                "REPORT_CONTEXT_COLUMNS_MISSING",
+                trace_id=trace_id,
+                company_id=company_id,
+                report_id=report_id,
+                columns=sorted(columns),
+            )
+            return None
+
+        cursor = conn.execute(
+            """
+            UPDATE ReportHistory
+            SET ContractCode = ?,
+                ProductCode = ?
+            WHERE ReportID = ?
+              AND CompanyID = ?
+            """,
+            (
+                None if contract_code in (None, "") else str(contract_code).strip(),
+                None if product_code in (None, "") else str(product_code).strip(),
+                int(report_id),
+                int(company_id),
+            ),
+        )
+        conn.commit()
+
+        updated = _report_history_latest(company_id)
+        _trace(
+            "REPORT_CONTEXT_EXACT_UPDATE",
+            trace_id=trace_id,
+            company_id=company_id,
+            report_id=report_id,
+            rows_updated=cursor.rowcount,
+            contract_code=contract_code,
+            product_code=product_code,
+            latest_report_history=updated,
+        )
+        return updated
+
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _trace(
+            "REPORT_CONTEXT_EXACT_UPDATE_ERROR",
+            trace_id=trace_id,
+            company_id=company_id,
+            report_id=report_id,
+            error=repr(exc),
+            traceback=traceback.format_exc(),
+        )
+        raise
+    finally:
+        conn.close()
+
+
 def save_edge_trigger_reports(original_execute, writer, data):
     """Run SQLWriter, then persist one ReportHistory snapshot per fresh Edge event."""
     trace_id = str(uuid.uuid4())
@@ -431,7 +526,11 @@ def save_edge_trigger_reports(original_execute, writer, data):
         events=events,
     )
     if not isinstance(events, list) or not events:
-        _trace("REPORT_SAVE_NO_EVENTS", trace_id=trace_id, company_id=getattr(writer, "company_id", None))
+        _trace(
+            "REPORT_SAVE_NO_EVENTS",
+            trace_id=trace_id,
+            company_id=getattr(writer, "company_id", None),
+        )
         return result
 
     products = get_report_products(writer.company_id)
@@ -443,7 +542,11 @@ def save_edge_trigger_reports(original_execute, writer, data):
         products=products,
     )
     if not products:
-        _trace("REPORT_SAVE_NO_PRODUCTS", trace_id=trace_id, company_id=writer.company_id)
+        _trace(
+            "REPORT_SAVE_NO_PRODUCTS",
+            trace_id=trace_id,
+            company_id=writer.company_id,
+        )
         return result
 
     saved = 0
@@ -458,7 +561,10 @@ def save_edge_trigger_reports(original_execute, writer, data):
             event_tags=event_tags,
         )
         if not isinstance(event_tags, dict) or not event_tags:
-            _trace("REPORT_EVENT_SKIPPED_EMPTY_TAGS", trace_id=event_trace_id)
+            _trace(
+                "REPORT_EVENT_SKIPPED_EMPTY_TAGS",
+                trace_id=event_trace_id,
+            )
             continue
 
         # Preserve the original report payload: trigger tags are supplemented
@@ -510,7 +616,11 @@ def save_edge_trigger_reports(original_execute, writer, data):
                     error=repr(exc),
                     traceback=traceback.format_exc(),
                 )
-                print("EDGE TRIGGER PLC_DATA INSERT ERROR:", tag_name, repr(exc))
+                print(
+                    "EDGE TRIGGER PLC_DATA INSERT ERROR:",
+                    tag_name,
+                    repr(exc),
+                )
 
         try:
             current_products = get_report_products(writer.company_id)
@@ -525,8 +635,14 @@ def save_edge_trigger_reports(original_execute, writer, data):
             event_tags=event_tags,
             snapshot_tags=snapshot_tags,
             report_products=current_products,
-            has_contract_direct=any(str(key).strip().lower() == "contractcode" for key in snapshot_tags.keys()),
-            has_product_direct=any(str(key).strip().lower() == "productcode" for key in snapshot_tags.keys()),
+            has_contract_direct=any(
+                str(key).strip().lower() == "contractcode"
+                for key in snapshot_tags.keys()
+            ),
+            has_product_direct=any(
+                str(key).strip().lower() == "productcode"
+                for key in snapshot_tags.keys()
+            ),
         )
 
         try:
@@ -546,6 +662,24 @@ def save_edge_trigger_reports(original_execute, writer, data):
             )
             raise
 
+        _trace(
+            "REPORT_SAVE_RETURNED",
+            trace_id=event_trace_id,
+            company_id=writer.company_id,
+            report_id=report_id,
+        )
+
+        # Critical step: update the exact ReportHistory row just created.
+        # This is independent of ReportOutput context-role settings and does
+        # not modify any older rows.
+        if report_id is not None:
+            _attach_exact_report_context(
+                writer.company_id,
+                report_id,
+                snapshot_tags,
+                event_trace_id,
+            )
+
         latest_history = _report_history_latest(writer.company_id)
         _trace(
             "REPORT_SAVE_RESULT",
@@ -563,6 +697,8 @@ def save_edge_trigger_reports(original_execute, writer, data):
                 "Register=", event.get("register"),
                 "Timestamp=", timestamp,
                 "Tags=", list(event_tags.keys()),
+                "ContractCode=", snapshot_tags.get("ContractCode"),
+                "ProductCode=", snapshot_tags.get("ProductCode"),
             )
         else:
             _trace(
