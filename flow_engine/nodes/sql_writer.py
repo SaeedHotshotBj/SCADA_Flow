@@ -60,6 +60,95 @@ class SQLWriter:
 
         return []
 
+    def _get_management_context_tags(self, registers):
+        """Resolve ContractCode/ProductCode from ManagementPanel registers.
+
+        ManagementPanel owns the register configuration. TagMapper normally
+        exposes the same values as tags, but Trigger/report execution must also
+        work when an intermediate branch only preserves the raw Registers map.
+        """
+        result = {}
+
+        if not isinstance(registers, dict):
+            return result
+
+        try:
+            flow = get_company_flow(self.company_id)
+            if not flow:
+                return result
+
+            if isinstance(flow, str):
+                flow = json.loads(flow)
+
+            nodes = (
+                flow
+                .get("drawflow", {})
+                .get("Home", {})
+                .get("data", {})
+            )
+
+            management_config = None
+            for node in nodes.values():
+                if not isinstance(node, dict):
+                    continue
+                if node.get("name") != "ManagementPanel":
+                    continue
+                raw = node.get("data", {}) or {}
+                management_config = raw.get("config", raw) or {}
+                break
+
+            if not isinstance(management_config, dict):
+                return result
+
+            def configured_register(*keys):
+                for field in keys:
+                    value = management_config.get(field)
+                    if value not in (None, ""):
+                        try:
+                            return int(float(value))
+                        except (TypeError, ValueError):
+                            continue
+                return None
+
+            contract_register = configured_register(
+                "contract_code_register",
+                "contractCodeRegister",
+                "contract_code_plc_register",
+                "contractCodePLCRegister",
+            )
+            product_register = configured_register(
+                "product_code_register",
+                "productCodeRegister",
+                "product_code_plc_register",
+                "productCodePLCRegister",
+            )
+
+            def register_value(address):
+                if address is None:
+                    return None
+                for key in (
+                    str(address),
+                    address,
+                ):
+                    if key in registers:
+                        value = registers[key]
+                        if value not in (None, ""):
+                            return value
+                return None
+
+            contract_value = register_value(contract_register)
+            product_value = register_value(product_register)
+
+            if contract_value is not None:
+                result["ContractCode"] = contract_value
+            if product_value is not None:
+                result["ProductCode"] = product_value
+
+        except Exception as exc:
+            print("SQLWRITER MANAGEMENT CONTEXT ERROR:", exc)
+
+        return result
+
     def _signature(self, value):
         try:
             return json.dumps(
@@ -208,6 +297,15 @@ class SQLWriter:
         timestamp=None,
     ):
         """Store trigger tags only when their shared trigger register rises 0 -> target."""
+
+        # ManagementPanel is the authoritative owner of these two context
+        # registers. Resolve them from the raw PLC register map before trigger
+        # storage/report creation so no downstream branch can lose them.
+        management_context = self._get_management_context_tags(registers)
+        for context_name, context_value in management_context.items():
+            if context_value is not None:
+                tags[context_name] = context_value
+
         trigger_groups = {}
 
         report_tag_set = {
@@ -255,9 +353,7 @@ class SQLWriter:
                     "current": current,
                     "items": [],
                 },
-            )[
-                "items"
-            ].append(definition)
+            )["items"].append(definition)
 
         trigger_events = []
 
@@ -266,9 +362,7 @@ class SQLWriter:
 
             targets = []
             for definition in group["items"]:
-                target = definition.get(
-                    "trigger_value"
-                )
+                target = definition.get("trigger_value")
                 if target in targets:
                     continue
                 targets.append(target)
@@ -291,9 +385,7 @@ class SQLWriter:
                 continue
 
             for definition in group["items"]:
-                target = definition.get(
-                    "trigger_value"
-                )
+                target = definition.get("trigger_value")
 
                 try:
                     same_target = (
@@ -374,6 +466,8 @@ class SQLWriter:
                     "Company=", self.company_id,
                     "ReportID=", report_id,
                     "Tags=", trigger_events,
+                    "ContractCode=", tags.get("ContractCode"),
+                    "ProductCode=", tags.get("ProductCode"),
                 )
 
         return len(trigger_events)
