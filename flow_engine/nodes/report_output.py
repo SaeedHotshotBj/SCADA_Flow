@@ -144,7 +144,7 @@ class ReportOutput:
                 result["ProductCode"] = product
 
         except Exception as exc:
-            print("REPORT MANAGEMENT REGISTER LOAD ERROR:", exc)
+            print("REPORT MANAGEMENT REGISTER ERROR:", exc)
 
         return result
 
@@ -479,7 +479,7 @@ class ReportOutput:
             "REPORT OUTPUT:",
             "Company:", company_id,
             "Columns:", len(report.get("columns", [])),
-            "Rows:": len(report.get("rows", [])),
-            "Totals:": report.get("totals", []),
+            "Rows:", len(report.get("rows", [])),
+            "Totals:", report.get("totals", []),
         )
         return data
