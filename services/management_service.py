@@ -146,17 +146,6 @@ def ensure_management_tables():
         CREATE INDEX IF NOT EXISTS idx_product_bom_product
             ON ProductBOM (ProductID);
 
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_products_company_code
-            ON Products (CompanyID, ProductCode);
-
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_product_bom_product
-            ON ProductBOM (ProductID);
-
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_contracts_company_code
-            ON Contracts (CompanyID, ContractCode);
-
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_contract_products_pair
-            ON ContractProducts (ContractID, ProductID);
         """)
         conn.commit()
         TABLES_READY = True
@@ -213,27 +202,45 @@ def save_product(company_id, payload):
 
     conn = get_connection()
     try:
-        conn.execute("""
-            INSERT INTO Products (CompanyID, ProductCode, ProductName, Unit)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(CompanyID, ProductCode) DO UPDATE SET
-                ProductName=excluded.ProductName,
-                Unit=CASE WHEN excluded.Unit<>'' THEN excluded.Unit ELSE Products.Unit END
-        """, (company_id, code, name, unit))
         row = conn.execute(
-            "SELECT ProductID FROM Products WHERE CompanyID=? AND ProductCode=?",
+            "SELECT ProductID FROM Products WHERE CompanyID=? AND ProductCode=? ORDER BY ProductID LIMIT 1",
             (company_id, code),
         ).fetchone()
-        product_id = int(row["ProductID"])
-        conn.execute("""
-            INSERT INTO ProductBOM (ProductID, CostPerKg, CostPerMeter, Notes, UpdatedAt)
-            VALUES (?, ?, ?, ?, datetime('now','localtime'))
-            ON CONFLICT(ProductID) DO UPDATE SET
-                CostPerKg=excluded.CostPerKg,
-                CostPerMeter=excluded.CostPerMeter,
-                Notes=excluded.Notes,
-                UpdatedAt=excluded.UpdatedAt
-        """, (product_id, kg, meter, str(payload.get("notes", "")).strip()))
+        if row is None:
+            cursor = conn.execute("""
+                INSERT INTO Products (CompanyID, ProductCode, ProductName, Unit)
+                VALUES (?, ?, ?, ?)
+            """, (company_id, code, name, unit))
+            product_id = int(cursor.lastrowid)
+        else:
+            product_id = int(row["ProductID"])
+            conn.execute("""
+                UPDATE Products
+                   SET ProductName=?,
+                       Unit=CASE WHEN ?<>'' THEN ? ELSE Unit END
+                 WHERE ProductID=?
+            """, (name, unit, unit, product_id))
+
+        bom = conn.execute(
+            "SELECT BOMID FROM ProductBOM WHERE ProductID=? ORDER BY BOMID LIMIT 1",
+            (product_id,),
+        ).fetchone()
+        notes = str(payload.get("notes", "")).strip()
+        if bom is None:
+            conn.execute("""
+                INSERT INTO ProductBOM
+                    (ProductID, CostPerKg, CostPerMeter, Notes, UpdatedAt)
+                VALUES (?, ?, ?, ?, datetime('now','localtime'))
+            """, (product_id, kg, meter, notes))
+        else:
+            conn.execute("""
+                UPDATE ProductBOM
+                   SET CostPerKg=?,
+                       CostPerMeter=?,
+                       Notes=?,
+                       UpdatedAt=datetime('now','localtime')
+                 WHERE BOMID=?
+            """, (kg, meter, notes, int(bom["BOMID"])))
         conn.commit()
         return product_id
     finally:
@@ -280,17 +287,26 @@ def save_contract(company_id, payload):
             if not delivery:
                 raise ValueError(f"Invalid Jalali delivery date for {pcode}")
             unit = str(item.get("unit", "")).strip()
-            conn.execute("""
-                INSERT INTO Products (CompanyID, ProductCode, ProductName, Unit)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(CompanyID, ProductCode) DO UPDATE SET
-                    ProductName=excluded.ProductName,
-                    Unit=CASE WHEN excluded.Unit<>'' THEN excluded.Unit ELSE Products.Unit END
-            """, (company_id, pcode, pname, unit))
             product = conn.execute(
-                "SELECT ProductID FROM Products WHERE CompanyID=? AND ProductCode=?",
+                "SELECT ProductID FROM Products WHERE CompanyID=? AND ProductCode=? ORDER BY ProductID LIMIT 1",
                 (company_id, pcode),
             ).fetchone()
+            if product is None:
+                cursor = conn.execute("""
+                    INSERT INTO Products (CompanyID, ProductCode, ProductName, Unit)
+                    VALUES (?, ?, ?, ?)
+                """, (company_id, pcode, pname, unit))
+                product = conn.execute(
+                    "SELECT ProductID FROM Products WHERE ProductID=?",
+                    (cursor.lastrowid,),
+                ).fetchone()
+            else:
+                conn.execute("""
+                    UPDATE Products
+                       SET ProductName=?,
+                           Unit=CASE WHEN ?<>'' THEN ? ELSE Unit END
+                     WHERE ProductID=?
+                """, (pname, unit, unit, int(product["ProductID"])))
             conn.execute("""
                 INSERT INTO ContractProducts
                 (ContractID, ProductID, OrderedQuantity, DeliveryDate, Description)
