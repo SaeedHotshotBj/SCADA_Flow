@@ -20,6 +20,9 @@ jobs:
       - name: Apply final trigger-report repair
         run: python scripts/final_trigger_report_fix.py
 
+      - name: Validate patched Python
+        run: python -m py_compile flow_engine/nodes/sql_writer.py flow_engine/trigger_edge_report_fix.py services/report_runtime.py
+
       - name: Commit repaired files
         run: |
           if git diff --quiet; then
