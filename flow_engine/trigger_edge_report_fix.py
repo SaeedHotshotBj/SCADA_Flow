@@ -32,6 +32,7 @@ _TRACE_PATH = os.path.join(
     "logs",
     "report_trigger_trace.log",
 )
+_TRACE_VERSION = "2026-09-01-v1"
 
 
 def _trace(message, **fields):
@@ -53,11 +54,7 @@ def _trace(message, **fields):
             with open(_TRACE_PATH, "a", encoding="utf-8") as handle:
                 handle.write(line)
     except Exception:
-        # Diagnostics must never break the report path.
         pass
-
-
-_TRACE_VERSION = "2026-09-01-v1"
 
 
 def _ensure_state_table():
@@ -102,27 +99,17 @@ def _latest_trigger_rows(company_id, definitions):
     for definition in definitions or []:
         if not isinstance(definition, dict):
             continue
-
         if str(definition.get("storage", "")).strip().upper() != "TRIGGER":
             continue
-
         name = str(definition.get("name", "")).strip()
         if not name:
             continue
-
         register = definition.get("trigger_register")
         if register in (None, ""):
             continue
+        groups.setdefault(str(register), []).append(name)
 
-        key = str(register)
-        groups.setdefault(key, []).append(name)
-
-    _trace(
-        "TRIGGER_ROWS_QUERY_START",
-        company_id=company_id,
-        groups=groups,
-    )
-
+    _trace("TRIGGER_ROWS_QUERY_START", company_id=company_id, groups=groups)
     if not groups:
         _trace("TRIGGER_ROWS_QUERY_NO_GROUPS", company_id=company_id)
         return {}
@@ -130,10 +117,8 @@ def _latest_trigger_rows(company_id, definitions):
     conn = get_connection()
     try:
         result = {}
-
         for register, names in groups.items():
             rows = {}
-
             for name in names:
                 row = conn.execute(
                     """
@@ -146,7 +131,6 @@ def _latest_trigger_rows(company_id, definitions):
                     """,
                     (int(company_id), name),
                 ).fetchone()
-
                 if row is not None:
                     rows[name] = row
                     _trace(
@@ -166,7 +150,6 @@ def _latest_trigger_rows(company_id, definitions):
                         register=register,
                         tag=name,
                     )
-
             if rows:
                 result[register] = rows
 
@@ -192,7 +175,6 @@ def _latest_trigger_rows(company_id, definitions):
 
 def _event_is_new(company_id, register, event_key, trace_id=None):
     _ensure_state_table()
-
     conn = get_connection()
     try:
         row = conn.execute(
@@ -212,12 +194,7 @@ def _event_is_new(company_id, register, event_key, trace_id=None):
                 (CompanyID, TriggerRegister, LastTimestamp, LastID, Initialized)
                 VALUES (?, ?, ?, ?, 1)
                 """,
-                (
-                    int(company_id),
-                    str(register),
-                    event_key[0],
-                    event_key[1],
-                ),
+                (int(company_id), str(register), event_key[0], event_key[1]),
             )
             conn.commit()
             _trace(
@@ -233,7 +210,6 @@ def _event_is_new(company_id, register, event_key, trace_id=None):
             str(row["LastTimestamp"] or ""),
             int(row["LastID"] or 0),
         )
-
         if event_key <= previous_key:
             _trace(
                 "TRIGGER_EVENT_NOT_NEW",
@@ -248,18 +224,10 @@ def _event_is_new(company_id, register, event_key, trace_id=None):
         conn.execute(
             f"""
             UPDATE {_STATE_TABLE}
-            SET LastTimestamp = ?,
-                LastID = ?,
-                Initialized = 1
-            WHERE CompanyID = ?
-              AND TriggerRegister = ?
+            SET LastTimestamp = ?, LastID = ?, Initialized = 1
+            WHERE CompanyID = ? AND TriggerRegister = ?
             """,
-            (
-                event_key[0],
-                event_key[1],
-                int(company_id),
-                str(register),
-            ),
+            (event_key[0], event_key[1], int(company_id), str(register)),
         )
         conn.commit()
         _trace(
@@ -271,7 +239,6 @@ def _event_is_new(company_id, register, event_key, trace_id=None):
             current_key=event_key,
         )
         return True
-
     finally:
         conn.close()
 
@@ -284,7 +251,6 @@ def enrich_plc_reader_result(original_execute, reader, data):
 
     definitions = result.get("TagDefinitions", [])
     company_id = reader._get_config("company_id")
-
     _trace(
         "PLC_ENRICH_START",
         trace_id=str(uuid.uuid4()),
@@ -310,12 +276,10 @@ def enrich_plc_reader_result(original_execute, reader, data):
 
     tags = result.setdefault("Tags", {})
     trigger_events = []
-
     for register, rows in groups.items():
         newest = max(rows.values(), key=_row_key)
         event_key = _row_key(newest)
         age = _timestamp_age(newest["Timestamp"])
-
         _trace(
             "TRIGGER_GROUP_EVALUATE",
             company_id=company_id,
@@ -329,10 +293,6 @@ def enrich_plc_reader_result(original_execute, reader, data):
             settle_seconds=TRIGGER_SETTLE_SECONDS,
         )
 
-        # Edge sends B1/B2/B3 as separate HTTP requests. Wait until the
-        # newest row is stable before declaring one trigger event. This
-        # prevents one PLC trigger from producing multiple reports while
-        # the three tag requests are arriving milliseconds apart.
         if age < TRIGGER_SETTLE_SECONDS:
             _trace(
                 "TRIGGER_GROUP_WAIT_SETTLE",
@@ -348,15 +308,7 @@ def enrich_plc_reader_result(original_execute, reader, data):
             continue
 
         trace_id = str(uuid.uuid4())
-        is_new = _event_is_new(
-            company_id,
-            register,
-            event_key,
-            trace_id=trace_id,
-        )
-
-        # Always expose the latest trigger values to downstream nodes.
-        # Only a newly observed Edge row becomes a report event.
+        is_new = _event_is_new(company_id, register, event_key, trace_id=trace_id)
         for row in rows.values():
             name = str(row["TagName"]).strip()
             value = row["Value"]
@@ -384,7 +336,6 @@ def enrich_plc_reader_result(original_execute, reader, data):
                 "timestamp": event_timestamp,
                 "tags": event_tags,
             })
-
             _trace(
                 "EDGE_TRIGGER_EVENT_CREATED",
                 trace_id=trace_id,
@@ -393,7 +344,6 @@ def enrich_plc_reader_result(original_execute, reader, data):
                 timestamp=event_timestamp,
                 tags=event_tags,
             )
-
             print(
                 "EDGE TRIGGER EVENT:",
                 "Company=", company_id,
@@ -404,19 +354,16 @@ def enrich_plc_reader_result(original_execute, reader, data):
 
     if trigger_events:
         result["EdgeTriggerEvents"] = trigger_events
-
     _trace(
         "PLC_ENRICH_END",
         company_id=company_id,
         edge_trigger_events=result.get("EdgeTriggerEvents", []),
         final_tags=result.get("Tags", {}),
     )
-
     return result
 
 
-def _report_history_latest(company_id, timestamp):
-    """Read back the just-created ReportHistory row for diagnostics."""
+def _report_history_latest(company_id):
     conn = get_connection()
     try:
         row = conn.execute(
@@ -452,7 +399,6 @@ def _report_history_latest(company_id, timestamp):
 def save_edge_trigger_reports(original_execute, writer, data):
     """Run SQLWriter, then persist one ReportHistory snapshot per fresh Edge event."""
     trace_id = str(uuid.uuid4())
-
     _trace(
         "REPORT_SAVE_START",
         trace_id=trace_id,
@@ -484,13 +430,8 @@ def save_edge_trigger_reports(original_execute, writer, data):
         result_tags=result.get("Tags", {}),
         events=events,
     )
-
     if not isinstance(events, list) or not events:
-        _trace(
-            "REPORT_SAVE_NO_EVENTS",
-            trace_id=trace_id,
-            company_id=getattr(writer, "company_id", None),
-        )
+        _trace("REPORT_SAVE_NO_EVENTS", trace_id=trace_id, company_id=getattr(writer, "company_id", None))
         return result
 
     products = get_report_products(writer.company_id)
@@ -501,21 +442,14 @@ def save_edge_trigger_reports(original_execute, writer, data):
         product_count=len(products) if isinstance(products, list) else None,
         products=products,
     )
-
     if not products:
-        _trace(
-            "REPORT_SAVE_NO_PRODUCTS",
-            trace_id=trace_id,
-            company_id=writer.company_id,
-        )
+        _trace("REPORT_SAVE_NO_PRODUCTS", trace_id=trace_id, company_id=writer.company_id)
         return result
 
     saved = 0
-
     for index, event in enumerate(events, start=1):
         event_tags = event.get("tags", {})
         event_trace_id = f"{trace_id}-{index}"
-
         _trace(
             "REPORT_EVENT_START",
             trace_id=event_trace_id,
@@ -523,13 +457,17 @@ def save_edge_trigger_reports(original_execute, writer, data):
             event=event,
             event_tags=event_tags,
         )
-
         if not isinstance(event_tags, dict) or not event_tags:
-            _trace(
-                "REPORT_EVENT_SKIPPED_EMPTY_TAGS",
-                trace_id=event_trace_id,
-            )
+            _trace("REPORT_EVENT_SKIPPED_EMPTY_TAGS", trace_id=event_trace_id)
             continue
+
+        # Preserve the original report payload: trigger tags are supplemented
+        # with the complete TagMapper/SQLWriter tags available in this cycle.
+        snapshot_tags = {}
+        base_tags = data.get("Tags", {}) if isinstance(data, dict) else {}
+        if isinstance(base_tags, dict):
+            snapshot_tags.update(base_tags)
+        snapshot_tags.update(event_tags)
 
         timestamp = event.get("timestamp")
         if not timestamp:
@@ -540,10 +478,10 @@ def save_edge_trigger_reports(original_execute, writer, data):
             trace_id=event_trace_id,
             timestamp=timestamp,
             event_tags=event_tags,
+            snapshot_tags=snapshot_tags,
             company_id=writer.company_id,
         )
 
-        # Persist the trigger values in the normal PLC_Data historian too.
         for tag_name, value in event_tags.items():
             if value is None:
                 continue
@@ -572,13 +510,8 @@ def save_edge_trigger_reports(original_execute, writer, data):
                     error=repr(exc),
                     traceback=traceback.format_exc(),
                 )
-                print(
-                    "EDGE TRIGGER PLC_DATA INSERT ERROR:",
-                    tag_name,
-                    repr(exc),
-                )
+                print("EDGE TRIGGER PLC_DATA INSERT ERROR:", tag_name, repr(exc))
 
-        # Read the exact values that will be handed to report_service.
         try:
             current_products = get_report_products(writer.company_id)
         except Exception:
@@ -590,23 +523,16 @@ def save_edge_trigger_reports(original_execute, writer, data):
             company_id=writer.company_id,
             timestamp=timestamp,
             event_tags=event_tags,
+            snapshot_tags=snapshot_tags,
             report_products=current_products,
-            has_contract_direct=(
-                "ContractCode" in event_tags or "contractcode" in {
-                    str(key).strip().lower() for key in event_tags.keys()
-                }
-            ),
-            has_product_direct=(
-                "ProductCode" in event_tags or "productcode" in {
-                    str(key).strip().lower() for key in event_tags.keys()
-                }
-            ),
+            has_contract_direct=any(str(key).strip().lower() == "contractcode" for key in snapshot_tags.keys()),
+            has_product_direct=any(str(key).strip().lower() == "productcode" for key in snapshot_tags.keys()),
         )
 
         try:
             report_id = save_report_snapshot(
                 writer.company_id,
-                event_tags,
+                snapshot_tags,
                 current_products,
                 timestamp=timestamp,
             )
@@ -620,11 +546,7 @@ def save_edge_trigger_reports(original_execute, writer, data):
             )
             raise
 
-        latest_history = _report_history_latest(
-            writer.company_id,
-            timestamp,
-        )
-
+        latest_history = _report_history_latest(writer.company_id)
         _trace(
             "REPORT_SAVE_RESULT",
             trace_id=event_trace_id,
@@ -651,7 +573,6 @@ def save_edge_trigger_reports(original_execute, writer, data):
             )
 
     result["Report_Written"] = int(result.get("Report_Written", 0) or 0) + saved
-
     _trace(
         "REPORT_SAVE_END",
         trace_id=trace_id,
@@ -659,7 +580,6 @@ def save_edge_trigger_reports(original_execute, writer, data):
         saved=saved,
         report_written=result.get("Report_Written"),
     )
-
     return result
 
 
@@ -671,11 +591,7 @@ def install():
         original_plc_execute = PLCReader.execute
 
         def plc_execute(self, data=None):
-            return enrich_plc_reader_result(
-                original_plc_execute,
-                self,
-                data,
-            )
+            return enrich_plc_reader_result(original_plc_execute, self, data)
 
         PLCReader.execute = plc_execute
         PLCReader._edge_trigger_report_fix = True
@@ -684,11 +600,7 @@ def install():
         original_sql_execute = SQLWriter.execute
 
         def sql_execute(self, data=None):
-            return save_edge_trigger_reports(
-                original_sql_execute,
-                self,
-                data,
-            )
+            return save_edge_trigger_reports(original_sql_execute, self, data)
 
         SQLWriter.execute = sql_execute
         SQLWriter._edge_trigger_report_fix = True
