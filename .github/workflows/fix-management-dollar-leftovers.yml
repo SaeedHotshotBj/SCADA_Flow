@@ -1,0 +1,52 @@
+name: Fix remaining ManagementPanel dollar helper calls
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Replace remaining page helper calls
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path('templates/management.html')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('$(id)', 'byId(id)')
+          text = re.sub(r"\$\('([A-Za-z0-9_-]+)'\)", r"byId('\1')", text)
+
+          if '$(id)' in text:
+              raise SystemExit('Remaining $(id) helper call found')
+          if re.search(r"\$\('[A-Za-z0-9_-]+'\)", text):
+              raise SystemExit('Remaining page $ helper call found')
+          if 'function byId(id)' not in text:
+              raise SystemExit('byId helper missing')
+          if 'jQuery.fn.pDatepicker' not in text:
+              raise SystemExit('Datepicker initialization missing')
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Verify
+        run: git diff --check
+
+      - name: Commit
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add templates/management.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Complete ManagementPanel jQuery helper rename'
+          git push origin main
