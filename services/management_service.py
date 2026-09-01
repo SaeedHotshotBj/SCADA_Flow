@@ -145,6 +145,18 @@ def ensure_management_tables():
             ON Products (CompanyID, ProductCode);
         CREATE INDEX IF NOT EXISTS idx_product_bom_product
             ON ProductBOM (ProductID);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_products_company_code
+            ON Products (CompanyID, ProductCode);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_product_bom_product
+            ON ProductBOM (ProductID);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_contracts_company_code
+            ON Contracts (CompanyID, ContractCode);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_contract_products_pair
+            ON ContractProducts (ContractID, ProductID);
         """)
         conn.commit()
         TABLES_READY = True
