@@ -290,7 +290,9 @@ class ReportRuntime:
                 self.last_time_snapshot[key] = now
 
             elif incoming_mode == "TRIGGER":
-                pass
+                # Trigger ReportHistory persistence is owned by SQLWriter.
+                # Do not create a duplicate snapshot here.
+                continue
             else:
                 continue
 

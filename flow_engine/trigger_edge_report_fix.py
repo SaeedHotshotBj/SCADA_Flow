@@ -492,15 +492,21 @@ def _attach_exact_report_context(company_id, report_id, snapshot_tags, trace_id)
 
 
 def save_edge_trigger_reports(original_execute, writer, data):
-    """Run SQLWriter, then persist one ReportHistory snapshot per fresh Edge event."""
+    """Run the normal SQLWriter only.
+
+    SQLWriter is the single owner of Trigger -> ReportHistory persistence.
+    This compatibility wrapper remains so EdgeTriggerEvents can still be
+    attached to the runtime payload for diagnostics, but it never creates a
+    second report snapshot.
+    """
     trace_id = str(uuid.uuid4())
     _trace(
         "REPORT_SAVE_START",
         trace_id=trace_id,
         company_id=getattr(writer, "company_id", None),
-        data_keys=sorted(str(key) for key in (data or {}).keys()),
         input_tags=(data or {}).get("Tags", {}) if isinstance(data, dict) else {},
         input_events=(data or {}).get("EdgeTriggerEvents", []) if isinstance(data, dict) else [],
+        mode="SQLWRITER_ONLY",
     )
 
     try:
@@ -517,203 +523,13 @@ def save_edge_trigger_reports(original_execute, writer, data):
     if result is None:
         result = data or {}
 
-    events = result.get("EdgeTriggerEvents", [])
     _trace(
-        "REPORT_SAVE_AFTER_SQLWRITER",
+        "REPORT_SAVE_DELEGATED_TO_SQLWRITER",
         trace_id=trace_id,
+        company_id=getattr(writer, "company_id", None),
         result_keys=sorted(str(key) for key in result.keys()),
         result_tags=result.get("Tags", {}),
-        events=events,
-    )
-    if not isinstance(events, list) or not events:
-        _trace(
-            "REPORT_SAVE_NO_EVENTS",
-            trace_id=trace_id,
-            company_id=getattr(writer, "company_id", None),
-        )
-        return result
-
-    products = get_report_products(writer.company_id)
-    _trace(
-        "REPORT_PRODUCTS_LOADED",
-        trace_id=trace_id,
-        company_id=writer.company_id,
-        product_count=len(products) if isinstance(products, list) else None,
-        products=products,
-    )
-    if not products:
-        _trace(
-            "REPORT_SAVE_NO_PRODUCTS",
-            trace_id=trace_id,
-            company_id=writer.company_id,
-        )
-        return result
-
-    saved = 0
-    for index, event in enumerate(events, start=1):
-        event_tags = event.get("tags", {})
-        event_trace_id = f"{trace_id}-{index}"
-        _trace(
-            "REPORT_EVENT_START",
-            trace_id=event_trace_id,
-            company_id=writer.company_id,
-            event=event,
-            event_tags=event_tags,
-        )
-        if not isinstance(event_tags, dict) or not event_tags:
-            _trace(
-                "REPORT_EVENT_SKIPPED_EMPTY_TAGS",
-                trace_id=event_trace_id,
-            )
-            continue
-
-        # Preserve the original report payload: trigger tags are supplemented
-        # with the complete TagMapper/SQLWriter tags available in this cycle.
-        snapshot_tags = {}
-        base_tags = data.get("Tags", {}) if isinstance(data, dict) else {}
-        if isinstance(base_tags, dict):
-            snapshot_tags.update(base_tags)
-        snapshot_tags.update(event_tags)
-
-        timestamp = event.get("timestamp")
-        if not timestamp:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        _trace(
-            "REPORT_EVENT_CONTEXT_BEFORE_SAVE",
-            trace_id=event_trace_id,
-            timestamp=timestamp,
-            event_tags=event_tags,
-            snapshot_tags=snapshot_tags,
-            company_id=writer.company_id,
-        )
-
-        for tag_name, value in event_tags.items():
-            if value is None:
-                continue
-            try:
-                insert_tag_value(
-                    writer.company_id,
-                    tag_name,
-                    value,
-                    "TRIGGER",
-                    timestamp=timestamp,
-                )
-                _trace(
-                    "TRIGGER_PLC_DATA_INSERT_OK",
-                    trace_id=event_trace_id,
-                    tag=tag_name,
-                    value=value,
-                    timestamp=timestamp,
-                    storage_type="TRIGGER",
-                )
-            except Exception as exc:
-                _trace(
-                    "TRIGGER_PLC_DATA_INSERT_ERROR",
-                    trace_id=event_trace_id,
-                    tag=tag_name,
-                    value=value,
-                    error=repr(exc),
-                    traceback=traceback.format_exc(),
-                )
-                print(
-                    "EDGE TRIGGER PLC_DATA INSERT ERROR:",
-                    tag_name,
-                    repr(exc),
-                )
-
-        try:
-            current_products = get_report_products(writer.company_id)
-        except Exception:
-            current_products = products
-
-        _trace(
-            "REPORT_SAVE_CALL",
-            trace_id=event_trace_id,
-            company_id=writer.company_id,
-            timestamp=timestamp,
-            event_tags=event_tags,
-            snapshot_tags=snapshot_tags,
-            report_products=current_products,
-            has_contract_direct=any(
-                str(key).strip().lower() == "contractcode"
-                for key in snapshot_tags.keys()
-            ),
-            has_product_direct=any(
-                str(key).strip().lower() == "productcode"
-                for key in snapshot_tags.keys()
-            ),
-        )
-
-        try:
-            report_id = save_report_snapshot(
-                writer.company_id,
-                snapshot_tags,
-                current_products,
-                timestamp=timestamp,
-            )
-        except Exception as exc:
-            _trace(
-                "REPORT_SAVE_EXCEPTION",
-                trace_id=event_trace_id,
-                company_id=writer.company_id,
-                error=repr(exc),
-                traceback=traceback.format_exc(),
-            )
-            raise
-
-        _trace(
-            "REPORT_SAVE_RETURNED",
-            trace_id=event_trace_id,
-            company_id=writer.company_id,
-            report_id=report_id,
-        )
-
-        # Critical step: update the exact ReportHistory row just created.
-        # This is independent of ReportOutput context-role settings and does
-        # not modify any older rows.
-        if report_id is not None:
-            _attach_exact_report_context(
-                writer.company_id,
-                report_id,
-                snapshot_tags,
-                event_trace_id,
-            )
-
-        latest_history = _report_history_latest(writer.company_id)
-        _trace(
-            "REPORT_SAVE_RESULT",
-            trace_id=event_trace_id,
-            report_id=report_id,
-            latest_report_history=latest_history,
-        )
-
-        if report_id is not None:
-            saved += 1
-            print(
-                "EDGE TRIGGER REPORT SAVED:",
-                "Company=", writer.company_id,
-                "ReportID=", report_id,
-                "Register=", event.get("register"),
-                "Timestamp=", timestamp,
-                "Tags=", list(event_tags.keys()),
-                "ContractCode=", snapshot_tags.get("ContractCode"),
-                "ProductCode=", snapshot_tags.get("ProductCode"),
-            )
-        else:
-            _trace(
-                "REPORT_SAVE_RETURNED_NONE",
-                trace_id=event_trace_id,
-                company_id=writer.company_id,
-                latest_report_history=latest_history,
-            )
-
-    result["Report_Written"] = int(result.get("Report_Written", 0) or 0) + saved
-    _trace(
-        "REPORT_SAVE_END",
-        trace_id=trace_id,
-        company_id=writer.company_id,
-        saved=saved,
+        events=result.get("EdgeTriggerEvents", []),
         report_written=result.get("Report_Written"),
     )
     return result

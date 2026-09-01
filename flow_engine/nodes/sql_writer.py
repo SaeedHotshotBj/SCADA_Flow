@@ -458,6 +458,16 @@ class SQLWriter:
                 tags,
                 report_products,
                 timestamp=report_timestamp,
+                trigger_tag=trigger_events[0] if trigger_events else None,
+                trigger_register=next(
+                    (definition.get("trigger_register")
+                     for definition in definitions
+                     if isinstance(definition, dict)
+                     and str(definition.get("name", "")).strip() in trigger_events
+                     and definition.get("trigger_register") not in (None, "")),
+                    None,
+                ),
+                trigger_value=event_target,
             )
 
             if report_id is not None:
