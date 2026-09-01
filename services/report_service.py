@@ -58,6 +58,52 @@ def ensure_report_tables():
             """
         )
 
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_report_context_contract
+            AFTER INSERT ON PLC_Data
+            WHEN LOWER(NEW.TagName) = 'contractcode'
+            BEGIN
+                UPDATE ReportHistory
+                SET ContractCode = CAST(NEW.Value AS TEXT)
+                WHERE ReportID = (
+                    SELECT ReportID
+                    FROM ReportHistory
+                    WHERE CompanyID = NEW.CompanyID
+                      AND TriggerRegister IS NOT NULL
+                      AND (ContractCode IS NULL OR TRIM(ContractCode) = '')
+                      AND datetime(Timestamp) >= datetime(NEW.Timestamp, '-10 seconds')
+                      AND datetime(Timestamp) <= datetime(NEW.Timestamp, '+2 seconds')
+                    ORDER BY ReportID DESC
+                    LIMIT 1
+                );
+            END
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_report_context_product
+            AFTER INSERT ON PLC_Data
+            WHEN LOWER(NEW.TagName) = 'productcode'
+            BEGIN
+                UPDATE ReportHistory
+                SET ProductCode = CAST(NEW.Value AS TEXT)
+                WHERE ReportID = (
+                    SELECT ReportID
+                    FROM ReportHistory
+                    WHERE CompanyID = NEW.CompanyID
+                      AND TriggerRegister IS NOT NULL
+                      AND (ProductCode IS NULL OR TRIM(ProductCode) = '')
+                      AND datetime(Timestamp) >= datetime(NEW.Timestamp, '-10 seconds')
+                      AND datetime(Timestamp) <= datetime(NEW.Timestamp, '+2 seconds')
+                    ORDER BY ReportID DESC
+                    LIMIT 1
+                );
+            END
+            """
+        )
+
         conn.commit()
 
     finally:
