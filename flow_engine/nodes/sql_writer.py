@@ -288,6 +288,114 @@ class SQLWriter:
 
         return None
 
+    def _save_edge_trigger_events(
+        self,
+        tags,
+        edge_trigger_events,
+        report_products,
+    ):
+        """Create the Trigger Report from the event produced by PLCReader.
+
+        Edge-trigger detection is already performed upstream by
+        trigger_edge_report_fix.py. Those events are the authoritative trigger
+        signal for the historian-backed Edge deployment, so this function is
+        the single SQLWriter-owned ReportHistory persistence path for them.
+        """
+        if not report_products or not isinstance(edge_trigger_events, list):
+            return 0
+
+        report_tag_set = {
+            str(item.get("tag", "")).strip().lower()
+            for item in report_products
+            if isinstance(item, dict)
+            and str(item.get("tag", "")).strip()
+        }
+
+        if not report_tag_set:
+            return 0
+
+        saved = 0
+
+        for event in edge_trigger_events:
+            if not isinstance(event, dict):
+                continue
+
+            event_tags = event.get("tags", {}) or {}
+            if not isinstance(event_tags, dict):
+                continue
+
+            matched_tags = {
+                str(name).strip().lower()
+                for name in event_tags.keys()
+            }
+            if not matched_tags.intersection(report_tag_set):
+                continue
+
+            snapshot_tags = dict(tags) if isinstance(tags, dict) else {}
+            for name, value in event_tags.items():
+                if value is not None:
+                    snapshot_tags[str(name).strip()] = value
+
+            # The ManagementPanel context comes from the same TagMapper payload.
+            # Do not replace it with the historical event payload because the
+            # event intentionally contains only the Trigger report tags.
+            contract_code = snapshot_tags.get("ContractCode")
+            product_code = snapshot_tags.get("ProductCode")
+
+            event_timestamp = event.get("timestamp")
+            if event_timestamp in (None, ""):
+                event_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            trigger_tag = next(
+                (
+                    str(name).strip()
+                    for name in event_tags.keys()
+                    if str(name).strip().lower() in report_tag_set
+                ),
+                None,
+            )
+
+            trigger_register = event.get("register")
+
+            try:
+                trigger_value = next(
+                    (
+                        value
+                        for name, value in event_tags.items()
+                        if str(name).strip().lower() == str(trigger_tag or "").lower()
+                    ),
+                    None,
+                )
+            except Exception:
+                trigger_value = None
+
+            report_id = save_report_snapshot(
+                self.company_id,
+                snapshot_tags,
+                report_products,
+                timestamp=str(event_timestamp).replace("T", " "),
+                trigger_tag=trigger_tag,
+                trigger_register=trigger_register,
+                trigger_value=trigger_value,
+            )
+
+            if report_id is None:
+                continue
+
+            print(
+                "REPORT EDGE TRIGGER SNAPSHOT SAVED:",
+                "Company=", self.company_id,
+                "ReportID=", report_id,
+                "TriggerTag=", trigger_tag,
+                "TriggerRegister=", trigger_register,
+                "TriggerValue=", trigger_value,
+                "ContractCode=", contract_code,
+                "ProductCode=", product_code,
+            )
+            saved += 1
+
+        return saved
+
     def _process_trigger_tags(
         self,
         tags,
@@ -298,9 +406,6 @@ class SQLWriter:
     ):
         """Store trigger tags only when their shared trigger register rises 0 -> target."""
 
-        # ManagementPanel is the authoritative owner of these two context
-        # registers. Resolve them from the raw PLC register map before trigger
-        # storage/report creation so no downstream branch can lose them.
         management_context = self._get_management_context_tags(registers)
         for context_name, context_value in management_context.items():
             if context_value is not None:
@@ -585,6 +690,7 @@ class SQLWriter:
         tags = data.get("Tags", {})
         definitions = data.get("TagDefinitions", [])
         registers = data.get("Registers", {})
+        edge_trigger_events = data.get("EdgeTriggerEvents", [])
 
         if not definitions:
             return data
@@ -622,13 +728,32 @@ class SQLWriter:
 
         timestamp = data.get("Timestamp")
 
-        trigger_written = self._process_trigger_tags(
+        # EdgeTriggerEvents are already edge-detected upstream. They are the
+        # authoritative Trigger signal for the historian-backed Edge path.
+        # Use them directly so a missing raw trigger register cannot suppress
+        # the report. The existing raw-register path remains as a fallback.
+        edge_report_written = self._save_edge_trigger_events(
             tags,
-            definitions,
-            registers,
+            edge_trigger_events,
             report_products,
-            timestamp=timestamp,
         )
+
+        trigger_written = 0
+        if not edge_trigger_events:
+            trigger_written = self._process_trigger_tags(
+                tags,
+                definitions,
+                registers,
+                report_products,
+                timestamp=timestamp,
+            )
+        else:
+            # Still inject ManagementPanel context into the shared payload for
+            # downstream branches, using the exact same register configuration.
+            management_context = self._get_management_context_tags(registers)
+            for context_name, context_value in management_context.items():
+                if context_value is not None:
+                    tags[context_name] = context_value
 
         non_trigger_definitions = [
             definition
@@ -638,9 +763,9 @@ class SQLWriter:
             ).strip().upper() != "TRIGGER"
         ]
 
-        report_written = 0
+        report_written = edge_report_written
 
-        if trigger_written == 0:
+        if trigger_written == 0 and edge_report_written == 0:
             report_written = self._save_time_report_snapshot(
                 tags,
                 non_trigger_definitions,
@@ -655,7 +780,7 @@ class SQLWriter:
             registers,
             report_tags=(
                 report_tags
-                if trigger_written == 0
+                if trigger_written == 0 and edge_report_written == 0
                 else []
             )
         )
