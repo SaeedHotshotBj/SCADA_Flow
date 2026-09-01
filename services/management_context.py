@@ -17,7 +17,6 @@ _originals = {}
 
 
 def set_context(company_id, registers):
-    """Set the current ManagementPanel context for the active flow thread."""
     try:
         company_id = int(company_id)
     except (TypeError, ValueError):
@@ -141,7 +140,6 @@ def _store_tag_history(company_id, tag, value, timestamp, context):
 
 
 def _context_aware_insert(company_id, tag, value, storage_type, timestamp=None):
-    # Preserve the existing PLC_Data write exactly as before.
     _database_insert_tag_value(
         company_id,
         tag,
@@ -174,72 +172,6 @@ def _context_aware_insert(company_id, tag, value, storage_type, timestamp=None):
         print("MANAGEMENT CONTEXT TAGHISTORY ERROR:", exc)
 
 
-def _update_new_report_history_rows(company_id, first_report_id, context):
-    """Attach the active ManagementPanel context to ReportHistory rows created
-    during this SQLWriter execution. This is intentionally done by ReportID,
-    so it also covers report snapshots created by the existing trigger wrapper.
-    """
-    if not context:
-        return
-
-    contract_code = context.get("ContractCode")
-    product_code = context.get("ProductCode")
-    if contract_code in (None, "") and product_code in (None, ""):
-        return
-
-    conn = get_connection()
-    try:
-        columns = {
-            row["name"]
-            for row in conn.execute(
-                'PRAGMA table_info("ReportHistory")'
-            ).fetchall()
-        }
-
-        if "ContractCode" not in columns or "ProductCode" not in columns:
-            return
-
-        if first_report_id is None:
-            conn.execute(
-                "UPDATE ReportHistory SET ContractCode = ?, ProductCode = ? WHERE CompanyID = ? AND (ContractCode IS NULL OR ContractCode = '')",
-                (contract_code, product_code, int(company_id)),
-            )
-        else:
-            conn.execute(
-                "UPDATE ReportHistory SET ContractCode = ?, ProductCode = ? WHERE CompanyID = ? AND ReportID > ?",
-                (contract_code, product_code, int(company_id), int(first_report_id)),
-            )
-
-        conn.commit()
-        print(
-            "MANAGEMENT REPORT CONTEXT SAVED:",
-            "Company=", company_id,
-            "FromReportID=", first_report_id,
-            "ContractCode=", contract_code,
-            "ProductCode=", product_code,
-        )
-    except Exception as exc:
-        print("MANAGEMENT REPORT CONTEXT ERROR:", exc)
-    finally:
-        conn.close()
-
-
-def _latest_report_id(company_id):
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT MAX(ReportID) AS ReportID FROM ReportHistory WHERE CompanyID = ?",
-            (int(company_id),),
-        ).fetchone()
-        if row is None:
-            return None
-        return row["ReportID"]
-    except Exception:
-        return None
-    finally:
-        conn.close()
-
-
 def install():
     """Patch only the historian/SQLWriter insert references."""
     global _installed
@@ -266,10 +198,6 @@ def install():
         print("MANAGEMENT CONTEXT PATCH ERROR:", exc)
 
 
-# =====================================================
-# SQL WRITER WRAPPER
-# =====================================================
-
 from flow_engine.nodes.sql_writer import SQLWriter as _BaseSQLWriter
 
 
@@ -285,16 +213,12 @@ class ManagementSQLWriter(_BaseSQLWriter):
         registers = payload.get("Registers", payload.get("registers", {})) or {}
         company_id = self.company_id
 
-        context = _read_context(company_id, registers)
+        # Context is needed while SQLWriter performs its own historian writes.
+        # ReportHistory itself is created later by the connected ReportOutput
+        # node. Do not inspect or update ReportHistory here because FlowRunner
+        # executes child nodes only after this method returns.
         set_context(company_id, registers)
-        before_report_id = _latest_report_id(company_id)
         try:
-            result = super().execute(data)
-            _update_new_report_history_rows(
-                company_id,
-                before_report_id,
-                context,
-            )
-            return result
+            return super().execute(data)
         finally:
             clear_context()
