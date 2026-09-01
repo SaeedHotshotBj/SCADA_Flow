@@ -390,6 +390,23 @@ def save_report_snapshot(
             "ProductCode"
         )
 
+    # ManagementPanel context is already present in TagMapper output.
+    # Use it directly as the authoritative snapshot context so Trigger
+    # reports do not depend on ReportOutput context-role rows.
+    tag_lookup = {
+        str(name).strip().lower(): value
+        for name, value in tags.items()
+    }
+
+    direct_contract = tag_lookup.get("contractcode")
+    direct_product = tag_lookup.get("productcode")
+
+    if contract_code in (None, "") and direct_contract not in (None, ""):
+        contract_code = str(direct_contract).strip()
+
+    if product_code in (None, "") and direct_product not in (None, ""):
+        product_code = str(direct_product).strip()
+
     values = []
     seen = set()
     lookup = {
