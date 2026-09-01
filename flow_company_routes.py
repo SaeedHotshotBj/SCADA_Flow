@@ -53,7 +53,82 @@ def management_page():
     if not _management_allowed(company_id):
         return render_template("access_denied.html"), 403
     _prepare_management_db()
-    return render_template("management.html", company_id=company_id)
+
+    html = render_template("management.html", company_id=company_id)
+    dropdown_bootstrap = (
+        '<script>window.SCADA_MANAGEMENT_COMPANY_ID = '
+        + str(int(company_id))
+        + ';</script>'
+        '<script src="/static/management_dropdowns.js?v=20260901"></script>'
+    )
+    if "</body>" in html:
+        html = html.replace("</body>", dropdown_bootstrap + "</body>", 1)
+    else:
+        html += dropdown_bootstrap
+    return html
+
+
+@flow_company_bp.get("/management/options")
+def management_options():
+    company_id = _management_company_id()
+    if company_id is None or not _management_allowed(company_id):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+
+    _prepare_management_db()
+    conn = None
+    try:
+        conn = __import__("database").get_connection()
+        row = conn.execute(
+            """
+            SELECT
+                (SELECT GROUP_CONCAT(ContractCode, char(10))
+                   FROM (SELECT DISTINCT ContractCode
+                           FROM Contracts
+                          WHERE CompanyID=?
+                            AND TRIM(COALESCE(ContractCode,''))<>''
+                          ORDER BY ContractCode)) AS ContractCodes,
+                (SELECT GROUP_CONCAT(ContractName, char(10))
+                   FROM (SELECT DISTINCT ContractName
+                           FROM Contracts
+                          WHERE CompanyID=?
+                            AND TRIM(COALESCE(ContractName,''))<>''
+                          ORDER BY ContractName)) AS ContractNames,
+                (SELECT GROUP_CONCAT(ProductCode, char(10))
+                   FROM (SELECT DISTINCT ProductCode
+                           FROM Products
+                          WHERE CompanyID=?
+                            AND TRIM(COALESCE(ProductCode,''))<>''
+                          ORDER BY ProductCode)) AS ProductCodes,
+                (SELECT GROUP_CONCAT(ProductName, char(10))
+                   FROM (SELECT DISTINCT ProductName
+                           FROM Products
+                          WHERE CompanyID=?
+                            AND TRIM(COALESCE(ProductName,''))<>''
+                          ORDER BY ProductName)) AS ProductNames
+            """,
+            (company_id, company_id, company_id, company_id),
+        ).fetchone()
+
+        def split_group(value):
+            if not value:
+                return []
+            return [item.strip() for item in str(value).split("\n") if item.strip()]
+
+        return jsonify({
+            "status": "ok",
+            "CompanyID": int(company_id),
+            "contract_codes": split_group(row["ContractCodes"]),
+            "contract_names": split_group(row["ContractNames"]),
+            "product_codes": split_group(row["ProductCodes"]),
+            "product_names": split_group(row["ProductNames"]),
+        })
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(exc)}), 500
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 @flow_company_bp.get("/management/config")
