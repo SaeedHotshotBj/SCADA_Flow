@@ -19,110 +19,58 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Patch database connection and Edge data storage
+      - name: Apply exact server-side fixes
         shell: python
         run: |
           from pathlib import Path
-          import re
 
           db = Path('database.py')
           text = db.read_text(encoding='utf-8')
 
-          text, n1 = re.subn(
-              r'(conn\s*=\s*sqlite3\.connect\(\s*db_path,\s*)',
-              r'\1timeout=30,\n        ',
-              text,
-              count=1,
-              flags=re.S,
-          )
-          if n1 != 1:
-              raise SystemExit('database.py: sqlite3.connect block not found')
+          needle = '''    conn = sqlite3.connect(\n        db_path,\n        detect_types=(\n            sqlite3.PARSE_DECLTYPES |\n            sqlite3.PARSE_COLNAMES\n        ),\n        check_same_thread=False,\n    )'''
+          replacement = '''    conn = sqlite3.connect(\n        db_path,\n        timeout=30,\n        detect_types=(\n            sqlite3.PARSE_DECLTYPES |\n            sqlite3.PARSE_COLNAMES\n        ),\n        check_same_thread=False,\n    )'''
+          if needle in text:
+              text = text.replace(needle, replacement, 1)
+          elif 'timeout=30,' not in text:
+              raise SystemExit('database.py: sqlite connection block not found')
 
-          old_fk = '    conn.execute(\n        "PRAGMA foreign_keys = ON"\n    )\n'
-          busy = '    conn.execute(\n        "PRAGMA busy_timeout = 10000"\n    )\n'
+          busy = '''    conn.execute(\n        "PRAGMA busy_timeout = 10000"\n    )'''
           if busy not in text:
-              if old_fk not in text:
-                  raise SystemExit('database.py: foreign_keys PRAGMA not found')
-              text = text.replace(old_fk, old_fk + '\n' + busy, 1)
+              marker = '''    conn.execute(\n        "PRAGMA foreign_keys = ON"\n    )'''
+              if marker not in text:
+                  raise SystemExit('database.py: foreign_keys marker not found')
+              text = text.replace(marker, marker + '\n\n' + busy, 1)
 
           db.write_text(text, encoding='utf-8')
 
           app = Path('app.py')
           text = app.read_text(encoding='utf-8')
 
-          start = text.find('# EDGE DATA RECEIVER')
-          if start < 0:
-              raise SystemExit('app.py: EDGE DATA RECEIVER section not found')
+          old = '''            INSERT INTO PLC_Data\n            (\n                CompanyID,\n                TagName,\n                Value,\n                StorageType,\n                Timestamp\n            )\n            VALUES\n            (?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))\n            """,\n            (\n                company_id,\n                tag,\n                value,\n                "EDGE",\n                timestamp\n            )'''
 
-          insert_pos = text.find('INSERT INTO PLC_Data', start)
-          if insert_pos < 0:
-              raise SystemExit('app.py: PLC_Data INSERT not found')
+          new = '''            INSERT INTO PLC_Data\n            (\n                CompanyID,\n                PLC_ID,\n                TagName,\n                Value,\n                StorageType,\n                Timestamp\n            )\n            VALUES\n            (?, ?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))\n            """,\n            (\n                company_id,\n                plc_id,\n                tag,\n                value,\n                "EDGE",\n                timestamp\n            )'''
 
-          end_pos = text.find('\n\n        cursor.execute(', insert_pos)
-          if end_pos < 0:
-              raise SystemExit('app.py: end of PLC_Data INSERT block not found')
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif '                CompanyID,\n                PLC_ID,\n                TagName,' not in text:
+              raise SystemExit('app.py: PLC_Data insert block not found')
 
-          block = text[insert_pos:end_pos]
-
-          block, ncol = re.subn(
-              r'CompanyID,\s*TagName,\s*Value,\s*StorageType,\s*Timestamp',
-              'CompanyID,\n                PLC_ID,\n                TagName,\n                Value,\n                StorageType,\n                Timestamp',
-              block,
-              count=1,
-              flags=re.S,
-          )
-          if ncol != 1:
-              raise SystemExit('app.py: PLC_Data column list not matched')
-
-          block, nval = re.subn(
-              r'VALUES\s*\n\s*\(\?, \?, \?, \?, COALESCE\(\?, datetime\(\'now\', \'localtime\'\)\)\)',
-              "VALUES\n            (?, ?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))" ,
-              block,
-              count=1,
-              flags=re.S,
-          )
-          if nval != 1:
-              raise SystemExit('app.py: PLC_Data VALUES clause not matched')
-
-          block, nargs = re.subn(
-              r'\(\s*company_id,\s*tag,\s*value,\s*"EDGE",\s*timestamp\s*\)',
-              '(\n                company_id,\n                plc_id,\n                tag,\n                value,\n                "EDGE",\n                timestamp\n            )',
-              block,
-              count=1,
-              flags=re.S,
-          )
-          if nargs != 1:
-              raise SystemExit('app.py: PLC_Data parameter tuple not matched')
-
-          text = text[:insert_pos] + block + text[end_pos:]
           app.write_text(text, encoding='utf-8')
+          print('Server fixes applied.')
 
-          print('Patched database.py and app.py')
-
-      - name: Verify Edge Timeout service was not modified
+      - name: Verify only intended files changed
         shell: bash
         run: |
-          if git diff --quiet -- services/edge_timeout_service.py; then
-            echo 'Edge Timeout service unchanged.'
-          else
-            echo 'ERROR: edge_timeout_service.py changed.'
+          if ! git diff --quiet -- services/edge_timeout_service.py; then
+            echo 'ERROR: Edge Timeout service changed.'
             git diff -- services/edge_timeout_service.py
             exit 1
           fi
+          git diff --check
+          grep -A8 'sqlite3.connect' database.py | head -n 12
+          grep -A18 'INSERT INTO PLC_Data' app.py | head -n 22
 
-      - name: Verify exact target changes
-        shell: python
-        run: |
-          from pathlib import Path
-          app = Path('app.py').read_text(encoding='utf-8')
-          db = Path('database.py').read_text(encoding='utf-8')
-          assert 'CompanyID,\n                PLC_ID,\n                TagName,\n                Value,' in app
-          assert '(\n                company_id,\n                plc_id,\n                tag,\n                value,\n                "EDGE",' in app
-          assert 'timeout=30,' in db
-          assert 'PRAGMA busy_timeout = 10000' in db
-          print('Target changes verified.')
-
-      - name: Commit changes and remove this temporary workflow
+      - name: Commit fixes and remove temporary workflow
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
