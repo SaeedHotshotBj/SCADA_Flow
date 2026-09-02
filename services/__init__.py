@@ -184,9 +184,16 @@ def _load_master_logs_after_app_startup():
             app_module = sys.modules.get("app") or sys.modules.get("__main__")
             flask_app = getattr(app_module, "app", None) if app_module else None
             if flask_app is not None:
-                if "services.master_logs" not in sys.modules:
-                    from . import master_logs
-                print("MASTER LOGS MODULE LOADED AFTER APP STARTUP")
+                # The module can be imported before the Flask app exists.
+                # In that case importing it is not enough: call its installer
+                # explicitly once the real app object becomes available.
+                master_logs = sys.modules.get("services.master_logs")
+                if master_logs is None:
+                    from . import master_logs as master_logs
+                installer = getattr(master_logs, "_install", None)
+                if callable(installer):
+                    installer(flask_app)
+                print("MASTER LOGS MODULE/ROUTE READY AFTER APP STARTUP")
                 return
         except Exception as exc:
             print("MASTER LOGS LOAD RETRY:", attempt + 1, exc)
