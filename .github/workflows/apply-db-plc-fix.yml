@@ -1,0 +1,134 @@
+name: Apply SCADA DB PLC fix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/apply-db-plc-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch database connection and Edge data storage
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          db = Path('database.py')
+          text = db.read_text(encoding='utf-8')
+
+          text, n1 = re.subn(
+              r'(conn\s*=\s*sqlite3\.connect\(\s*db_path,\s*)',
+              r'\1timeout=30,\n        ',
+              text,
+              count=1,
+              flags=re.S,
+          )
+          if n1 != 1:
+              raise SystemExit('database.py: sqlite3.connect block not found')
+
+          old_fk = '    conn.execute(\n        "PRAGMA foreign_keys = ON"\n    )\n'
+          busy = '    conn.execute(\n        "PRAGMA busy_timeout = 10000"\n    )\n'
+          if busy not in text:
+              if old_fk not in text:
+                  raise SystemExit('database.py: foreign_keys PRAGMA not found')
+              text = text.replace(old_fk, old_fk + '\n' + busy, 1)
+
+          db.write_text(text, encoding='utf-8')
+
+          app = Path('app.py')
+          text = app.read_text(encoding='utf-8')
+
+          start = text.find('# EDGE DATA RECEIVER')
+          if start < 0:
+              raise SystemExit('app.py: EDGE DATA RECEIVER section not found')
+
+          insert_pos = text.find('INSERT INTO PLC_Data', start)
+          if insert_pos < 0:
+              raise SystemExit('app.py: PLC_Data INSERT not found')
+
+          end_pos = text.find('\n\n        cursor.execute(', insert_pos)
+          if end_pos < 0:
+              raise SystemExit('app.py: end of PLC_Data INSERT block not found')
+
+          block = text[insert_pos:end_pos]
+
+          block, ncol = re.subn(
+              r'CompanyID,\s*TagName,\s*Value,\s*StorageType,\s*Timestamp',
+              'CompanyID,\n                PLC_ID,\n                TagName,\n                Value,\n                StorageType,\n                Timestamp',
+              block,
+              count=1,
+              flags=re.S,
+          )
+          if ncol != 1:
+              raise SystemExit('app.py: PLC_Data column list not matched')
+
+          block, nval = re.subn(
+              r'VALUES\s*\n\s*\(\?, \?, \?, \?, COALESCE\(\?, datetime\(\'now\', \'localtime\'\)\)\)',
+              "VALUES\n            (?, ?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))" ,
+              block,
+              count=1,
+              flags=re.S,
+          )
+          if nval != 1:
+              raise SystemExit('app.py: PLC_Data VALUES clause not matched')
+
+          block, nargs = re.subn(
+              r'\(\s*company_id,\s*tag,\s*value,\s*"EDGE",\s*timestamp\s*\)',
+              '(\n                company_id,\n                plc_id,\n                tag,\n                value,\n                "EDGE",\n                timestamp\n            )',
+              block,
+              count=1,
+              flags=re.S,
+          )
+          if nargs != 1:
+              raise SystemExit('app.py: PLC_Data parameter tuple not matched')
+
+          text = text[:insert_pos] + block + text[end_pos:]
+          app.write_text(text, encoding='utf-8')
+
+          print('Patched database.py and app.py')
+
+      - name: Verify Edge Timeout service was not modified
+        shell: bash
+        run: |
+          if git diff --quiet -- services/edge_timeout_service.py; then
+            echo 'Edge Timeout service unchanged.'
+          else
+            echo 'ERROR: edge_timeout_service.py changed.'
+            git diff -- services/edge_timeout_service.py
+            exit 1
+          fi
+
+      - name: Verify exact target changes
+        shell: python
+        run: |
+          from pathlib import Path
+          app = Path('app.py').read_text(encoding='utf-8')
+          db = Path('database.py').read_text(encoding='utf-8')
+          assert 'CompanyID,\n                PLC_ID,\n                TagName,\n                Value,' in app
+          assert '(\n                company_id,\n                plc_id,\n                tag,\n                value,\n                "EDGE",' in app
+          assert 'timeout=30,' in db
+          assert 'PRAGMA busy_timeout = 10000' in db
+          print('Target changes verified.')
+
+      - name: Commit changes and remove this temporary workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/apply-db-plc-fix.yml
+          git add app.py database.py
+          git diff --cached --quiet && exit 1
+          git commit -m 'Fix PLC-aware edge data storage and SQLite locking'
+          git push origin main
