@@ -56,7 +56,22 @@ function setOnline(){const s=document.getElementById("status");s.textContent="ON
 function setOffline(){const s=document.getElementById("status");s.textContent="OFFLINE";s.className="status offline";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="OFFLINE";e.classList.remove("online-state")})}
 function apply(plcId,tag,value){if(value===null||value===undefined)return;const normal=String(tag).toLowerCase();const plc=normalizePlcId(plcId);const rows=Array.from(document.querySelectorAll("[data-tag]")).filter(r=>String(r.dataset.tag).toLowerCase()===normal);if(!rows.length)return;if(plc){rows.filter(r=>normalizePlcId(r.dataset.plcId)===plc).forEach(r=>{const v=r.querySelector("[data-value]");if(v)v.textContent=String(value)})}else if(rows.length===1){const v=rows[0].querySelector("[data-value]");if(v)v.textContent=String(value)}}
 function applyAll(data){if(!data){setOffline();return}const values=Array.isArray(data.TagValues)?data.TagValues:[];if(values.length){values.forEach(item=>apply(item.PLC_ID,item.TagName,item.Value))}else{Object.keys(data.Tags||{}).forEach(k=>apply("",k,data.Tags[k]))}if(data.Online===true)setOnline();else setOffline()}
-socket.on("disconnect",setOffline);socket.on("tag_update",d=>{if(d&&d.Online===true&&d.Tag){apply(d.PLC_ID,d.Tag,d.Value);setOnline()}});socket.on("connect_error",setOffline);
+socket.on("disconnect",setOffline);
+socket.on("tag_update",d=>{
+ if(!d)return;
+ if(Array.isArray(d.TagValues)&&d.TagValues.length){
+   d.TagValues.forEach(item=>{
+     if(item&&item.TagName!==undefined)apply(item.PLC_ID,item.TagName,item.Value);
+   });
+   if(d.Online===true)setOnline();
+   return;
+ }
+ if(d.Online===true&&d.Tag){
+   apply(d.PLC_ID,d.Tag,d.Value);
+   setOnline();
+ }
+});
+socket.on("connect_error",setOffline);
 async function loadConfig(){try{const r=await fetch("/flow.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);dashboardConfig=buildConfigFromFlow(await r.json());render()}catch(e){console.error("DASHBOARD CONFIG ERROR",e);document.getElementById("dashboard").innerHTML='<div class="error-box">Dashboard configuration could not be loaded.</div>';setOffline()}}
 async function latest(){try{const r=await fetch("/dashboard/latest?t="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);applyAll(await r.json())}catch(e){console.error("DASHBOARD DATA ERROR",e);setOffline()}}
 loadConfig();latest();setInterval(latest,1000);
