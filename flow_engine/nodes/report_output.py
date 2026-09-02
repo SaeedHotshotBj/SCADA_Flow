@@ -12,6 +12,10 @@ from services.report_service import get_report_data, ensure_report_tables, save_
 
 
 class ReportOutput:
+    # Compatibility hook used by the management-context wiring layer.
+    # Keep it on the class so older runtime patch code can discover it before
+    # an instance is created, while each instance also gets its own mapping.
+    _management_context_tags = {}
 
     def __init__(self, config=None):
         self.config = config or {}
@@ -19,6 +23,7 @@ class ReportOutput:
         self.date_picker = self.config.get("DatePicker", "JalaliPicker")
         self.products = self.config.get("products", [])
         self._last_report_event_key = None
+        self._management_context_tags = {}
 
     @staticmethod
     def _plc_id(value):
