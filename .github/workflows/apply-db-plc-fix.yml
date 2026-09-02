@@ -23,23 +23,18 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import re
 
           db = Path('database.py')
           text = db.read_text(encoding='utf-8')
 
           old_connect = '''    conn = sqlite3.connect(\n        db_path,\n        detect_types=(\n            sqlite3.PARSE_DECLTYPES |\n            sqlite3.PARSE_COLNAMES\n        ),\n        check_same_thread=False,\n    )'''
-
           new_connect = '''    conn = sqlite3.connect(\n        db_path,\n        timeout=30,\n        detect_types=(\n            sqlite3.PARSE_DECLTYPES |\n            sqlite3.PARSE_COLNAMES\n        ),\n        check_same_thread=False,\n    )'''
-
           if old_connect not in text:
               raise SystemExit('database.py: expected sqlite3.connect block not found')
           text = text.replace(old_connect, new_connect, 1)
 
           old_fk = '''    conn.execute(\n        "PRAGMA foreign_keys = ON"\n    )\n\n    conn.execute(\n        "PRAGMA journal_mode = WAL"\n    )'''
-
           new_fk = '''    conn.execute(\n        "PRAGMA foreign_keys = ON"\n    )\n\n    conn.execute(\n        "PRAGMA busy_timeout = 10000"\n    )\n\n    conn.execute(\n        "PRAGMA journal_mode = WAL"\n    )'''
-
           if old_fk not in text:
               raise SystemExit('database.py: expected PRAGMA block not found')
           text = text.replace(old_fk, new_fk, 1)
@@ -48,42 +43,21 @@ jobs:
           app = Path('app.py')
           text = app.read_text(encoding='utf-8')
 
-          start = text.find('# =====================================================\n# EDGE DATA RECEIVER')
-          if start < 0:
-              raise SystemExit('app.py: EDGE DATA RECEIVER section not found')
-          next_section = text.find('\n# =====================================================', start + 20)
-          if next_section < 0:
-              next_section = len(text)
-          section = text[start:next_section]
+          old_sql = '''            INSERT INTO PLC_Data\n            (\n                CompanyID,\n                TagName,\n                Value,\n                StorageType,\n                Timestamp\n            )\n            VALUES\n            (?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))\n            """,\n            (\n                company_id,\n                tag,\n                value,\n                "EDGE",\n                timestamp\n            )'''
 
-          pattern = re.compile(
-              r'INSERT INTO PLC_Data\s*\(\s*'
-              r'CompanyID\s*,\s*TagName\s*,\s*Value\s*,\s*StorageType\s*,\s*Timestamp\s*\)\s*'
-              r'VALUES\s*\(\s*\?,\s*\?,\s*\?,\s*\?,\s*COALESCE',
-              re.S,
-          )
+          new_sql = '''            INSERT INTO PLC_Data\n            (\n                CompanyID,\n                PLC_ID,\n                TagName,\n                Value,\n                StorageType,\n                Timestamp\n            )\n            VALUES\n            (?, ?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))\n            """,\n            (\n                company_id,\n                plc_id,\n                tag,\n                value,\n                "EDGE",\n                timestamp\n            )'''
 
-          replacement = '''INSERT INTO PLC_Data\n            (\n                CompanyID,\n                PLC_ID,\n                TagName,\n                Value,\n                StorageType,\n                Timestamp\n            )\n            VALUES (?, ?, ?, ?, ?, COALESCE'''
-
-          section, count = pattern.subn(replacement, section, count=1)
-          if count != 1:
-              raise SystemExit('app.py: expected PLC_Data INSERT statement not found')
-
-          param_old = '(company_id, tag, value, storage_type, timestamp)'
-          param_new = '(company_id, plc_id, tag, value, storage_type, timestamp)'
-          if param_old not in section:
-              raise SystemExit('app.py: expected PLC_Data parameter tuple not found')
-          section = section.replace(param_old, param_new, 1)
-
-          text = text[:start] + section + text[next_section:]
+          if old_sql not in text:
+              raise SystemExit('app.py: expected /api/data PLC_Data insert block not found')
+          text = text.replace(old_sql, new_sql, 1)
           app.write_text(text, encoding='utf-8')
 
           print('Patched database.py and app.py')
 
-      - name: Verify Edge Timeout code was not modified
+      - name: Verify Edge Timeout service was not modified
         shell: bash
         run: |
-          if ! git diff -- services/edge_timeout_service.py | grep -q '^'; then
+          if git diff --quiet -- services/edge_timeout_service.py; then
             echo 'Edge Timeout service unchanged.'
           else
             echo 'ERROR: edge_timeout_service.py changed.'
@@ -91,7 +65,7 @@ jobs:
             exit 1
           fi
 
-      - name: Commit and remove this temporary workflow
+      - name: Commit changes and remove this temporary workflow
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
