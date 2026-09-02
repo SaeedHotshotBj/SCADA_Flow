@@ -66,12 +66,12 @@ NODE_REGISTRY = {
                 {"name": "title", "label": "Title", "type": "text"},
                 {"name": "unit", "label": "Unit", "type": "text"}
             ]},
-            {"name": "timeout", "label": "Edge Timeout (sec)", "type": "number", "default": 10}
+            {"name": "timeout", "label": "Edge Timeout (sec)", "type": "number", "default": ""}
         ]
     },
 
     "EdgeTimeout": {
-        "config": [{"name": "timeout_seconds", "label": "Edge Timeout (sec)", "type": "number", "default": 10}]
+        "config": [{"name": "timeout_seconds", "label": "Edge Timeout (sec)", "type": "number", "default": ""}]
     },
 
     "AlarmNode": {
