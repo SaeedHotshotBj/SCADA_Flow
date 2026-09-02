@@ -12,7 +12,8 @@ NODE_REGISTRY = {
             {"name": "port", "label": "PLC Port", "type": "number"},
             {"name": "slave", "label": "Slave ID", "type": "number"},
             {"name": "register", "label": "Start Register", "type": "number"},
-            {"name": "count", "label": "Register Count", "type": "number"}
+            {"name": "count", "label": "Register Count", "type": "number"},
+            {"name": "communication_timeout", "label": "Communication Timeout (sec)", "type": "number", "default": ""}
         ]
     },
 
