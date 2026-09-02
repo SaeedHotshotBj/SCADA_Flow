@@ -74,7 +74,7 @@ socket.on("tag_update",d=>{
 socket.on("connect_error",setOffline);
 async function loadConfig(){try{const r=await fetch("/flow.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);dashboardConfig=buildConfigFromFlow(await r.json());render()}catch(e){console.error("DASHBOARD CONFIG ERROR",e);document.getElementById("dashboard").innerHTML='<div class="error-box">Dashboard configuration could not be loaded.</div>';setOffline()}}
 async function latest(){try{const r=await fetch("/dashboard/latest?t="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);applyAll(await r.json())}catch(e){console.error("DASHBOARD DATA ERROR",e);setOffline()}}
-loadConfig();latest();setInterval(latest,1000);
+loadConfig();latest();
 </script>
 <script src="/static/dashboard_machine_trend.js?v=1"></script>
 </body>
