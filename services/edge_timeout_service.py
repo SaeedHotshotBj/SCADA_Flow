@@ -11,7 +11,6 @@ from database import get_connection
 from services.plc_identity import ensure_plc_identity_schema
 
 CHECK_INTERVAL = 1.0
-DEFAULT_TIMEOUT = 10.0
 SCADA_TIMEZONE = ZoneInfo("Asia/Tehran")
 _started = False
 _thread = None
@@ -92,7 +91,7 @@ def _ensure_tables(conn):
             CompanyID INTEGER NOT NULL,
             PLC_ID INTEGER NOT NULL,
             LastReceivedAt TEXT,
-            TimeoutSeconds REAL NOT NULL DEFAULT 10.0,
+            TimeoutSeconds REAL,
             TimedOut INTEGER NOT NULL DEFAULT 0,
             LastTimeoutAt TEXT,
             UpdatedAt TEXT NOT NULL DEFAULT '',
@@ -127,9 +126,26 @@ def _log(conn, company_id, plc_id, level, message, commit=True):
             conn.rollback()
 
 
+def _read_timeout(value, source):
+    if value in (None, ""):
+        return None
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError):
+        print("INVALID EDGE TIMEOUT:", source, value)
+        return None
+    if timeout <= 0:
+        print("INVALID EDGE TIMEOUT:", source, value)
+        return None
+    return timeout
+
+
 def _load_configs(conn):
     result = {}
-    rows = conn.execute("SELECT CompanyID, FlowJson FROM Flows WHERE CompanyID IS NOT NULL ORDER BY CompanyID").fetchall()
+    rows = conn.execute(
+        "SELECT CompanyID, FlowJson FROM Flows WHERE CompanyID IS NOT NULL ORDER BY CompanyID"
+    ).fetchall()
+
     for row in rows:
         company_id = int(row["CompanyID"])
         try:
@@ -137,18 +153,36 @@ def _load_configs(conn):
         except Exception as exc:
             _log(conn, company_id, 0, "ERROR", f"Flow JSON parse failed: {exc}")
             continue
+
         nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
-        timeout = DEFAULT_TIMEOUT
-        for node in nodes.values():
+
+        # Preferred source: communication_timeout on each PLCReader.
+        plc_timeouts = {}
+        for node_id, node in nodes.items():
+            if not isinstance(node, dict) or node.get("name") != "PLCReader":
+                continue
+            node_data = node.get("data", {}) or {}
+            try:
+                plc_id = int(node_data.get("plc_id", node_data.get("PLC_ID")))
+            except (TypeError, ValueError):
+                continue
+            plc_timeouts[plc_id] = _read_timeout(
+                node_data.get("communication_timeout"),
+                f"Company={company_id} PLC_ID={plc_id} NODE={node_id}",
+            )
+
+        # Backward compatibility: an explicit EdgeTimeout node is still a
+        # Flow-defined setting. It is used only where PLCReader has no value.
+        legacy_timeout = None
+        for node_id, node in nodes.items():
             if not isinstance(node, dict) or node.get("name") != "EdgeTimeout":
                 continue
-            config = (node.get("data", {}) or {}).get("config", node.get("data", {}) or {})
-            try:
-                timeout = float(config.get("timeout_seconds", DEFAULT_TIMEOUT))
-            except (TypeError, ValueError):
-                timeout = DEFAULT_TIMEOUT
-            if timeout <= 0:
-                timeout = DEFAULT_TIMEOUT
+            node_data = node.get("data", {}) or {}
+            config = node_data.get("config", node_data) or {}
+            legacy_timeout = _read_timeout(
+                config.get("timeout_seconds"),
+                f"Company={company_id} EdgeTimeout node={node_id}",
+            )
             break
 
         groups = {}
@@ -171,7 +205,14 @@ def _load_configs(conn):
                     groups.setdefault(plc_id, set()).add(tag)
 
         for plc_id, tags in groups.items():
-            result[(company_id, plc_id)] = {"timeout": timeout, "tags": sorted(tags)}
+            timeout = plc_timeouts.get(plc_id)
+            if timeout is None:
+                timeout = legacy_timeout
+            result[(company_id, plc_id)] = {
+                "timeout": timeout,
+                "tags": sorted(tags),
+            }
+
     return result
 
 
@@ -202,7 +243,7 @@ def _ensure_state(conn, company_id, plc_id, timeout, last_received):
         INSERT OR IGNORE INTO EdgeTimeoutState
         (CompanyID, PLC_ID, LastReceivedAt, TimeoutSeconds, TimedOut, LastTimeoutAt, UpdatedAt)
         VALUES (?, ?, ?, ?, 0, NULL, ?)
-    """, (int(company_id), int(plc_id), last_received, float(timeout), _now_string()))
+    """, (int(company_id), int(plc_id), last_received, timeout, _now_string()))
     conn.commit()
     return _get_state(conn, company_id, plc_id)
 
@@ -212,7 +253,7 @@ def _set_state(conn, company_id, plc_id, timeout, last_received, timed_out, last
         UPDATE EdgeTimeoutState
         SET LastReceivedAt=?, TimeoutSeconds=?, TimedOut=?, LastTimeoutAt=?, UpdatedAt=?
         WHERE CompanyID=? AND PLC_ID=?
-    """, (last_received, float(timeout), 1 if timed_out else 0, last_timeout_at, _now_string(), int(company_id), int(plc_id)))
+    """, (last_received, timeout, 1 if timed_out else 0, last_timeout_at, _now_string(), int(company_id), int(plc_id)))
     if commit:
         conn.commit()
 
@@ -252,32 +293,60 @@ def check_once():
         _ensure_tables(conn)
         configs = _load_configs(conn)
         now = datetime.now(SCADA_TIMEZONE).replace(tzinfo=None)
+
         for (company_id, plc_id), cfg in configs.items():
-            timeout = float(cfg["timeout"])
+            timeout = cfg.get("timeout")
             tags = list(cfg["tags"])
+            if timeout is None or not tags:
+                continue
+
             last_edge = _last_edge_timestamp(conn, company_id, plc_id)
             if last_edge is None:
                 _ensure_state(conn, company_id, plc_id, timeout, None)
                 continue
+
             parsed = _parse_timestamp(last_edge)
             if parsed is None:
                 _log(conn, company_id, plc_id, "ERROR", f"Invalid EDGE timestamp: {last_edge}")
                 continue
+
             elapsed = max(0.0, (now - parsed).total_seconds())
             state = _ensure_state(conn, company_id, plc_id, timeout, str(last_edge))
+
             if elapsed < timeout:
                 if bool(state.get("TimedOut")):
                     _set_state(conn, company_id, plc_id, timeout, str(last_edge), False, state.get("LastTimeoutAt"))
                     _log(conn, company_id, plc_id, "INFO", "EDGE RECOVERED")
                 continue
+
             if bool(state.get("TimedOut")):
                 continue
+
             try:
-                claimed, count, stamp = _fire_timeout_transaction(conn, company_id, plc_id, timeout, last_edge, tags, elapsed)
+                claimed, count, stamp = _fire_timeout_transaction(
+                    conn,
+                    company_id,
+                    plc_id,
+                    timeout,
+                    last_edge,
+                    tags,
+                    elapsed,
+                )
                 if claimed:
-                    print("EDGE TIMEOUT:", "Company=", company_id, "PLC_ID=", plc_id, "ZeroRows=", count)
+                    print(
+                        "EDGE TIMEOUT:",
+                        "Company=", company_id,
+                        "PLC_ID=", plc_id,
+                        "ZeroRows=", count,
+                    )
             except Exception as exc:
-                _log(conn, company_id, plc_id, "ERROR", f"TIMEOUT ZERO INSERT FAILED; retry next check: {type(exc).__name__}: {exc}")
+                _log(
+                    conn,
+                    company_id,
+                    plc_id,
+                    "ERROR",
+                    f"TIMEOUT ZERO INSERT FAILED; retry next check: {type(exc).__name__}: {exc}",
+                )
     except Exception as exc:
         conn.rollback()
         print("EDGE TIMEOUT WORKER ERROR:", type(exc).__name__, exc)
