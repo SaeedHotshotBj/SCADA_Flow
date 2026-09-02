@@ -32,11 +32,17 @@ class PLCReader:
         except (TypeError, ValueError):
             return None
 
-    def _edge_timeout(self):
+    def _communication_timeout(self):
+        value = self._get_config("communication_timeout")
+        if value in (None, ""):
+            return None
         try:
-            return max(0.1, float(os.environ.get("SCADA_EDGE_TIMEOUT", "2")))
-        except (TypeError, ValueError):
-            return 2.0
+            value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("PLCReader communication_timeout must be a number.") from exc
+        if value <= 0:
+            raise ValueError("PLCReader communication_timeout must be greater than zero.")
+        return value
 
     def _get_edge_mappings(self, force=False):
         try:
@@ -215,7 +221,7 @@ class PLCReader:
             )
             latest_rows = {row["TagName"]: row for row in cursor.fetchall()}
             registers = {}
-            timeout = self._edge_timeout()
+            timeout = self._communication_timeout()
             now = time.time()
 
             for mapping in mappings:
@@ -226,11 +232,14 @@ class PLCReader:
                 value = row["Value"]
                 timestamp = row["Timestamp"]
 
-                try:
-                    timestamp_text = str(timestamp).replace("T", " ").strip().rstrip("Z")
-                    age = now - datetime.fromisoformat(timestamp_text).timestamp()
-                except Exception:
-                    age = timeout + 1
+                if timeout is None:
+                    age = None
+                else:
+                    try:
+                        timestamp_text = str(timestamp).replace("T", " ").strip().rstrip("Z")
+                        age = now - datetime.fromisoformat(timestamp_text).timestamp()
+                    except Exception:
+                        age = timeout + 1
 
                 is_trigger_register = tag_name.startswith(TRIGGER_TAG_PREFIX)
                 if self._is_zero(value) and not is_trigger_register:
@@ -254,7 +263,10 @@ class PLCReader:
 
                 registers[str(mapping["register"])] = value
 
-                if age <= timeout and (is_trigger_register or value not in (None, 0, 0.0)):
+                if (
+                    timeout is None
+                    or age <= timeout
+                ) and (is_trigger_register or value not in (None, 0, 0.0)):
                     self._watchdog_zero_memory.discard(self._zero_key(company_id, plc_id, tag_name))
 
             return registers
@@ -287,6 +299,7 @@ class PLCReader:
         register = self._get_config("register")
         count = self._get_config("count")
         plc_id = self._plc_id()
+        communication_timeout = self._communication_timeout()
 
         required = {"plc_id": plc_id, "ip": ip, "port": port, "slave": slave, "register": register, "count": count}
         missing = [name for name, value in required.items() if value in (None, "")]
@@ -301,13 +314,26 @@ class PLCReader:
         if port <= 0 or slave < 0 or register < 0 or count <= 0:
             raise ValueError("PLCReader configuration contains invalid numeric values.")
 
+        if communication_timeout is None:
+            # No hardcoded communication timeout: Flow controls this value.
+            # The Edge historian remains usable even when the Flow field is blank.
+            pass
+
         registers = self._read_edge_registers(register, count)
         if not registers and os.environ.get("SCADA_DIRECT_MODBUS", "0").strip().lower() in {"1", "true", "yes", "on"}:
             registers = self._read_direct_modbus(ip, port, slave, register, count)
 
         result = dict(data)
         result["PLC_ID"] = plc_id
-        result["PLC"] = {"PLC_ID": plc_id, "ip": ip, "port": port, "slave": slave, "register": register, "count": count}
+        result["PLC"] = {
+            "PLC_ID": plc_id,
+            "ip": ip,
+            "port": port,
+            "slave": slave,
+            "register": register,
+            "count": count,
+            "communication_timeout": communication_timeout,
+        }
         result["Registers"] = registers
         result["registers"] = registers
         return result
