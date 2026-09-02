@@ -1457,16 +1457,18 @@ def receive_edge_data():
             INSERT INTO PLC_Data
             (
                 CompanyID,
+                PLC_ID,
                 TagName,
                 Value,
                 StorageType,
                 Timestamp
             )
             VALUES
-            (?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))
+            (?, ?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))
             """,
             (
                 company_id,
+                plc_id,
                 tag,
                 value,
                 "EDGE",
