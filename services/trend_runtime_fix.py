@@ -37,6 +37,7 @@ def _aggregate_raw_bucket_normalized(conn, start, end):
     rows = conn.execute(
         f"""
         SELECT CompanyID,
+               PLC_ID,
                TagName,
                Timestamp AS ts,
                Value AS value
@@ -45,6 +46,7 @@ def _aggregate_raw_bucket_normalized(conn, start, end):
           AND datetime(replace(Timestamp, 'T', ' ')) < datetime(?)
           AND (StorageType IS NULL OR UPPER(StorageType) IN ({allowed}))
         ORDER BY CompanyID,
+                 PLC_ID,
                  TagName,
                  datetime(replace(Timestamp, 'T', ' ')),
                  ID
@@ -54,10 +56,10 @@ def _aggregate_raw_bucket_normalized(conn, start, end):
 
     grouped = defaultdict(list)
     for row in rows:
-        grouped[(int(row["CompanyID"]), row["TagName"])].append(row)
+        grouped[(int(row["CompanyID"]), row["PLC_ID"], row["TagName"])].append(row)
 
     written = 0
-    for (company_id, tag), group in grouped.items():
+    for (company_id, plc_id, tag), group in grouped.items():
         stats = ta._aggregate_step_rows(group, start, end)
         if stats is None:
             continue
@@ -65,6 +67,7 @@ def _aggregate_raw_bucket_normalized(conn, start, end):
             conn,
             "TrendMinute",
             company_id,
+            plc_id,
             tag,
             start,
             end,
@@ -79,7 +82,7 @@ def aggregate_once_local_time(force=False):
     """
     Aggregate ALL available raw minute buckets, for ALL companies and edges.
 
-    CompanyID and TagName are used only as grouping keys. No company or Edge
+    CompanyID + PLC_ID + TagName are used as grouping keys. No company or Edge
     is selected, filtered, or hardcoded here.
     """
     ta._ensure_tables()
