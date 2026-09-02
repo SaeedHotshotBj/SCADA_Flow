@@ -7,6 +7,314 @@ def _table_columns(conn, table):
     return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
 
 
+def _extract_flow_nodes(flow_json):
+    try:
+        flow = json.loads(flow_json or "{}") if isinstance(flow_json, str) else (flow_json or {})
+    except Exception:
+        return []
+
+    nodes = (
+        flow.get("drawflow", {})
+        .get("Home", {})
+        .get("data", {})
+    )
+    return list(nodes.values()) if isinstance(nodes, dict) else []
+
+
+def _extract_plc_readers(flow_json):
+    readers = []
+
+    for node in _extract_flow_nodes(flow_json):
+        if not isinstance(node, dict) or node.get("name") != "PLCReader":
+            continue
+
+        data = node.get("data", {}) or {}
+        config = data.get("config", data) or {}
+        if not isinstance(config, dict):
+            continue
+
+        raw_plc_id = config.get("plc_id", config.get("PLC_ID"))
+        try:
+            plc_id = int(raw_plc_id)
+        except (TypeError, ValueError):
+            continue
+
+        if plc_id <= 0:
+            continue
+
+        try:
+            port = int(config.get("port", 502))
+        except (TypeError, ValueError):
+            port = 502
+
+        try:
+            slave = int(config.get("slave", 1))
+        except (TypeError, ValueError):
+            slave = 1
+
+        ip = str(config.get("ip", "")).strip()
+        if not ip:
+            continue
+
+        name = str(
+            config.get("plc_name")
+            or config.get("name")
+            or "PLC"
+        ).strip() or "PLC"
+
+        readers.append({
+            "PLC_ID": plc_id,
+            "PLC_Name": name,
+            "PLC_IP": ip,
+            "PLC_Port": port,
+            "Slave_ID": slave,
+        })
+
+    return readers
+
+
+def _sync_flow_plcs(conn, company_id, flow_json):
+    """Create/update PLC records declared by PLCReader nodes.
+
+    PLC_ID is globally unique because PLCs.PLC_ID is the primary key.
+    A PLC_ID already owned by another company is never moved.
+    """
+    company_id = int(company_id)
+
+    for plc in _extract_plc_readers(flow_json):
+        existing = conn.execute(
+            "SELECT CompanyID FROM PLCs WHERE PLC_ID = ? LIMIT 1",
+            (plc["PLC_ID"],),
+        ).fetchone()
+
+        if existing is not None and int(existing["CompanyID"]) != company_id:
+            print(
+                "PLC IDENTITY CONFLICT:",
+                "PLC_ID=", plc["PLC_ID"],
+                "ExistingCompany=", existing["CompanyID"],
+                "FlowCompany=", company_id,
+            )
+            continue
+
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO PLCs
+                (
+                    PLC_ID,
+                    CompanyID,
+                    PLC_Name,
+                    PLC_IP,
+                    PLC_Port,
+                    Slave_ID
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plc["PLC_ID"],
+                    company_id,
+                    plc["PLC_Name"],
+                    plc["PLC_IP"],
+                    plc["PLC_Port"],
+                    plc["Slave_ID"],
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE PLCs
+                SET
+                    CompanyID = ?,
+                    PLC_Name = ?,
+                    PLC_IP = ?,
+                    PLC_Port = ?,
+                    Slave_ID = ?
+                WHERE PLC_ID = ?
+                """,
+                (
+                    company_id,
+                    plc["PLC_Name"],
+                    plc["PLC_IP"],
+                    plc["PLC_Port"],
+                    plc["Slave_ID"],
+                    plc["PLC_ID"],
+                ),
+            )
+
+
+def _create_flow_plc_triggers(conn):
+    """Keep PLCs synchronized whenever a company flow is inserted/updated."""
+    conn.executescript(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_flows_validate_plc_identity_insert
+        BEFORE INSERT ON Flows
+        BEGIN
+            SELECT RAISE(ABORT, 'PLC_ID belongs to another company')
+            WHERE EXISTS (
+                SELECT 1
+                FROM json_each(NEW.FlowJson, '$.drawflow.Home.data') AS n
+                JOIN PLCs p
+                  ON p.PLC_ID = CAST(
+                        COALESCE(
+                            json_extract(n.value, '$.data.config.plc_id'),
+                            json_extract(n.value, '$.data.plc_id')
+                        ) AS INTEGER
+                     )
+                WHERE json_extract(n.value, '$.name') = 'PLCReader'
+                  AND COALESCE(
+                        json_extract(n.value, '$.data.config.plc_id'),
+                        json_extract(n.value, '$.data.plc_id')
+                      ) IS NOT NULL
+                  AND p.CompanyID <> NEW.CompanyID
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_flows_validate_plc_identity_update
+        BEFORE UPDATE OF CompanyID, FlowJson ON Flows
+        BEGIN
+            SELECT RAISE(ABORT, 'PLC_ID belongs to another company')
+            WHERE EXISTS (
+                SELECT 1
+                FROM json_each(NEW.FlowJson, '$.drawflow.Home.data') AS n
+                JOIN PLCs p
+                  ON p.PLC_ID = CAST(
+                        COALESCE(
+                            json_extract(n.value, '$.data.config.plc_id'),
+                            json_extract(n.value, '$.data.plc_id')
+                        ) AS INTEGER
+                     )
+                WHERE json_extract(n.value, '$.name') = 'PLCReader'
+                  AND COALESCE(
+                        json_extract(n.value, '$.data.config.plc_id'),
+                        json_extract(n.value, '$.data.plc_id')
+                      ) IS NOT NULL
+                  AND p.CompanyID <> NEW.CompanyID
+            );
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_flows_sync_plcs_insert
+        AFTER INSERT ON Flows
+        BEGIN
+            INSERT INTO PLCs
+            (
+                PLC_ID,
+                CompanyID,
+                PLC_Name,
+                PLC_IP,
+                PLC_Port,
+                Slave_ID
+            )
+            SELECT
+                CAST(
+                    COALESCE(
+                        json_extract(n.value, '$.data.config.plc_id'),
+                        json_extract(n.value, '$.data.plc_id')
+                    ) AS INTEGER
+                ),
+                NEW.CompanyID,
+                COALESCE(
+                    json_extract(n.value, '$.data.config.plc_name'),
+                    json_extract(n.value, '$.data.config.name'),
+                    json_extract(n.value, '$.data.plc_name'),
+                    'PLC'
+                ),
+                TRIM(COALESCE(
+                    json_extract(n.value, '$.data.config.ip'),
+                    json_extract(n.value, '$.data.ip'),
+                    ''
+                )),
+                CAST(COALESCE(
+                    json_extract(n.value, '$.data.config.port'),
+                    json_extract(n.value, '$.data.port'),
+                    502
+                ) AS INTEGER),
+                CAST(COALESCE(
+                    json_extract(n.value, '$.data.config.slave'),
+                    json_extract(n.value, '$.data.slave'),
+                    1
+                ) AS INTEGER)
+            FROM json_each(NEW.FlowJson, '$.drawflow.Home.data') AS n
+            WHERE json_extract(n.value, '$.name') = 'PLCReader'
+              AND CAST(COALESCE(
+                    json_extract(n.value, '$.data.config.plc_id'),
+                    json_extract(n.value, '$.data.plc_id')
+                  ) AS INTEGER) > 0
+              AND TRIM(COALESCE(
+                    json_extract(n.value, '$.data.config.ip'),
+                    json_extract(n.value, '$.data.ip'),
+                    ''
+                  )) <> ''
+            ON CONFLICT(PLC_ID) DO UPDATE SET
+                CompanyID = excluded.CompanyID,
+                PLC_Name = excluded.PLC_Name,
+                PLC_IP = excluded.PLC_IP,
+                PLC_Port = excluded.PLC_Port,
+                Slave_ID = excluded.Slave_ID;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_flows_sync_plcs_update
+        AFTER UPDATE OF CompanyID, FlowJson ON Flows
+        BEGIN
+            INSERT INTO PLCs
+            (
+                PLC_ID,
+                CompanyID,
+                PLC_Name,
+                PLC_IP,
+                PLC_Port,
+                Slave_ID
+            )
+            SELECT
+                CAST(
+                    COALESCE(
+                        json_extract(n.value, '$.data.config.plc_id'),
+                        json_extract(n.value, '$.data.plc_id')
+                    ) AS INTEGER
+                ),
+                NEW.CompanyID,
+                COALESCE(
+                    json_extract(n.value, '$.data.config.plc_name'),
+                    json_extract(n.value, '$.data.config.name'),
+                    json_extract(n.value, '$.data.plc_name'),
+                    'PLC'
+                ),
+                TRIM(COALESCE(
+                    json_extract(n.value, '$.data.config.ip'),
+                    json_extract(n.value, '$.data.ip'),
+                    ''
+                )),
+                CAST(COALESCE(
+                    json_extract(n.value, '$.data.config.port'),
+                    json_extract(n.value, '$.data.port'),
+                    502
+                ) AS INTEGER),
+                CAST(COALESCE(
+                    json_extract(n.value, '$.data.config.slave'),
+                    json_extract(n.value, '$.data.slave'),
+                    1
+                ) AS INTEGER)
+            FROM json_each(NEW.FlowJson, '$.drawflow.Home.data') AS n
+            WHERE json_extract(n.value, '$.name') = 'PLCReader'
+              AND CAST(COALESCE(
+                    json_extract(n.value, '$.data.config.plc_id'),
+                    json_extract(n.value, '$.data.plc_id')
+                  ) AS INTEGER) > 0
+              AND TRIM(COALESCE(
+                    json_extract(n.value, '$.data.config.ip'),
+                    json_extract(n.value, '$.data.ip'),
+                    ''
+                  )) <> ''
+            ON CONFLICT(PLC_ID) DO UPDATE SET
+                CompanyID = excluded.CompanyID,
+                PLC_Name = excluded.PLC_Name,
+                PLC_IP = excluded.PLC_IP,
+                PLC_Port = excluded.PLC_Port,
+                Slave_ID = excluded.Slave_ID;
+        END;
+        """
+    )
+
+
 def ensure_plc_identity_schema():
     from database import get_connection
     conn = get_connection()
@@ -44,6 +352,11 @@ def ensure_plc_identity_schema():
                 if changed:
                     conn.execute("UPDATE Flows SET FlowJson=?,LastModified=datetime('now','localtime') WHERE FlowID=?",(json.dumps(flow,ensure_ascii=False),row["FlowID"]))
 
+                # Also register every explicitly identified PLCReader in the
+                # existing company flow. This makes old saved flows compatible
+                # with the multi-PLC model without changing historical PLC IDs.
+                _sync_flow_plcs(conn, row["CompanyID"], row["FlowJson"])
+
         if "FlowTriggerState" in tables:
             cols=_table_columns(conn,"FlowTriggerState")
             if "PLC_ID" not in cols:
@@ -51,6 +364,10 @@ def ensure_plc_identity_schema():
             conn.execute("""UPDATE FlowTriggerState SET PLC_ID=(SELECT MIN(p.PLC_ID) FROM PLCs p WHERE p.CompanyID=FlowTriggerState.CompanyID)
                            WHERE PLC_ID IS NULL AND 1=(SELECT COUNT(*) FROM PLCs p2 WHERE p2.CompanyID=FlowTriggerState.CompanyID)""")
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_trigger_state_company_plc_register ON FlowTriggerState(CompanyID,PLC_ID,TriggerRegister)")
+
+        # Future Flow INSERT/UPDATE operations synchronize PLCs automatically.
+        if "Flows" in tables and "PLCs" in tables:
+            _create_flow_plc_triggers(conn)
 
         for table,idx,cols in (
             ("Tags","idx_tags_company_plc_name","CompanyID,PLC_ID,TagName"),
