@@ -84,6 +84,12 @@ def get_dashboard_widgets(company_id):
                             continue
                         item = dict(widget)
                         item["plc_id"] = _to_plc_id(item.get("plc_id", item.get("PLC_ID")))
+                        raw_tag = item.get("tag", "")
+                        item["tag"] = _resolve_machine_tag(
+                            raw_tag,
+                            item["plc_id"],
+                            register_lookup,
+                        )
                         widgets.append(item)
 
             elif node.get("name") == "MachineCard":
