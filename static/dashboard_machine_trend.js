@@ -2,7 +2,7 @@
     "use strict";
 
     let chart = null;
-    let selected = { tag: "", title: "", unit: "" };
+    let selected = { tag: "", title: "", unit: "", plc_id: "" };
 
     function loadScript(src) {
         return new Promise(function (resolve, reject) {
@@ -106,12 +106,20 @@
         window.jQuery("#machineTrendEnd").persianDatepicker(options);
     }
 
+    function normalizePlcId(value) {
+        if (value === null || value === undefined || value === "") return "";
+        const n = Number(value);
+        return Number.isFinite(n) ? String(n) : String(value).trim();
+    }
+
     function bindClicks() {
         document.querySelectorAll('[id^="widget_"], .machine-parameter[data-tag]').forEach(function (el) {
             if (el.dataset.machineTrendBound === "1") return;
 
             const tag = (el.getAttribute("data-tag") || (el.id.indexOf("widget_") === 0 ? el.id.slice(7) : "")).trim();
             if (!tag) return;
+
+            const plcId = normalizePlcId(el.getAttribute("data-plc-id"));
 
             el.dataset.machineTrendBound = "1";
 
@@ -121,7 +129,8 @@
                 openModal(
                     tag,
                     (el.getAttribute("data-label") || (titleElement ? titleElement.textContent.trim() : tag)),
-                    (el.getAttribute("data-unit") || (unitElement ? unitElement.textContent.trim() : ""))
+                    (el.getAttribute("data-unit") || (unitElement ? unitElement.textContent.trim() : "")),
+                    plcId
                 );
             };
 
@@ -135,9 +144,14 @@
         });
     }
 
-    function openModal(tag, title, unit) {
+    function openModal(tag, title, unit, plcId) {
         makeModal();
-        selected = { tag: tag, title: title || tag, unit: unit || "" };
+        selected = {
+            tag: tag,
+            title: title || tag,
+            unit: unit || "",
+            plc_id: normalizePlcId(plcId)
+        };
 
         document.getElementById("machineTrendTitle").textContent = selected.title + (selected.unit ? " (" + selected.unit + ")" : "");
 
@@ -176,20 +190,29 @@
             const start = document.getElementById("machineTrendStart").value.trim();
             const end = document.getElementById("machineTrendEnd").value.trim();
 
+            const trendRequest = {
+                Tag: selected.tag,
+                Tags: [selected.tag],
+                Start: start || null,
+                End: end || null,
+                Calendar: "Jalali",
+                DatePicker: "JalaliPicker"
+            };
+
+            // TrendDatabaseReader requires PLC_ID when the company has
+            // more than one PLC. The dashboard card already carries the
+            // correct PLC_ID, so pass it through unchanged.
+            if (selected.plc_id !== "") {
+                trendRequest.PLC_ID = Number(selected.plc_id);
+            }
+
             const response = await fetch("/flow_trend?_=" + Date.now(), {
                 method: "POST",
                 credentials: "same-origin",
                 cache: "no-store",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    TrendRequest: {
-                        Tag: selected.tag,
-                        Tags: [selected.tag],
-                        Start: start || null,
-                        End: end || null,
-                        Calendar: "Jalali",
-                        DatePicker: "JalaliPicker"
-                    }
+                    TrendRequest: trendRequest
                 })
             });
 
