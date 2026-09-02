@@ -190,7 +190,13 @@ def _load_master_logs_after_app_startup():
                 installer = getattr(module, "_install", None)
                 if callable(installer):
                     installer()
-                print("MASTER LOGS MODULE LOADED/INSTALLED AFTER APP STARTUP")
+                debug_module = sys.modules.get("services.trend_debug")
+                if debug_module is None:
+                    from . import trend_debug as debug_module
+                debug_installer = getattr(debug_module, "_install", None)
+                if callable(debug_installer):
+                    debug_installer()
+                print("MASTER LOGS MODULES LOADED/INSTALLED AFTER APP STARTUP")
                 return
         except Exception as exc:
             print("MASTER LOGS LOAD RETRY:", attempt + 1, exc)
