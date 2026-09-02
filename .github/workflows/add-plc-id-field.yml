@@ -1,17 +1,18 @@
-name: Fix PLC ID field patch formatting
+name: Patch PLC ID field
 
 on:
   push:
     branches:
       - main
     paths:
+      - 'PLC_ID_FIELD_PATCH_TRIGGER.txt'
       - '.github/workflows/add-plc-id-field.yml'
 
 permissions:
   contents: write
 
 jobs:
-  repair:
+  patch:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -19,7 +20,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Repair PLC ID field injection
+      - name: Repair PLC ID field patch
         shell: python
         run: |
           from pathlib import Path
@@ -29,7 +30,6 @@ jobs:
 
           start_marker = '<!-- PLC_ID_FIELD_PATCH_V1 -->'
           end_marker = '<!-- /PLC_ID_FIELD_PATCH_V1 -->'
-
           start = text.find(start_marker)
           end = text.find(end_marker)
           if start < 0 or end < 0 or end < start:
@@ -37,16 +37,12 @@ jobs:
 
           end += len(end_marker)
           block = text[start:end]
-
           fixed_block = block.replace('\\n', '\n')
-          if fixed_block == block:
-              print('PLC ID patch already uses real newlines.')
-          else:
-              text = text[:start] + fixed_block + text[end:]
-              path.write_text(text, encoding='utf-8')
-              print('Repaired literal newline escapes in PLC ID field patch.')
+          text = text[:start] + fixed_block + text[end:]
+          path.write_text(text, encoding='utf-8')
+          print('PLC ID field patch newlines normalized.')
 
-      - name: Verify patch syntax markers
+      - name: Verify final HTML patch
         shell: python
         run: |
           from pathlib import Path
@@ -54,21 +50,23 @@ jobs:
           required = [
               '<!-- PLC_ID_FIELD_PATCH_V1 -->',
               '<label for="plc-id-input">PLC ID</label>',
-              'editor.on(\'nodeSelected\'',
+              "editor.on('nodeSelected'",
               'current.data.plc_id=parsed;',
               '<!-- /PLC_ID_FIELD_PATCH_V1 -->',
           ]
           missing = [item for item in required if item not in text]
           if missing:
               raise SystemExit('PLC ID patch verification failed: ' + repr(missing))
+          if '\\n<style>' in text:
+              raise SystemExit('Literal \\n escape remains before PLC ID patch.')
           print('PLC ID field patch verification passed.')
 
-      - name: Commit target and remove temporary workflow
+      - name: Commit target and remove temporary files
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add templates/flow_editor.html
-          git rm .github/workflows/add-plc-id-field.yml
+          git rm .github/workflows/add-plc-id-field.yml PLC_ID_FIELD_PATCH_TRIGGER.txt
           git diff --cached --quiet && exit 0
           git commit -m "Add PLC ID field to PLCReader UI"
           git push origin main
