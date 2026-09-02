@@ -1,11 +1,9 @@
 # =====================================================
 # SCADA_FLOW DASHBOARD OUTPUT NODE
-# ROLE-AWARE LIVE DASHBOARD OUTPUT
-# EDGE TIMEOUT CONFIGURATION
+# PLC-AWARE LIVE DASHBOARD OUTPUT
 # =====================================================
 
 from datetime import datetime
-
 from socket_manager import send_dashboard_data
 
 
@@ -14,131 +12,85 @@ class DashboardOutput:
     DEFAULT_TIMEOUT_SECONDS = 10
 
     def __init__(self, config):
-
         self.config = config or {}
-
-        self.widgets = self.config.get(
-            "widgets",
-            []
-        )
-
+        self.widgets = self.config.get("widgets", [])
         try:
-            self.timeout = float(
-                self.config.get(
-                    "timeout",
-                    self.DEFAULT_TIMEOUT_SECONDS
-                )
-            )
+            self.timeout = max(0.0, float(self.config.get("timeout", self.DEFAULT_TIMEOUT_SECONDS)))
         except (TypeError, ValueError):
             self.timeout = float(self.DEFAULT_TIMEOUT_SECONDS)
 
-        if self.timeout < 0:
-            self.timeout = 0.0
+    @staticmethod
+    def _plc_id(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
-    # =================================================
-    # EXECUTE
-    # =================================================
+    @staticmethod
+    def _value(data, plc_id, tag):
+        tag = str(tag or "").strip()
+        pid = DashboardOutput._plc_id(plc_id)
+        plc_tags = data.get("PLC_Tags", {}) or {}
+        if pid is not None and tag:
+            key = "%s:%s" % (pid, tag.lower())
+            if key in plc_tags:
+                return plc_tags[key]
+        return (data.get("Tags", {}) or {}).get(tag)
 
     def execute(self, data=None):
-
-        if data is None:
-            data = {}
-
-        tags = data.get(
-            "Tags",
-            {}
-        )
-
-        if not isinstance(tags, dict):
-            tags = {}
-
-        engaged_roles = data.get(
-            "EngagedRoles",
-            []
-        )
-
-        company_id = data.get("CompanyID")
-        if company_id is None:
-            company_id = self.config.get("company_id")
-
-        timestamp = data.get(
-            "Timestamp",
-            datetime.now().isoformat()
-        )
+        data = data or {}
+        engaged_roles = data.get("EngagedRoles", [])
+        company_id = data.get("CompanyID", self.config.get("company_id"))
+        timestamp = data.get("Timestamp", datetime.now().isoformat())
 
         output = {
-
             "Online": True,
-
             "Tags": {},
-
+            "TagValues": [],
             "Roles": engaged_roles,
-
             "EdgeTimeout": self.timeout,
-
             "CompanyID": company_id,
-
-            "Timestamp": timestamp
-
+            "Timestamp": timestamp,
         }
+
+        for widget in self.widgets:
+            if not isinstance(widget, dict):
+                continue
+            tag = str(widget.get("tag", "")).strip()
+            if not tag:
+                continue
+            plc_id = self._plc_id(widget.get("plc_id", widget.get("PLC_ID", data.get("PLC_ID"))))
+            value = self._value(data, plc_id, tag)
+            if value is None:
+                continue
+            output["Tags"][tag] = value
+            output["TagValues"].append({
+                "PLC_ID": plc_id,
+                "TagName": tag,
+                "Value": value,
+                "title": widget.get("title", tag),
+                "unit": widget.get("unit", ""),
+            })
 
         machine_cards = data.get("MachineCards", [])
         if isinstance(machine_cards, list):
             output["MachineCards"] = machine_cards
-            output["MachineIconLibrary"] = data.get(
-                "MachineIconLibrary",
-                []
-            )
+            output["MachineIconLibrary"] = data.get("MachineIconLibrary", [])
 
-        if self.widgets:
-
-            for widget in self.widgets:
-
-                tag = widget.get(
-                    "tag"
-                )
-
-                if tag in tags:
-                    output["Tags"][tag] = tags[tag]
-
-            # MachineCard parameters are dashboard data too. They are added
-            # automatically so the editor does not require duplicate tag rows
-            # in DashboardOutput just to make a machine card live.
-            if isinstance(machine_cards, list):
-                for machine in machine_cards:
-                    for parameter in machine.get("parameters", []):
-                        tag = parameter.get("tag")
-                        if tag in tags:
-                            output["Tags"][tag] = tags[tag]
-
-        else:
-
-            output["Tags"] = tags
+        if not self.widgets:
+            output["Tags"] = data.get("Tags", {}) or {}
+            for tag, value in output["Tags"].items():
+                output["TagValues"].append({
+                    "PLC_ID": data.get("PLC_ID"),
+                    "TagName": tag,
+                    "Value": value,
+                })
 
         try:
-
-            send_dashboard_data(
-                output
-            )
-
-            print()
-            print(
-                "DASHBOARD OUTPUT SENT"
-            )
-
-            print(
-                output
-            )
-
-            print()
-
-        except Exception as e:
-
-            print(
-                "DASHBOARD OUTPUT ERROR:",
-                e
-            )
+            send_dashboard_data(output)
+            print("DASHBOARD OUTPUT SENT", output)
+        except Exception as exc:
+            print("DASHBOARD OUTPUT ERROR:", exc)
 
         data["DashboardData"] = output
-
         return data

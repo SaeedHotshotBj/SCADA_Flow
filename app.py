@@ -121,6 +121,13 @@ def _auth_no_cache(response):
 
 init_database()
 
+try:
+    from services.plc_identity import ensure_plc_identity_schema
+    ensure_plc_identity_schema()
+    print("PLC IDENTITY SCHEMA BOOTSTRAP OK")
+except Exception as _plc_identity_bootstrap_error:
+    print("PLC IDENTITY SCHEMA BOOTSTRAP ERROR:", _plc_identity_bootstrap_error)
+
 
 # =====================================================
 # EDGE TIMEOUT WORKER
@@ -967,10 +974,17 @@ def trend_config():
                 if not tag_name:
                     continue
 
+                plc_id = item.get("plc_id", item.get("PLC_ID"))
+                try:
+                    plc_id = int(plc_id)
+                except (TypeError, ValueError):
+                    plc_id = None
                 result["tags"].append({
                     "tag": tag_name,
                     "title": tag_name,
-                    "unit": item.get("unit", "")
+                    "unit": item.get("unit", ""),
+                    "PLC_ID": plc_id,
+                    "plc_id": plc_id
                 })
 
             break
@@ -1020,10 +1034,17 @@ def trend_tags():
                 if str(item.get("storage", "")).upper() != "TIME":
                     continue
 
+                plc_id = item.get("plc_id", item.get("PLC_ID"))
+                try:
+                    plc_id = int(plc_id)
+                except (TypeError, ValueError):
+                    plc_id = None
                 tags.append({
                     "tag": name,
                     "title": name,
-                    "unit": item.get("unit", "")
+                    "unit": item.get("unit", ""),
+                    "PLC_ID": plc_id,
+                    "plc_id": plc_id
                 })
 
             break
@@ -1140,6 +1161,11 @@ def machine_trend_data():
     try:
         payload = request.get_json() or {}
         tag = str(payload.get("tag", "")).strip()
+        plc_id = payload.get("plc_id", payload.get("PLC_ID"))
+        try:
+            plc_id = int(plc_id)
+        except (TypeError, ValueError):
+            plc_id = None
         start = str(payload.get("start", "")).strip()
         end = str(payload.get("end", "")).strip()
 
@@ -1178,8 +1204,13 @@ def machine_trend_data():
                 "datasets": []
             }), 400
 
-        rows = get_trend_data(
+        if plc_id is None:
+            return jsonify({"status": "error", "message": "PLC_ID is required", "datasets": []}), 400
+
+        from services.plc_identity import get_trend_data as get_plc_trend_data
+        rows = get_plc_trend_data(
             company_id,
+            plc_id,
             tag,
             start=start_gregorian,
             end=end_gregorian
@@ -1227,6 +1258,7 @@ def machine_trend_data():
         return jsonify({
             "status": "ok",
             "CompanyID": company_id,
+            "PLC_ID": plc_id,
             "tag": tag,
             "start": start_gregorian,
             "end": end_gregorian,

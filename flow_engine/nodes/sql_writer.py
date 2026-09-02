@@ -1,24 +1,22 @@
 # =====================================================
 # SCADA_FLOW SQL WRITER NODE
-# HISTORIAN STORAGE ENGINE
-# TIME + TRIGGER + REPORT GROUP STORAGE
+# PLC-aware historian / trigger / report storage.
 # =====================================================
 
 import json
 import time
 from datetime import datetime
 
-from database import get_company_flow, get_connection, insert_tag_value
+from database import get_company_flow, get_connection
 from services.historian_service import HistorianService
+from services.plc_identity import insert_plc_data, ensure_plc_identity_schema
 from services.tag_registry import TagRegistry
 from services.report_service import save_report_snapshot
 
 
 class SQLWriter:
 
-    _report_product_cache = {}
-
-    def __init__(self, config):
+    def __init__(self, config=None):
         self.config = config or {}
         self.company_id = self.config.get("company_id", 1)
         self.historian = HistorianService()
@@ -27,789 +25,301 @@ class SQLWriter:
         self._cached_report_products = []
         self._report_time_memory = {}
 
+    def _plc_id(self, data):
+        value = data.get("PLC_ID")
+        if value is None and isinstance(data.get("PLC"), dict):
+            value = data["PLC"].get("PLC_ID")
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
     def _get_report_products(self):
         try:
             flow = get_company_flow(self.company_id)
             if not flow:
                 return []
-
             if isinstance(flow, str):
                 flow = json.loads(flow)
-
-            nodes = (
-                flow
-                .get("drawflow", {})
-                .get("Home", {})
-                .get("data", {})
-            )
-
+            nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
             for node in nodes.values():
                 if node.get("name") != "ReportOutput":
                     continue
-
                 data = node.get("data", {}) or {}
                 config = data.get("config", data) or {}
                 products = config.get("products", [])
-
                 if isinstance(products, list):
                     return products
-
         except Exception as exc:
             print("SQLWRITER REPORT CONFIG ERROR:", exc)
-            return []
-
         return []
 
+    def _signature(self, value):
+        try:
+            return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        except (TypeError, ValueError):
+            return repr(value)
+
     def _get_management_context_tags(self, registers):
-        """Resolve ContractCode/ProductCode from ManagementPanel registers.
-
-        ManagementPanel owns the register configuration. TagMapper normally
-        exposes the same values as tags, but Trigger/report execution must also
-        work when an intermediate branch only preserves the raw Registers map.
-        """
         result = {}
-
         if not isinstance(registers, dict):
             return result
-
         try:
             flow = get_company_flow(self.company_id)
             if not flow:
                 return result
-
             if isinstance(flow, str):
                 flow = json.loads(flow)
-
-            nodes = (
-                flow
-                .get("drawflow", {})
-                .get("Home", {})
-                .get("data", {})
-            )
-
-            management_config = None
+            nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
+            config = None
             for node in nodes.values():
-                if not isinstance(node, dict):
-                    continue
-                if node.get("name") != "ManagementPanel":
-                    continue
-                raw = node.get("data", {}) or {}
-                management_config = raw.get("config", raw) or {}
-                break
-
-            if not isinstance(management_config, dict):
+                if node.get("name") == "ManagementPanel":
+                    raw = node.get("data", {}) or {}
+                    config = raw.get("config", raw) or {}
+                    break
+            if not isinstance(config, dict):
                 return result
 
-            def configured_register(*keys):
-                for field in keys:
-                    value = management_config.get(field)
+            def reg(*names):
+                for name in names:
+                    value = config.get(name)
                     if value not in (None, ""):
                         try:
                             return int(float(value))
                         except (TypeError, ValueError):
-                            continue
+                            pass
                 return None
 
-            contract_register = configured_register(
-                "contract_code_register",
-                "contractCodeRegister",
-                "contract_code_plc_register",
-                "contractCodePLCRegister",
-            )
-            product_register = configured_register(
-                "product_code_register",
-                "productCodeRegister",
-                "product_code_plc_register",
-                "productCodePLCRegister",
-            )
-
-            def register_value(address):
+            for key, address in (
+                ("ContractCode", reg("contract_code_register", "contractCodeRegister", "contract_code_plc_register", "contractCodePLCRegister")),
+                ("ProductCode", reg("product_code_register", "productCodeRegister", "product_code_plc_register", "productCodePLCRegister")),
+            ):
                 if address is None:
-                    return None
-                for key in (str(address), address):
-                    if key in registers:
-                        value = registers[key]
-                        if value not in (None, ""):
-                            return value
-                return None
-
-            contract_value = register_value(contract_register)
-            product_value = register_value(product_register)
-
-            if contract_value is not None:
-                result["ContractCode"] = contract_value
-            if product_value is not None:
-                result["ProductCode"] = product_value
-
+                    continue
+                for candidate in (str(address), address):
+                    if candidate in registers and registers[candidate] not in (None, ""):
+                        result[key] = registers[candidate]
+                        break
         except Exception as exc:
             print("SQLWRITER MANAGEMENT CONTEXT ERROR:", exc)
-
         return result
 
-    def _signature(self, value):
-        try:
-            return json.dumps(
-                value,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False
-            )
-        except (TypeError, ValueError):
-            return repr(value)
-
     def _ensure_trigger_state_table(self):
+        ensure_plc_identity_schema()
         conn = get_connection()
         try:
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS FlowTriggerState (
                     CompanyID INTEGER NOT NULL,
+                    PLC_ID INTEGER NOT NULL,
                     TriggerRegister TEXT NOT NULL,
                     LastValue REAL,
                     UpdatedAt TEXT NOT NULL,
-                    PRIMARY KEY (CompanyID, TriggerRegister)
+                    PRIMARY KEY (CompanyID, PLC_ID, TriggerRegister)
                 )
-                """
-            )
+            """)
+            # Migrate a legacy table whose primary key was CompanyID+TriggerRegister.
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(FlowTriggerState)").fetchall()}
+            if "PLC_ID" not in cols:
+                conn.execute("ALTER TABLE FlowTriggerState ADD COLUMN PLC_ID INTEGER")
+                conn.execute("UPDATE FlowTriggerState SET PLC_ID = 0 WHERE PLC_ID IS NULL")
             conn.commit()
         finally:
             conn.close()
 
-    def _trigger_rising_edge(self, trigger_register, current, target):
-        """Persist trigger state and return True only for 0 -> target."""
+    def _trigger_rising_edge(self, plc_id, trigger_register, current, target):
         self._ensure_trigger_state_table()
-
         conn = get_connection()
         try:
             conn.execute("BEGIN IMMEDIATE")
-
-            register_key = str(trigger_register)
-            row = conn.execute(
-                """
-                SELECT LastValue
-                FROM FlowTriggerState
-                WHERE CompanyID = ?
-                  AND TriggerRegister = ?
-                """,
-                (
-                    int(self.company_id),
-                    register_key,
-                ),
-            ).fetchone()
-
-            previous = (
-                None
-                if row is None
-                else row["LastValue"]
-            )
-
+            key = str(trigger_register)
+            row = conn.execute("""
+                SELECT LastValue FROM FlowTriggerState
+                WHERE CompanyID = ? AND PLC_ID = ? AND TriggerRegister = ?
+            """, (int(self.company_id), int(plc_id), key)).fetchone()
+            previous = None if row is None else row["LastValue"]
             try:
                 current_number = float(current)
                 target_number = float(target)
-                previous_number = (
-                    None
-                    if previous is None
-                    else float(previous)
-                )
-
-                rising = (
-                    previous_number == 0.0
-                    and current_number == target_number
-                )
-
-                stored_value = current_number
-
+                previous_number = None if previous is None else float(previous)
+                rising = previous_number == 0.0 and current_number == target_number
+                stored = current_number
             except (TypeError, ValueError):
-                rising = (
-                    previous == 0
-                    and current == target
-                )
-                stored_value = current
+                rising = previous == 0 and current == target
+                stored = current
 
-            conn.execute(
-                """
+            conn.execute("""
                 INSERT INTO FlowTriggerState
-                (
-                    CompanyID,
-                    TriggerRegister,
-                    LastValue,
-                    UpdatedAt
-                )
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(CompanyID, TriggerRegister)
-                DO UPDATE SET
-                    LastValue = excluded.LastValue,
-                    UpdatedAt = excluded.UpdatedAt
-                """,
-                (
-                    int(self.company_id),
-                    register_key,
-                    stored_value,
-                    datetime.now().strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    ),
-                ),
-            )
-
+                (CompanyID, PLC_ID, TriggerRegister, LastValue, UpdatedAt)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(CompanyID, PLC_ID, TriggerRegister)
+                DO UPDATE SET LastValue=excluded.LastValue, UpdatedAt=excluded.UpdatedAt
+            """, (int(self.company_id), int(plc_id), key, stored, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
             conn.commit()
-
-            print(
-                "TRIGGER STATE:",
-                "Company=", self.company_id,
-                "Register=", register_key,
-                "Previous=", previous,
-                "Current=", current,
-                "Target=", target,
-                "RISING=", rising,
-            )
-
             return rising
-
         except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            conn.rollback()
             raise
         finally:
             conn.close()
 
-    def _register_value(self, registers, trigger_register):
-        key = str(trigger_register)
+    def _register_value(self, registers, address):
+        if str(address) in registers:
+            return registers[str(address)]
+        return registers.get(address)
 
-        if key in registers:
-            return registers[key]
-
-        if trigger_register in registers:
-            return registers[trigger_register]
-
-        return None
-
-    def _save_edge_trigger_events(
-        self,
-        tags,
-        edge_trigger_events,
-        report_products,
-        registers=None,
-    ):
-        """Create each Trigger Report with Management context already attached.
-
-        IMPORTANT:
-        EdgeTriggerEvents may arrive after the normal TagMapper payload that
-        contained ContractCode/ProductCode. The report must therefore resolve
-        ManagementPanel context BEFORE save_report_snapshot(), not afterward.
-        """
-        if not report_products or not isinstance(edge_trigger_events, list):
-            return 0
-
-        report_tag_set = {
-            str(item.get("tag", "")).strip().lower()
-            for item in report_products
-            if isinstance(item, dict)
-            and str(item.get("tag", "")).strip()
-        }
-
-        if not report_tag_set:
-            return 0
-
-        saved = 0
-
-        # Resolve context once from the SAME runtime registers used by this
-        # SQLWriter call. This is deterministic and does not depend on the
-        # ordering of separate Edge HTTP requests.
-        management_context = self._get_management_context_tags(
-            registers if isinstance(registers, dict) else {}
-        )
-
-        for event in edge_trigger_events:
-            if not isinstance(event, dict):
-                continue
-
-            event_tags = event.get("tags", {}) or {}
-            if not isinstance(event_tags, dict):
-                continue
-
-            matched_tags = {
-                str(name).strip().lower()
-                for name in event_tags.keys()
-            }
-            if not matched_tags.intersection(report_tag_set):
-                continue
-
-            snapshot_tags = (
-                dict(tags)
-                if isinstance(tags, dict)
-                else {}
-            )
-
-            # ManagementPanel context MUST be applied before the report
-            # snapshot is inserted. Direct TagMapper values are preferred
-            # over register-derived values when both are available.
-            for context_name, context_value in management_context.items():
-                if context_value not in (None, ""):
-                    snapshot_tags.setdefault(
-                        context_name,
-                        context_value,
-                    )
-
-            for name, value in event_tags.items():
-                if value is not None:
-                    snapshot_tags[str(name).strip()] = value
-
-            # Re-apply authoritative ManagementPanel values after adding the
-            # event tags. Edge event payloads contain only Trigger tags and
-            # therefore normally do not contain context, but this guarantees
-            # that the register-derived context wins if needed.
-            for context_name, context_value in management_context.items():
-                if context_value not in (None, ""):
-                    snapshot_tags[context_name] = context_value
-
-            contract_code = snapshot_tags.get("ContractCode")
-            product_code = snapshot_tags.get("ProductCode")
-
-            event_timestamp = event.get("timestamp")
-            if event_timestamp in (None, ""):
-                event_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            trigger_tag = next(
-                (
-                    str(name).strip()
-                    for name in event_tags.keys()
-                    if str(name).strip().lower() in report_tag_set
-                ),
-                None,
-            )
-
-            trigger_register = event.get("register")
-
-            try:
-                trigger_value = next(
-                    (
-                        value
-                        for name, value in event_tags.items()
-                        if str(name).strip().lower() == str(trigger_tag or "").lower()
-                    ),
-                    None,
-                )
-            except Exception:
-                trigger_value = None
-
-            report_id = save_report_snapshot(
-                self.company_id,
-                snapshot_tags,
-                report_products,
-                timestamp=str(event_timestamp).replace("T", " "),
-                trigger_tag=trigger_tag,
-                trigger_register=trigger_register,
-                trigger_value=trigger_value,
-            )
-
-            if report_id is None:
-                continue
-
-            print(
-                "REPORT EDGE TRIGGER SNAPSHOT SAVED:",
-                "Company=", self.company_id,
-                "ReportID=", report_id,
-                "TriggerTag=", trigger_tag,
-                "TriggerRegister=", trigger_register,
-                "TriggerValue=", trigger_value,
-                "ContractCode=", contract_code,
-                "ProductCode=", product_code,
-            )
-            saved += 1
-
-        return saved
-
-    def _process_trigger_tags(
-        self,
-        tags,
-        definitions,
-        registers,
-        report_products,
-        timestamp=None,
-    ):
-        """Store trigger tags only when their shared trigger register rises 0 -> target."""
-
-        management_context = self._get_management_context_tags(registers)
-        for context_name, context_value in management_context.items():
-            if context_value is not None:
-                tags[context_name] = context_value
-
-        trigger_groups = {}
-
-        report_tag_set = {
-            str(item.get("tag", "")).strip().lower()
-            for item in (report_products or [])
-            if isinstance(item, dict)
-            and str(item.get("tag", "")).strip()
-        }
-
+    def _process_trigger_tags(self, plc_id, tags, definitions, registers, report_products, timestamp=None):
+        context = self._get_management_context_tags(registers)
+        tags.update({k: v for k, v in context.items() if v is not None})
+        groups = {}
         for definition in definitions or []:
-            if not isinstance(definition, dict):
+            if not isinstance(definition, dict) or str(definition.get("storage", "")).upper() != "TRIGGER":
                 continue
-
-            if str(
-                definition.get("storage", "")
-            ).strip().upper() != "TRIGGER":
+            name = str(definition.get("name", "")).strip()
+            trigger_register = definition.get("trigger_register")
+            current = self._register_value(registers, trigger_register)
+            if not name or trigger_register in (None, "") or current is None or name not in tags:
                 continue
+            groups.setdefault(str(trigger_register), {"current": current, "items": []})["items"].append(definition)
 
-            name = str(
-                definition.get("name", "")
-            ).strip()
-
-            if not name:
-                continue
-
-            trigger_register = definition.get(
-                "trigger_register"
-            )
-
-            if trigger_register in (None, ""):
-                continue
-
-            current = self._register_value(
-                registers,
-                trigger_register,
-            )
-
-            if current is None:
-                continue
-
-            key = str(trigger_register)
-            trigger_groups.setdefault(
-                key,
-                {
-                    "current": current,
-                    "items": [],
-                },
-            )["items"].append(definition)
-
-        trigger_events = []
-
-        for register_key, group in trigger_groups.items():
-            current = group["current"]
-
+        trigger_names = []
+        event_target = None
+        for register_key, group in groups.items():
             targets = []
             for definition in group["items"]:
                 target = definition.get("trigger_value")
-                if target in targets:
-                    continue
-                targets.append(target)
-
-            if not targets:
-                continue
-
-            event_target = None
-
+                if target not in targets:
+                    targets.append(target)
             for target in targets:
-                if self._trigger_rising_edge(
-                    register_key,
-                    current,
-                    target,
-                ):
+                if self._trigger_rising_edge(plc_id, register_key, group["current"], target):
                     event_target = target
+                    for definition in group["items"]:
+                        try:
+                            same = float(group["current"]) == float(definition.get("trigger_value")) == float(target)
+                        except (TypeError, ValueError):
+                            same = group["current"] == definition.get("trigger_value") == target
+                        name = str(definition.get("name", "")).strip()
+                        if same and name in tags and tags[name] is not None:
+                            insert_plc_data(self.company_id, plc_id, name, tags[name], "TRIGGER", timestamp)
+                            trigger_names.append(name)
                     break
 
-            if event_target is None:
-                continue
-
-            for definition in group["items"]:
-                target = definition.get("trigger_value")
-
-                try:
-                    same_target = (
-                        float(current)
-                        == float(target)
-                        and float(event_target)
-                        == float(target)
-                    )
-                except (
-                    TypeError,
-                    ValueError,
-                ):
-                    same_target = (
-                        current == target
-                        and event_target == target
-                    )
-
-                if not same_target:
-                    continue
-
-                name = str(
-                    definition.get("name", "")
-                ).strip()
-
-                if name not in tags:
-                    continue
-
-                value = tags.get(name)
-
-                if value is None:
-                    continue
-
-                insert_tag_value(
-                    self.company_id,
-                    name,
-                    value,
-                    "TRIGGER",
+        if trigger_names and report_products:
+            report_tags = {str(p.get("tag", "")).strip().lower() for p in report_products if isinstance(p, dict)}
+            matched = next((n for n in trigger_names if n.lower() in report_tags), None)
+            if matched:
+                save_report_snapshot(
+                    self.company_id, tags, report_products,
                     timestamp=timestamp,
+                    trigger_tag=matched,
+                    trigger_register=next((d.get("trigger_register") for d in definitions if str(d.get("name", "")).strip() == matched), None),
+                    trigger_value=event_target,
+                    plc_id=plc_id,
                 )
+        return len(trigger_names)
 
-                trigger_events.append(name)
-
-                print(
-                    "TRIGGER INSERT:",
-                    "Company=", self.company_id,
-                    "Tag=", name,
-                    "Value=", value,
-                    "Register=", register_key,
-                    "TriggerValue=", event_target,
-                )
-
-        report_triggered = any(
-            name.lower() in report_tag_set
-            for name in trigger_events
-        )
-
-        if (
-            report_triggered
-            and report_products
-        ):
-            report_timestamp = (
-                timestamp
-                or datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            )
-
-            report_id = save_report_snapshot(
-                self.company_id,
-                tags,
-                report_products,
-                timestamp=report_timestamp,
-                trigger_tag=trigger_events[0] if trigger_events else None,
-                trigger_register=next(
-                    (definition.get("trigger_register")
-                     for definition in definitions
-                     if isinstance(definition, dict)
-                     and str(definition.get("name", "")).strip() in trigger_events
-                     and definition.get("trigger_register") not in (None, "")),
-                    None,
-                ),
-                trigger_value=event_target,
-            )
-
-            if report_id is not None:
-                print(
-                    "REPORT TRIGGER SNAPSHOT SAVED:",
-                    "Company=", self.company_id,
-                    "ReportID=", report_id,
-                    "Tags=", trigger_events,
-                    "ContractCode=", tags.get("ContractCode"),
-                    "ProductCode=", tags.get("ProductCode"),
-                )
-
-        return len(trigger_events)
-
-    def _save_time_report_snapshot(self, tags, definitions, report_products, timestamp=None):
-        """Save a report snapshot when any selected ReportOutput tag is TIME-based."""
-        if not report_products or not isinstance(tags, dict):
+    def _save_edge_trigger_events(self, plc_id, tags, events, report_products, registers):
+        if not plc_id or not isinstance(events, list) or not report_products:
             return 0
-
-        definition_map = {}
-        for definition in definitions or []:
-            if not isinstance(definition, dict):
+        context = self._get_management_context_tags(registers)
+        saved = 0
+        report_names = {str(p.get("tag", "")).strip().lower() for p in report_products if isinstance(p, dict)}
+        for event in events:
+            if not isinstance(event, dict):
                 continue
-            name = str(definition.get("name", "")).strip()
-            if name:
-                definition_map[name.lower()] = definition
+            event_tags = event.get("tags", {}) or {}
+            matched = next((str(n).strip() for n in event_tags if str(n).strip().lower() in report_names), None)
+            if not matched:
+                continue
+            snapshot = dict(tags)
+            snapshot.update({k: v for k, v in context.items() if v is not None})
+            snapshot.update({str(k).strip(): v for k, v in event_tags.items() if v is not None})
+            report_id = save_report_snapshot(
+                self.company_id, snapshot, report_products,
+                timestamp=str(event.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")).replace("T", " "),
+                trigger_tag=matched,
+                trigger_register=event.get("register"),
+                trigger_value=event_tags.get(matched),
+                plc_id=plc_id,
+            )
+            if report_id is not None:
+                saved += 1
+        return saved
 
+    def _save_time_report_snapshot(self, plc_id, tags, definitions, report_products, timestamp=None):
+        if not plc_id or not report_products:
+            return 0
+        definition_map = {str(d.get("name", "")).strip().lower(): d for d in definitions if isinstance(d, dict)}
         selected = []
-        time_due = False
+        due = False
         now = time.monotonic()
-
         for product in report_products:
             if not isinstance(product, dict):
                 continue
-
             tag = str(product.get("tag", "")).strip()
-            if not tag:
-                continue
-
             definition = definition_map.get(tag.lower())
-            if not definition:
+            if not tag or not definition or str(definition.get("storage", "TIME")).upper() != "TIME":
                 continue
-
-            mode = str(definition.get("storage", "TIME")).strip().upper()
-            if mode != "TIME":
-                continue
-
             selected.append(product)
-
             try:
                 interval = float(definition.get("interval", 0) or 0)
             except (TypeError, ValueError):
-                interval = 0.0
-
-            key = (int(self.company_id), tag.lower())
-            last = self._report_time_memory.get(key, 0.0)
-
-            if interval <= 0 or now - last >= interval:
-                time_due = True
-
-        if not selected or not time_due:
+                interval = 0
+            key = (int(self.company_id), int(plc_id), tag.lower())
+            if interval <= 0 or now - self._report_time_memory.get(key, 0) >= interval:
+                due = True
+        if not selected or not due:
             return 0
-
-        snapshot_tags = {}
-        tag_lookup = {
-            str(name).strip().lower(): (name, value)
-            for name, value in tags.items()
-        }
-
-        for product in report_products:
-            if not isinstance(product, dict):
-                continue
-            tag = str(product.get("tag", "")).strip()
-            if not tag:
-                continue
-            item = tag_lookup.get(tag.lower())
-            if item is None or item[1] is None:
-                continue
-            snapshot_tags[item[0]] = item[1]
-
-        if not snapshot_tags:
+        snapshot = {p["tag"]: tags[p["tag"]] for p in selected if p.get("tag") in tags and tags[p.get("tag")] is not None}
+        if not snapshot:
             return 0
-
-        if timestamp is None:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        report_id = save_report_snapshot(
-            self.company_id,
-            snapshot_tags,
-            report_products,
-            timestamp=timestamp,
-        )
-
+        report_id = save_report_snapshot(self.company_id, snapshot, report_products, timestamp=timestamp, plc_id=plc_id)
         if report_id is None:
             return 0
-
-        for product in selected:
-            tag = str(product.get("tag", "")).strip().lower()
-            self._report_time_memory[(int(self.company_id), tag)] = now
-
-        print(
-            "REPORT TIME SNAPSHOT SAVED:",
-            "Company=", self.company_id,
-            "ReportID=", report_id,
-            "Tags=", [p.get("tag") for p in report_products if isinstance(p, dict)]
-        )
-
+        for p in selected:
+            self._report_time_memory[(int(self.company_id), int(plc_id), str(p["tag"]).lower())] = now
         return 1
 
     def execute(self, data=None):
+        data = data or {}
+        plc_id = self._plc_id(data)
+        if plc_id is None:
+            raise ValueError("SQLWriter requires PLC_ID in the runtime payload")
 
-        if data is None:
-            data = {}
-
-        tags = data.get("Tags", {})
-        definitions = data.get("TagDefinitions", [])
-        registers = data.get("Registers", {})
-        edge_trigger_events = data.get("EdgeTriggerEvents", [])
-
+        tags = data.get("Tags", {}) or {}
+        definitions = data.get("TagDefinitions", []) or []
+        registers = data.get("Registers", {}) or {}
+        edge_events = data.get("EdgeTriggerEvents", []) or []
         if not definitions:
             return data
 
-        definition_signature = self._signature(
-            definitions
-        )
-
-        if definition_signature != self._last_definition_signature:
-            TagRegistry.sync(
-                self.company_id,
-                definitions
-            )
-            self._last_definition_signature = definition_signature
+        signature = self._signature(definitions)
+        if signature != self._last_definition_signature:
+            ensure_plc_identity_schema()
+            TagRegistry.sync(self.company_id, definitions)
+            self._last_definition_signature = signature
 
         report_products = self._get_report_products()
-        report_signature = self._signature(
-            report_products
-        )
-
+        report_signature = self._signature(report_products)
         if report_signature != self._last_report_signature:
             self._cached_report_products = report_products
             self._last_report_signature = report_signature
-
         report_products = self._cached_report_products
 
-        report_tags = [
-            str(item.get("tag", "")).strip()
-            for item in report_products
-            if (
-                isinstance(item, dict)
-                and str(item.get("tag", "")).strip()
-            )
-        ]
-
         timestamp = data.get("Timestamp")
-
-        # EdgeTriggerEvents are already edge-detected upstream. They are the
-        # authoritative Trigger signal for the historian-backed Edge path.
-        edge_report_written = self._save_edge_trigger_events(
-            tags,
-            edge_trigger_events,
-            report_products,
-            registers=registers,
-        )
-
+        edge_report_written = self._save_edge_trigger_events(plc_id, tags, edge_events, report_products, registers)
         trigger_written = 0
-        if not edge_trigger_events:
-            trigger_written = self._process_trigger_tags(
-                tags,
-                definitions,
-                registers,
-                report_products,
-                timestamp=timestamp,
-            )
-        else:
-            # Still inject ManagementPanel context into the shared payload for
-            # downstream branches, using the exact same register configuration.
-            management_context = self._get_management_context_tags(registers)
-            for context_name, context_value in management_context.items():
-                if context_value is not None:
-                    tags[context_name] = context_value
+        if not edge_events:
+            trigger_written = self._process_trigger_tags(plc_id, tags, definitions, registers, report_products, timestamp)
 
-        non_trigger_definitions = [
-            definition
-            for definition in definitions
-            if str(
-                definition.get("storage", "TIME")
-            ).strip().upper() != "TRIGGER"
-        ]
+        non_trigger = [d for d in definitions if str(d.get("storage", "TIME")).upper() != "TRIGGER"]
+        report_tags = [str(p.get("tag", "")).strip() for p in report_products if isinstance(p, dict) and str(p.get("tag", "")).strip()]
+        report_written = edge_report_written or trigger_written
+        if not report_written:
+            report_written = self._save_time_report_snapshot(plc_id, tags, non_trigger, report_products, timestamp)
 
-        report_written = edge_report_written
-
-        if trigger_written == 0 and edge_report_written == 0:
-            report_written = self._save_time_report_snapshot(
-                tags,
-                non_trigger_definitions,
-                report_products,
-                timestamp=timestamp,
-            )
-
-        written = self.historian.process(
-            self.company_id,
-            tags,
-            non_trigger_definitions,
-            registers,
-            report_tags=(
-                report_tags
-                if trigger_written == 0 and edge_report_written == 0
-                else []
-            )
-        )
-
+        written = self.historian.process(self.company_id, plc_id, tags, non_trigger, registers, report_tags=report_tags if not report_written else [])
+        data["PLC_ID"] = plc_id
         data["SQL_Written"] = written + trigger_written + report_written
         data["Report_Written"] = trigger_written + report_written
-
         return data

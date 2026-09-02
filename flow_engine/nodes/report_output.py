@@ -1,19 +1,14 @@
 # =====================================================
 # SCADA_FLOW REPORT OUTPUT NODE
-# DYNAMIC REPORT QUERY + TRIGGER SNAPSHOT OUTPUT
+# PLC-AWARE REPORT QUERY + TRIGGER SNAPSHOT OUTPUT
 # =====================================================
 
 import json
 from datetime import datetime
-
 import jdatetime
 
 from database import get_company_flow, get_connection, get_latest_tag_values
-from services.report_service import (
-    get_report_data,
-    ensure_report_tables,
-    save_report_snapshot,
-)
+from services.report_service import get_report_data, ensure_report_tables, save_report_snapshot
 
 
 class ReportOutput:
@@ -23,416 +18,122 @@ class ReportOutput:
         self.company_id = self.config.get("company_id")
         self.date_picker = self.config.get("DatePicker", "JalaliPicker")
         self.products = self.config.get("products", [])
-        self._flow_definition_signature = None
-        self._flow_definitions = {}
         self._last_report_event_key = None
 
+    @staticmethod
+    def _plc_id(value):
         try:
-            ensure_report_tables()
-        except Exception as exc:
-            print("REPORT DATABASE INIT ERROR:", exc)
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _load_flow(self):
-        if self.company_id is None:
-            return {}
-        try:
-            flow = get_company_flow(self.company_id)
-            if isinstance(flow, str):
-                flow = json.loads(flow)
-            return flow or {}
-        except Exception as exc:
-            print("REPORT FLOW LOAD ERROR:", exc)
-            return {}
+        flow = get_company_flow(self.company_id) if self.company_id is not None else {}
+        if isinstance(flow, str):
+            flow = json.loads(flow)
+        return flow or {}
 
-    def _load_flow_definitions(self):
-        if self.company_id is None:
-            return {}
-
-        try:
-            flow = self._load_flow()
-            nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
-            definitions = {}
-
-            for node in nodes.values():
-                if not isinstance(node, dict) or node.get("name") != "TagMapper":
-                    continue
-                mappings = node.get("data", {}).get("mappings", [])
-                if not isinstance(mappings, list):
-                    continue
-                for mapping in mappings:
-                    if not isinstance(mapping, dict):
-                        continue
-                    name = str(mapping.get("name", "")).strip()
-                    if name:
-                        definitions[name.lower()] = mapping
-                break
-
-            signature = json.dumps(
-                definitions,
-                sort_keys=True,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                default=str,
-            )
-            if signature != self._flow_definition_signature:
-                self._flow_definition_signature = signature
-                self._flow_definitions = definitions
-
-            return self._flow_definitions
-        except Exception as exc:
-            print("REPORT FLOW DEFINITION LOAD ERROR:", exc)
-            return self._flow_definitions
-
-    def _management_context_tags(self, data):
-        result = {}
-        registers = data.get("Registers", {}) or {}
-        if not isinstance(registers, dict):
-            registers = {}
-
-        try:
-            flow = self._load_flow()
-            nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
-            config = None
-
-            for node in nodes.values():
-                if not isinstance(node, dict) or node.get("name") != "ManagementPanel":
-                    continue
-                raw = node.get("data", {}) or {}
-                config = raw.get("config", raw) or {}
-                break
-
-            if not isinstance(config, dict):
-                config = {}
-
-            def read_register(*fields):
-                address = None
-                for field in fields:
-                    value = config.get(field)
-                    if value not in (None, ""):
-                        address = value
-                        break
-                if address in (None, ""):
-                    return None
-
-                candidates = [str(address).strip()]
-                try:
-                    candidates.append(str(int(float(address))))
-                except (TypeError, ValueError):
-                    pass
-
-                for key in candidates:
-                    if key in registers and registers[key] not in (None, ""):
-                        return registers[key]
-                return None
-
-            contract = read_register(
-                "contract_code_register",
-                "contractCodeRegister",
-                "contract_code_plc_register",
-                "contractCodePLCRegister",
-            )
-            product = read_register(
-                "product_code_register",
-                "productCodeRegister",
-                "product_code_plc_register",
-                "productCodePLCRegister",
-            )
-
-            if contract is not None:
-                result["ContractCode"] = contract
-            if product is not None:
-                result["ProductCode"] = product
-
-        except Exception as exc:
-            print("REPORT MANAGEMENT REGISTER ERROR:", exc)
-
-        return result
+    def _load_definitions(self):
+        definitions = {}
+        for node in self._load_flow().get("drawflow", {}).get("Home", {}).get("data", {}).values():
+            if not isinstance(node, dict) or node.get("name") != "TagMapper":
+                continue
+            mappings = node.get("data", {}).get("mappings", [])
+            if isinstance(mappings, list):
+                for item in mappings:
+                    if isinstance(item, dict) and str(item.get("name", "")).strip():
+                        definitions[str(item["name"]).strip().lower()] = item
+            break
+        return definitions
 
     @staticmethod
     def normalize_date(value, calendar):
         if not value:
             return None
-
-        text = str(value).strip().replace("T", " ")
-        text = text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
-
+        text = str(value).strip().replace("T", " ").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
         if calendar == "Jalali":
             text = text.replace("-", "/")
             for fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
                 try:
                     return jdatetime.datetime.strptime(text, fmt).togregorian()
                 except Exception:
-                    continue
+                    pass
             return None
-
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
             try:
                 return datetime.strptime(text, fmt)
             except Exception:
-                continue
+                pass
         return None
 
     def _report_tag_definitions(self):
-        definitions = self._load_flow_definitions()
+        definitions = self._load_definitions()
         result = []
         for item in self.products:
             if not isinstance(item, dict):
                 continue
             tag = str(item.get("tag", "")).strip()
-            if not tag:
-                continue
-            definition = definitions.get(tag.lower())
-            if definition:
-                result.append((item, definition))
+            if tag:
+                result.append((item, definitions.get(tag.lower(), {})))
         return result
 
-    def _latest_report_timestamp(self):
-        if self.company_id is None:
-            return None
+    def _latest_report_timestamp(self, plc_id=None):
         conn = get_connection()
         try:
-            row = conn.execute(
-                """
-                SELECT Timestamp
-                FROM ReportHistory
-                WHERE CompanyID = ?
-                ORDER BY ReportID DESC
-                LIMIT 1
-                """,
-                (int(self.company_id),),
-            ).fetchone()
-            return None if row is None else row["Timestamp"]
+            sql = "SELECT Timestamp FROM ReportHistory WHERE CompanyID=?"
+            params = [int(self.company_id)]
+            if plc_id is not None:
+                sql += " AND PLC_ID=?"
+                params.append(int(plc_id))
+            sql += " ORDER BY ReportID DESC LIMIT 1"
+            row = conn.execute(sql, params).fetchone()
+            return row["Timestamp"] if row else None
         finally:
             conn.close()
 
-    def _latest_trigger_event_from_tag_history(self):
-        if self.company_id is None:
-            return None
+    def _latest_trigger_event(self, data):
+        events = data.get("EdgeTriggerEvents", []) if isinstance(data, dict) else []
+        if isinstance(events, list):
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                event_plc = self._plc_id(event.get("PLC_ID", data.get("PLC_ID")))
+                for name, value in (event.get("tags", {}) or {}).items():
+                    for product, definition in self._report_tag_definitions():
+                        if str(product.get("tag", "")).strip().lower() == str(name).strip().lower() and str(definition.get("storage", "TIME")).upper() == "TRIGGER":
+                            return {"plc_id": event_plc, "tag": name, "value": value, "timestamp": event.get("timestamp"), "register": event.get("register")}
+        return None
 
-        trigger_items = []
-        for product, definition in self._report_tag_definitions():
-            if str(definition.get("storage", "TIME")).strip().upper() != "TRIGGER":
-                continue
-            tag = str(product.get("tag", "")).strip()
-            if tag:
-                trigger_items.append((tag, definition))
-
-        if not trigger_items:
-            return None
-
-        conn = get_connection()
-        try:
-            latest_rows = []
-            for tag, definition in trigger_items:
-                row = conn.execute(
-                    """
-                    SELECT ID, TagName, Value, Timestamp
-                    FROM TagHistory
-                    WHERE CompanyID = ?
-                      AND LOWER(TagName) = LOWER(?)
-                    ORDER BY ID DESC
-                    LIMIT 1
-                    """,
-                    (int(self.company_id), tag),
-                ).fetchone()
-                if row is not None:
-                    latest_rows.append((row, definition))
-
-            if not latest_rows:
-                return None
-
-            newest_row, newest_definition = max(
-                latest_rows,
-                key=lambda item: int(item[0]["ID"] or 0),
-            )
-
-            event_timestamp = str(newest_row["Timestamp"] or "")
-            latest_report_timestamp = self._latest_report_timestamp()
-
-            try:
-                event_dt = datetime.fromisoformat(event_timestamp.replace("T", " ").replace("Z", ""))
-            except Exception:
-                event_dt = None
-
-            try:
-                report_dt = (
-                    datetime.fromisoformat(
-                        str(latest_report_timestamp).replace("T", " ").replace("Z", "")
-                    )
-                    if latest_report_timestamp
-                    else None
-                )
-            except Exception:
-                report_dt = None
-
-            if report_dt is not None and event_dt is not None and event_dt <= report_dt:
-                return None
-
-            event_key = (int(newest_row["ID"] or 0), event_timestamp)
-            if self._last_report_event_key == event_key:
-                return None
-
-            self._last_report_event_key = event_key
-
-            return {
-                "register": newest_definition.get("trigger_register"),
-                "timestamp": event_timestamp,
-                "tag": str(newest_row["TagName"]).strip(),
-                "value": newest_row["Value"],
-            }
-        finally:
-            conn.close()
-
-    def _runtime_tags_for_products(self, data):
-        live_tags = data.get("Tags", {}) or {}
-        if not isinstance(live_tags, dict):
-            live_tags = {}
-
-        requested = [
-            str(item.get("tag", "")).strip()
-            for item in self.products
-            if isinstance(item, dict) and str(item.get("tag", "")).strip()
-        ]
-
-        resolved = {}
-        lookup = {
-            str(name).strip().lower(): (name, value)
-            for name, value in live_tags.items()
-        }
-        missing = []
-
-        for tag in requested:
-            item = lookup.get(tag.lower())
-            if item is None or item[1] is None:
-                missing.append(tag)
-            else:
-                resolved[item[0]] = item[1]
-
-        if missing and self.company_id is not None:
-            try:
-                latest = get_latest_tag_values(self.company_id, missing)
-                for tag in missing:
-                    item = latest.get(tag)
-                    if item and item.get("value") is not None:
-                        resolved[tag] = item["value"]
-            except Exception as exc:
-                print("REPORT LATEST VALUE LOAD ERROR:", exc)
-
-        return resolved
+    def _runtime_tags(self, data):
+        live = data.get("Tags", {}) or {}
+        return dict(live) if isinstance(live, dict) else {}
 
     def _save_realtime_snapshot(self, data):
-        event = None
-        events = data.get("EdgeTriggerEvents", []) if isinstance(data, dict) else []
-        if isinstance(events, list) and events:
-            report_tags = {
-                str(item.get("tag", "")).strip().lower()
-                for item in self.products
-                if isinstance(item, dict) and str(item.get("tag", "")).strip()
-            }
-            for candidate in events:
-                if not isinstance(candidate, dict):
-                    continue
-                event_tags = candidate.get("tags", {}) or {}
-                if not isinstance(event_tags, dict):
-                    continue
-                matched = [
-                    (str(name).strip(), value)
-                    for name, value in event_tags.items()
-                    if str(name).strip().lower() in report_tags and value is not None
-                ]
-                if matched:
-                    event = dict(candidate)
-                    event["tags"] = dict(event_tags)
-                    event["report_tags"] = [name for name, _ in matched]
-                    break
-
-        if event is None:
-            event = self._latest_trigger_event_from_tag_history()
-
+        event = self._latest_trigger_event(data)
         if event is None:
             return 0
-
-        tags = self._runtime_tags_for_products(data)
-        tags.update(self._management_context_tags(data))
-
-        if isinstance(data.get("Tags"), dict):
-            for key in ("ContractCode", "ProductCode"):
-                value = data["Tags"].get(key)
-                if value is not None:
-                    tags[key] = value
-
-        event_tags = event.get("tags", {}) or {}
-        for name, value in event_tags.items():
-            if value is not None:
-                tags[str(name).strip()] = value
-
+        plc_id = self._plc_id(event.get("plc_id", data.get("PLC_ID")))
+        tags = self._runtime_tags(data)
         if not tags:
             return 0
-
-        report_products = list(self.products)
-        if "ContractCode" in tags:
-            report_products.append({
-                "tag": "ContractCode",
-                "name": "ContractCode",
-                "context_role": "contract_code",
-            })
-        if "ProductCode" in tags:
-            report_products.append({
-                "tag": "ProductCode",
-                "name": "ProductCode",
-                "context_role": "product_code",
-            })
-
-        timestamp = (
-            event.get("timestamp")
-            or data.get("Timestamp")
-            or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        )
-
-        trigger_tag = event.get("tag")
-        if not trigger_tag:
-            matching_names = event.get("report_tags", []) or []
-            if matching_names:
-                trigger_tag = matching_names[0]
-
-        trigger_value = event.get("value")
-        if trigger_value is None and trigger_tag:
-            trigger_value = event_tags.get(trigger_tag)
-
+        timestamp = event.get("timestamp") or data.get("Timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         report_id = save_report_snapshot(
             self.company_id,
             tags,
-            report_products,
+            self.products,
             timestamp=str(timestamp).replace("T", " "),
-            trigger_tag=trigger_tag,
+            trigger_tag=event.get("tag"),
             trigger_register=event.get("register"),
-            trigger_value=trigger_value,
+            trigger_value=event.get("value"),
+            plc_id=plc_id,
         )
-
-        if report_id is None:
-            return 0
-
-        print(
-            "REPORT SNAPSHOT SAVED:",
-            "Company=", self.company_id,
-            "ReportID=", report_id,
-            "TriggerTag=", trigger_tag,
-            "TriggerRegister=", event.get("register"),
-            "TriggerValue=", trigger_value,
-            "ContractCode=", tags.get("ContractCode"),
-            "ProductCode=", tags.get("ProductCode"),
-            "Columns=", [
-                item.get("tag")
-                for item in self.products
-                if isinstance(item, dict)
-            ],
-        )
-        return 1
+        if report_id:
+            print("REPORT SNAPSHOT SAVED:", "Company=", self.company_id, "PLC_ID=", plc_id, "ReportID=", report_id)
+            return 1
+        return 0
 
     def execute(self, data=None):
-        if data is None:
-            data = {}
-
+        data = data or {}
         if not data.get("ReportRequest"):
             try:
                 data["Report_Written"] = self._save_realtime_snapshot(data)
@@ -444,42 +145,23 @@ class ReportOutput:
         request = data.get("ReportRequest", {}) or {}
         company_id = request.get("CompanyID", self.company_id)
         self.company_id = company_id
-
-        calendar = request.get("Calendar")
-        if calendar not in ("Jalali", "Gregorian"):
-            calendar = "Jalali" if self.date_picker == "JalaliPicker" else "Gregorian"
-
+        calendar = request.get("Calendar") or ("Jalali" if self.date_picker == "JalaliPicker" else "Gregorian")
         start = self.normalize_date(request.get("Start"), calendar)
         end = self.normalize_date(request.get("End"), calendar)
+        plc_id = self._plc_id(request.get("PLC_ID", request.get("plc_id")))
 
-        report = {
-            "columns": self.products,
-            "rows": [],
-            "totals": [0.0 for _ in self.products],
-            "grand_total": 0,
-        }
-
+        report = {"columns": self.products, "rows": [], "totals": [0.0 for _ in self.products], "grand_total": 0.0}
         if company_id is not None and start is not None and end is not None and end >= start:
-            report = get_report_data(company_id, start, end)
+            report = get_report_data(company_id, start, end, plc_id=plc_id)
 
         data["ReportData"] = report
         data["ChartData"] = {
             "type": "bar",
             "calendar": calendar,
             "date_picker": self.date_picker,
+            "PLC_ID": plc_id,
             "report": report,
             "labels": [item.get("name", item.get("tag", "")) for item in report.get("columns", [])],
-            "datasets": [{
-                "label": "مجموع گزارش",
-                "data": report.get("totals", []),
-            }],
+            "datasets": [{"label": "مجموع گزارش", "data": report.get("totals", [])}],
         }
-
-        print(
-            "REPORT OUTPUT:",
-            "Company:", company_id,
-            "Columns:", len(report.get("columns", [])),
-            "Rows:", len(report.get("rows", [])),
-            "Totals:", report.get("totals", []),
-        )
         return data

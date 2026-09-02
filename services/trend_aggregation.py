@@ -1,6 +1,8 @@
 # =====================================================
 # SCADA_FLOW TREND AGGREGATION SERVICE
 # Raw PLC_Data -> TrendMinute -> TrendHour -> TrendDay
+# Identity = CompanyID + PLC_ID + TagName
+# Quantitative aggregation behavior preserved.
 # =====================================================
 
 import os
@@ -59,84 +61,40 @@ def _ts(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _minute_start(dt):
-    return dt.replace(second=0, microsecond=0)
-
-
-def _hour_start(dt):
-    return dt.replace(minute=0, second=0, microsecond=0)
-
-
-def _day_start(dt):
-    return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+def _minute_start(dt): return dt.replace(second=0, microsecond=0)
+def _hour_start(dt): return dt.replace(minute=0, second=0, microsecond=0)
+def _day_start(dt): return dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def _ensure_tables():
     conn = _connect()
     try:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS TrendMinute (
-            ID INTEGER PRIMARY KEY AUTOINCREMENT,
-            CompanyID INTEGER NOT NULL,
-            TagName TEXT NOT NULL,
-            PeriodStart TEXT NOT NULL,
-            PeriodEnd TEXT NOT NULL,
-            FirstValue REAL,
-            LastValue REAL,
-            MinValue REAL,
-            MaxValue REAL,
-            WeightedAverage REAL,
-            DurationSeconds REAL NOT NULL DEFAULT 0,
-            SampleCount INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_trend_minute_company_tag_period
-        ON TrendMinute(CompanyID, TagName, PeriodStart);
-        CREATE INDEX IF NOT EXISTS idx_trend_minute_company_tag_time
-        ON TrendMinute(CompanyID, TagName, PeriodStart);
-
-        CREATE TABLE IF NOT EXISTS TrendHour (
-            ID INTEGER PRIMARY KEY AUTOINCREMENT,
-            CompanyID INTEGER NOT NULL,
-            TagName TEXT NOT NULL,
-            PeriodStart TEXT NOT NULL,
-            PeriodEnd TEXT NOT NULL,
-            FirstValue REAL,
-            LastValue REAL,
-            MinValue REAL,
-            MaxValue REAL,
-            WeightedAverage REAL,
-            DurationSeconds REAL NOT NULL DEFAULT 0,
-            SampleCount INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_trend_hour_company_tag_period
-        ON TrendHour(CompanyID, TagName, PeriodStart);
-        CREATE INDEX IF NOT EXISTS idx_trend_hour_company_tag_time
-        ON TrendHour(CompanyID, TagName, PeriodStart);
-
-        CREATE TABLE IF NOT EXISTS TrendDay (
-            ID INTEGER PRIMARY KEY AUTOINCREMENT,
-            CompanyID INTEGER NOT NULL,
-            TagName TEXT NOT NULL,
-            PeriodStart TEXT NOT NULL,
-            PeriodEnd TEXT NOT NULL,
-            FirstValue REAL,
-            LastValue REAL,
-            MinValue REAL,
-            MaxValue REAL,
-            WeightedAverage REAL,
-            DurationSeconds REAL NOT NULL DEFAULT 0,
-            SampleCount INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_trend_day_company_tag_period
-        ON TrendDay(CompanyID, TagName, PeriodStart);
-        CREATE INDEX IF NOT EXISTS idx_trend_day_company_tag_time
-        ON TrendDay(CompanyID, TagName, PeriodStart);
-
-        CREATE TABLE IF NOT EXISTS TrendAggregationLock (
-            LockID INTEGER PRIMARY KEY CHECK (LockID = 1),
-            LeaseUntil REAL NOT NULL
-        );
-        """)
+        for table in ("TrendMinute", "TrendHour", "TrendDay"):
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table} (
+                    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    CompanyID INTEGER NOT NULL,
+                    PLC_ID INTEGER,
+                    TagName TEXT NOT NULL,
+                    PeriodStart TEXT NOT NULL,
+                    PeriodEnd TEXT NOT NULL,
+                    FirstValue REAL,
+                    LastValue REAL,
+                    MinValue REAL,
+                    MaxValue REAL,
+                    WeightedAverage REAL,
+                    DurationSeconds REAL NOT NULL DEFAULT 0,
+                    SampleCount INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if "PLC_ID" not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN PLC_ID INTEGER")
+            suffix = table.replace("Trend", "").lower()
+            conn.execute(f"DROP INDEX IF EXISTS uq_trend_{suffix}_company_tag_period")
+            conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS uq_trend_{suffix}_company_plc_tag_period ON {table}(CompanyID, PLC_ID, TagName, PeriodStart)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_trend_{suffix}_company_plc_tag_time ON {table}(CompanyID, PLC_ID, TagName, PeriodStart)")
+        conn.execute("CREATE TABLE IF NOT EXISTS TrendAggregationLock (LockID INTEGER PRIMARY KEY CHECK (LockID = 1), LeaseUntil REAL NOT NULL)")
         conn.commit()
     finally:
         conn.close()
@@ -148,27 +106,16 @@ def _try_acquire_lease():
     conn = _connect()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            "SELECT LeaseUntil FROM TrendAggregationLock WHERE LockID = 1"
-        ).fetchone()
+        row = conn.execute("SELECT LeaseUntil FROM TrendAggregationLock WHERE LockID = 1").fetchone()
         if row is not None and float(row["LeaseUntil"]) > now:
             conn.rollback()
             return False
-        conn.execute(
-            """
-            INSERT INTO TrendAggregationLock(LockID, LeaseUntil)
-            VALUES (1, ?)
-            ON CONFLICT(LockID) DO UPDATE SET LeaseUntil = excluded.LeaseUntil
-            """,
-            (lease_until,),
-        )
+        conn.execute("INSERT INTO TrendAggregationLock(LockID, LeaseUntil) VALUES (1, ?) ON CONFLICT(LockID) DO UPDATE SET LeaseUntil=excluded.LeaseUntil", (lease_until,))
         conn.commit()
         return True
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        try: conn.rollback()
+        except Exception: pass
         return False
     finally:
         conn.close()
@@ -177,15 +124,13 @@ def _try_acquire_lease():
 def _aggregate_step_rows(rows, start, end):
     parsed = []
     for row in rows:
-        dt = _parse_ts(row["ts"])
-        if dt is None:
-            continue
+        dt = _parse_ts(row["ts"] if "ts" in row.keys() else row["Timestamp"])
         try:
-            value = float(row["value"])
+            value = float(row["value"] if "value" in row.keys() else row["Value"])
         except (TypeError, ValueError):
             continue
-        parsed.append((dt, value))
-
+        if dt is not None:
+            parsed.append((dt, value))
     parsed.sort(key=lambda item: item[0])
     if not parsed:
         return None
@@ -209,92 +154,54 @@ def _aggregate_step_rows(rows, start, end):
 
     if duration <= 0:
         return None
-
-    return {
-        "first": first_value,
-        "last": last_value,
-        "min": minimum,
-        "max": maximum,
-        "weighted": weighted_sum / duration,
-        "duration": duration,
-        "count": len(parsed),
-    }
+    return {"first": first_value, "last": last_value, "min": minimum, "max": maximum, "weighted": weighted_sum / duration, "duration": duration, "count": len(parsed)}
 
 
-def _write_aggregate(conn, table, company_id, tag, start, end, stats):
+def _write_aggregate(conn, table, company_id, plc_id, tag, start, end, stats):
     conn.execute(f"""
         INSERT INTO {table}
-        (CompanyID, TagName, PeriodStart, PeriodEnd,
-         FirstValue, LastValue, MinValue, MaxValue,
-         WeightedAverage, DurationSeconds, SampleCount)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(CompanyID, TagName, PeriodStart)
-        DO UPDATE SET
-            PeriodEnd=excluded.PeriodEnd,
-            FirstValue=excluded.FirstValue,
-            LastValue=excluded.LastValue,
-            MinValue=excluded.MinValue,
-            MaxValue=excluded.MaxValue,
-            WeightedAverage=excluded.WeightedAverage,
-            DurationSeconds=excluded.DurationSeconds,
-            SampleCount=excluded.SampleCount
-    """, (
-        company_id, tag, _ts(start), _ts(end),
-        stats["first"], stats["last"], stats["min"], stats["max"],
-        stats["weighted"], stats["duration"], stats["count"],
-    ))
+        (CompanyID, PLC_ID, TagName, PeriodStart, PeriodEnd, FirstValue, LastValue, MinValue, MaxValue, WeightedAverage, DurationSeconds, SampleCount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(CompanyID, PLC_ID, TagName, PeriodStart) DO UPDATE SET
+            PeriodEnd=excluded.PeriodEnd, FirstValue=excluded.FirstValue, LastValue=excluded.LastValue,
+            MinValue=excluded.MinValue, MaxValue=excluded.MaxValue, WeightedAverage=excluded.WeightedAverage,
+            DurationSeconds=excluded.DurationSeconds, SampleCount=excluded.SampleCount
+    """, (company_id, plc_id, tag, _ts(start), _ts(end), stats["first"], stats["last"], stats["min"], stats["max"], stats["weighted"], stats["duration"], stats["count"]))
 
 
 def _aggregate_raw_bucket(conn, start, end):
     allowed = ",".join("?" for _ in _ALLOWED_STORAGE)
     rows = conn.execute(f"""
-        SELECT CompanyID, TagName, Timestamp AS ts, Value AS value
+        SELECT CompanyID, PLC_ID, TagName, Timestamp AS ts, Value AS value
         FROM PLC_Data
-        WHERE Timestamp >= ?
-          AND Timestamp < ?
+        WHERE Timestamp >= ? AND Timestamp < ?
           AND (StorageType IS NULL OR UPPER(StorageType) IN ({allowed}))
-        ORDER BY CompanyID, TagName, Timestamp, ID
+        ORDER BY CompanyID, PLC_ID, TagName, Timestamp, ID
     """, (_ts(start), _ts(end), *_ALLOWED_STORAGE)).fetchall()
-
     grouped = defaultdict(list)
     for row in rows:
-        grouped[(int(row["CompanyID"]), row["TagName"])].append(row)
-
-    written = 0
-    for (company_id, tag), group in grouped.items():
+        grouped[(int(row["CompanyID"]), row["PLC_ID"], row["TagName"])].append(row)
+    for (company_id, plc_id, tag), group in grouped.items():
         stats = _aggregate_step_rows(group, start, end)
-        if stats is None:
-            continue
-        _write_aggregate(conn, "TrendMinute", company_id, tag, start, end, stats)
-        written += 1
-    return written
+        if stats is not None:
+            _write_aggregate(conn, "TrendMinute", company_id, plc_id, tag, start, end, stats)
 
 
 def _aggregate_children(conn, source, target, start, end):
     rows = conn.execute(f"""
-        SELECT CompanyID, TagName, PeriodStart, PeriodEnd,
-               FirstValue, LastValue, MinValue, MaxValue,
-               WeightedAverage, DurationSeconds, SampleCount
+        SELECT CompanyID, PLC_ID, TagName, PeriodStart, PeriodEnd, FirstValue, LastValue, MinValue, MaxValue, WeightedAverage, DurationSeconds, SampleCount
         FROM {source}
         WHERE PeriodStart >= ? AND PeriodStart < ?
-        ORDER BY CompanyID, TagName, PeriodStart
+        ORDER BY CompanyID, PLC_ID, TagName, PeriodStart
     """, (_ts(start), _ts(end))).fetchall()
-
     grouped = defaultdict(list)
     for row in rows:
-        grouped[(int(row["CompanyID"]), row["TagName"])].append(row)
-
-    written = 0
-    for (company_id, tag), group in grouped.items():
+        grouped[(int(row["CompanyID"]), row["PLC_ID"], row["TagName"])].append(row)
+    for (company_id, plc_id, tag), group in grouped.items():
         total_duration = sum(float(row["DurationSeconds"] or 0) for row in group)
         if total_duration <= 0:
             continue
-
-        weighted_sum = sum(
-            float(row["WeightedAverage"] or 0) * float(row["DurationSeconds"] or 0)
-            for row in group
-        )
-
+        weighted_sum = sum(float(row["WeightedAverage"] or 0) * float(row["DurationSeconds"] or 0) for row in group)
         stats = {
             "first": float(group[0]["FirstValue"]),
             "last": float(group[-1]["LastValue"]),
@@ -304,51 +211,28 @@ def _aggregate_children(conn, source, target, start, end):
             "duration": total_duration,
             "count": sum(int(row["SampleCount"] or 0) for row in group),
         }
-        _write_aggregate(conn, target, company_id, tag, start, end, stats)
-        written += 1
-
-    return written
+        _write_aggregate(conn, target, company_id, plc_id, tag, start, end, stats)
 
 
 def aggregate_once():
     _ensure_tables()
     if not _try_acquire_lease():
         return
-
     conn = _connect()
     try:
         now = datetime.now(SCADA_TIMEZONE).replace(tzinfo=None, microsecond=0)
-
         minute_end = _minute_start(now)
-        minute_start = minute_end - timedelta(minutes=1)
-        _aggregate_raw_bucket(conn, minute_start, minute_end)
-
+        _aggregate_raw_bucket(conn, minute_end - timedelta(minutes=1), minute_end)
         hour_end = _hour_start(now)
-        hour_start = hour_end - timedelta(hours=1)
-        _aggregate_children(conn, "TrendMinute", "TrendHour", hour_start, hour_end)
-
+        _aggregate_children(conn, "TrendMinute", "TrendHour", hour_end - timedelta(hours=1), hour_end)
         day_end = _day_start(now)
-        day_start = day_end - timedelta(days=1)
-        _aggregate_children(conn, "TrendHour", "TrendDay", day_start, day_end)
+        _aggregate_children(conn, "TrendHour", "TrendDay", day_end - timedelta(days=1), day_end)
 
-        raw_cutoff = _ts(now - timedelta(minutes=RAW_RETENTION_MINUTES))
-        conn.execute(
-            "DELETE FROM PLC_Data WHERE Timestamp < ? AND (StorageType IS NULL OR UPPER(StorageType) IN ('EDGE','TIME'))",
-            (raw_cutoff,),
-        )
-
-        history_cutoff = _ts(now - timedelta(hours=2))
-        conn.execute("DELETE FROM TagHistory WHERE Timestamp < ?", (history_cutoff,))
-
-        minute_cutoff = _ts(now - timedelta(hours=MINUTE_RETENTION_HOURS))
-        conn.execute("DELETE FROM TrendMinute WHERE PeriodStart < ?", (minute_cutoff,))
-
-        hour_cutoff = _ts(now - timedelta(days=HOUR_RETENTION_DAYS))
-        conn.execute("DELETE FROM TrendHour WHERE PeriodStart < ?", (hour_cutoff,))
-
-        day_cutoff = _ts(now - timedelta(days=DAY_RETENTION_DAYS))
-        conn.execute("DELETE FROM TrendDay WHERE PeriodStart < ?", (day_cutoff,))
-
+        conn.execute("DELETE FROM PLC_Data WHERE Timestamp < ? AND (StorageType IS NULL OR UPPER(StorageType) IN ('EDGE','TIME'))", (_ts(now - timedelta(minutes=RAW_RETENTION_MINUTES)),))
+        conn.execute("DELETE FROM TagHistory WHERE Timestamp < ?", (_ts(now - timedelta(hours=2)),))
+        conn.execute("DELETE FROM TrendMinute WHERE PeriodStart < ?", (_ts(now - timedelta(hours=MINUTE_RETENTION_HOURS)),))
+        conn.execute("DELETE FROM TrendHour WHERE PeriodStart < ?", (_ts(now - timedelta(days=HOUR_RETENTION_DAYS)),))
+        conn.execute("DELETE FROM TrendDay WHERE PeriodStart < ?", (_ts(now - timedelta(days=DAY_RETENTION_DAYS)),))
         conn.commit()
     finally:
         conn.close()
@@ -365,107 +249,50 @@ def get_resolution(start, end):
     return "day"
 
 
-def get_trend_series(company_id, tag_name, start=None, end=None):
+def get_trend_series(company_id, plc_id, tag_name, start=None, end=None):
     if start is None or end is None:
         end = datetime.now(SCADA_TIMEZONE).replace(tzinfo=None)
         start = end - timedelta(hours=2)
-
     resolution = get_resolution(start, end)
-    table = {
-        "minute": "TrendMinute",
-        "hour": "TrendHour",
-        "day": "TrendDay",
-    }[resolution]
-
+    table = {"minute": "TrendMinute", "hour": "TrendHour", "day": "TrendDay"}[resolution]
     conn = _connect()
     try:
         rows = conn.execute(f"""
-            SELECT PeriodStart AS Timestamp,
-                   WeightedAverage AS Value,
-                   MinValue,
-                   MaxValue,
-                   WeightedAverage,
-                   DurationSeconds,
-                   SampleCount
+            SELECT PeriodStart AS Timestamp, WeightedAverage AS Value, MinValue, MaxValue, WeightedAverage, DurationSeconds, SampleCount
             FROM {table}
-            WHERE CompanyID = ?
-              AND LOWER(TagName) = LOWER(?)
-              AND PeriodStart < ?
-              AND PeriodEnd > ?
+            WHERE CompanyID = ? AND PLC_ID = ? AND LOWER(TagName) = LOWER(?)
+              AND PeriodStart < ? AND PeriodEnd > ?
             ORDER BY PeriodStart ASC
-        """, (int(company_id), tag_name, _ts(end), _ts(start))).fetchall()
-
+        """, (int(company_id), int(plc_id), tag_name, _ts(end), _ts(start))).fetchall()
         if rows:
             return resolution, rows
-
         raw = conn.execute("""
             SELECT Timestamp, Value
             FROM PLC_Data
-            WHERE CompanyID = ?
-              AND LOWER(TagName) = LOWER(?)
+            WHERE CompanyID = ? AND PLC_ID = ? AND LOWER(TagName) = LOWER(?)
               AND Timestamp >= ? AND Timestamp <= ?
             ORDER BY Timestamp ASC, ID ASC
-        """, (int(company_id), tag_name, _ts(start), _ts(end))).fetchall()
+        """, (int(company_id), int(plc_id), tag_name, _ts(start), _ts(end))).fetchall()
         return "raw", raw
     finally:
         conn.close()
 
 
-def get_trend_stats(company_id, tag_name, start=None, end=None):
-    resolution, rows = get_trend_series(company_id, tag_name, start, end)
+def get_trend_stats(company_id, plc_id, tag_name, start=None, end=None):
+    resolution, rows = get_trend_series(company_id, plc_id, tag_name, start, end)
     if not rows:
-        return {
-            "resolution": resolution,
-            "min": None,
-            "max": None,
-            "weighted_average": None,
-            "sample_count": 0,
-        }
-
+        return {"resolution": resolution, "min": None, "max": None, "weighted_average": None, "sample_count": 0}
     if resolution == "raw":
         parsed = [{"ts": row["Timestamp"], "value": row["Value"]} for row in rows]
         stats = _aggregate_step_rows(parsed, start or datetime.min, end or datetime.now(SCADA_TIMEZONE).replace(tzinfo=None))
         if stats is None:
-            return {
-                "resolution": resolution,
-                "min": None,
-                "max": None,
-                "weighted_average": None,
-                "sample_count": 0,
-            }
-        return {
-            "resolution": resolution,
-            "min": stats["min"],
-            "max": stats["max"],
-            "weighted_average": stats["weighted"],
-            "sample_count": stats["count"],
-        }
-
+            return {"resolution": resolution, "min": None, "max": None, "weighted_average": None, "sample_count": 0}
+        return {"resolution": resolution, "min": stats["min"], "max": stats["max"], "weighted_average": stats["weighted"], "sample_count": stats["count"]}
     minimum = min(float(row["MinValue"]) for row in rows if row["MinValue"] is not None)
     maximum = max(float(row["MaxValue"]) for row in rows if row["MaxValue"] is not None)
     duration = sum(float(row["DurationSeconds"] or 0) for row in rows)
-    weighted_sum = sum(
-        float(row["WeightedAverage"] or 0) * float(row["DurationSeconds"] or 0)
-        for row in rows
-    )
-
-    return {
-        "resolution": resolution,
-        "min": minimum,
-        "max": maximum,
-        "weighted_average": weighted_sum / duration if duration else None,
-        "sample_count": sum(int(row["SampleCount"] or 0) for row in rows),
-    }
-
-
-def _worker():
-    _ensure_tables()
-    while True:
-        try:
-            aggregate_once()
-        except Exception as exc:
-            print("TREND AGGREGATION ERROR:", exc)
-        time.sleep(WORKER_INTERVAL_SECONDS)
+    weighted_sum = sum(float(row["WeightedAverage"] or 0) * float(row["DurationSeconds"] or 0) for row in rows)
+    return {"resolution": resolution, "min": minimum, "max": maximum, "weighted_average": weighted_sum / duration if duration > 0 else None, "sample_count": sum(int(row["SampleCount"] or 0) for row in rows)}
 
 
 def start_aggregation_worker():
@@ -474,8 +301,11 @@ def start_aggregation_worker():
         if _worker_started:
             return
         _worker_started = True
-        threading.Thread(
-            target=_worker,
-            name="SCADA-Trend-Aggregator",
-            daemon=True,
-        ).start()
+    def worker():
+        while True:
+            try:
+                aggregate_once()
+            except Exception as exc:
+                print("TREND AGGREGATION ERROR:", repr(exc))
+            time.sleep(WORKER_INTERVAL_SECONDS)
+    threading.Thread(target=worker, name="SCADA-Trend-Aggregation", daemon=True).start()

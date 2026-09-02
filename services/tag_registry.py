@@ -1,8 +1,6 @@
 # =====================================================
 # SCADA_FLOW TAG REGISTRY SERVICE
-#
-# Keeps the database Tags table synchronized with the
-# tag definitions coming from the Flow Designer.
+# PLC-aware TagMapper registry.
 # =====================================================
 
 import json
@@ -18,29 +16,13 @@ class TagRegistry:
     @staticmethod
     def _signature(definitions):
         try:
-            payload = json.dumps(
-                definitions,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False
-            )
+            payload = json.dumps(definitions, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         except (TypeError, ValueError):
             payload = repr(definitions)
-
-        return hashlib.sha1(
-            payload.encode("utf-8")
-        ).hexdigest()
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
     def sync(company_id, definitions):
-        """
-        Register/update tags defined by TagMapper.
-
-        The database is synchronized only when the definitions actually
-        change. This avoids repeated SELECT/UPDATE/COMMIT work on every
-        realtime Flow scan while keeping the Flow Designer as source of truth.
-        """
-
         if company_id is None or not definitions:
             return 0
 
@@ -49,12 +31,8 @@ class TagRegistry:
         except (TypeError, ValueError):
             return 0
 
-        signature = TagRegistry._signature(
-            definitions
-        )
-
+        signature = TagRegistry._signature(definitions)
         cache_key = company_id
-
         if TagRegistry._signature_cache.get(cache_key) == signature:
             return 0
 
@@ -64,81 +42,51 @@ class TagRegistry:
 
         try:
             for definition in definitions:
+                if not isinstance(definition, dict):
+                    continue
+
                 name = str(definition.get("name") or "").strip()
                 register = definition.get("register")
-                datatype = str(
-                    definition.get("datatype")
-                    or definition.get("data_type")
-                    or "INT"
-                ).strip()
-                description = str(
-                    definition.get("description") or ""
-                ).strip()
+                plc_id = definition.get("plc_id", definition.get("PLC_ID"))
+                datatype = str(definition.get("datatype") or definition.get("data_type") or "INT").strip()
+                description = str(definition.get("description") or "").strip()
 
-                if not name or register is None:
+                if not name or register is None or plc_id in (None, ""):
                     continue
 
                 try:
                     register = int(register)
+                    plc_id = int(plc_id)
                 except (TypeError, ValueError):
                     continue
 
-                cursor.execute(
-                    """
+                cursor.execute("""
                     SELECT TagID
                     FROM Tags
                     WHERE CompanyID = ?
+                      AND PLC_ID = ?
                       AND LOWER(TagName) = LOWER(?)
                     LIMIT 1
-                    """,
-                    (company_id, name)
-                )
-
+                """, (company_id, plc_id, name))
                 row = cursor.fetchone()
 
                 if row:
-                    cursor.execute(
-                        """
+                    cursor.execute("""
                         UPDATE Tags
-                        SET RegisterAddress = ?,
-                            DataType = ?,
-                            Description = ?
+                        SET RegisterAddress = ?, DataType = ?, Description = ?
                         WHERE TagID = ?
-                        """,
-                        (
-                            register,
-                            datatype,
-                            description,
-                            row["TagID"]
-                        )
-                    )
+                    """, (register, datatype, description, row["TagID"]))
                 else:
-                    cursor.execute(
-                        """
+                    cursor.execute("""
                         INSERT INTO Tags
-                        (
-                            CompanyID,
-                            TagName,
-                            RegisterAddress,
-                            DataType,
-                            Description
-                        )
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (
-                            company_id,
-                            name,
-                            register,
-                            datatype,
-                            description
-                        )
-                    )
+                        (CompanyID, PLC_ID, TagName, RegisterAddress, DataType, Description)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (company_id, plc_id, name, register, datatype, description))
 
                 changed += 1
 
             conn.commit()
             TagRegistry._signature_cache[cache_key] = signature
-
         finally:
             cursor.close()
             conn.close()

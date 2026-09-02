@@ -1,10 +1,4 @@
-"""Server-side Edge timeout historian watchdog.
-
-When an Edge stops sending data, write one synthetic zero into PLC_Data for
-EVERY TagMapper tag whose storage is TIME. Trigger/non-TIME tags are never
-zeroed. A timeout is fired once per outage and is retried if zero insertion
-fails.
-"""
+"""Server-side Edge timeout watchdog, isolated per CompanyID + PLC_ID."""
 
 import json
 import os
@@ -14,11 +8,11 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from database import get_connection
+from services.plc_identity import ensure_plc_identity_schema
 
 CHECK_INTERVAL = 1.0
 DEFAULT_TIMEOUT = 10.0
 SCADA_TIMEZONE = ZoneInfo("Asia/Tehran")
-
 _started = False
 _thread = None
 _lock = threading.Lock()
@@ -47,79 +41,62 @@ def _parse_timestamp(value):
 
 
 def _ensure_tables(conn):
-    conn.execute("""
+    conn.executescript("""
         CREATE TABLE IF NOT EXISTS EdgeTimeoutState (
-            CompanyID INTEGER PRIMARY KEY,
+            CompanyID INTEGER NOT NULL,
+            PLC_ID INTEGER NOT NULL,
             LastReceivedAt TEXT,
             TimeoutSeconds REAL NOT NULL DEFAULT 10.0,
             TimedOut INTEGER NOT NULL DEFAULT 0,
             LastTimeoutAt TEXT,
-            UpdatedAt TEXT NOT NULL DEFAULT ''
-        )
-    """)
-    conn.execute("""
+            UpdatedAt TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (CompanyID, PLC_ID)
+        );
         CREATE TABLE IF NOT EXISTS EdgeTimeoutDiagnosticLog (
             LogID INTEGER PRIMARY KEY AUTOINCREMENT,
             CompanyID INTEGER NOT NULL DEFAULT 0,
+            PLC_ID INTEGER,
             Level TEXT NOT NULL DEFAULT 'INFO',
             Message TEXT NOT NULL DEFAULT '',
             Timestamp TEXT NOT NULL DEFAULT ''
-        )
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_edge_timeout_log_company_time
-        ON EdgeTimeoutDiagnosticLog (CompanyID, Timestamp)
+        );
+        CREATE INDEX IF NOT EXISTS idx_edge_timeout_log_company_plc_time
+            ON EdgeTimeoutDiagnosticLog (CompanyID, PLC_ID, Timestamp);
     """)
     conn.commit()
 
 
-def _log(conn, company_id, level, message, commit=True):
+def _log(conn, company_id, plc_id, level, message, commit=True):
     try:
-        conn.execute(
-            """
+        conn.execute("""
             INSERT INTO EdgeTimeoutDiagnosticLog
-            (CompanyID, Level, Message, Timestamp)
-            VALUES (?, ?, ?, ?)
-            """,
-            (int(company_id), str(level).upper(), str(message), _now_string()),
-        )
+            (CompanyID, PLC_ID, Level, Message, Timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        """, (int(company_id), int(plc_id), str(level).upper(), str(message), _now_string()))
         if commit:
             conn.commit()
     except Exception as exc:
         print("EDGE TIMEOUT LOG ERROR:", exc)
         if commit:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            conn.rollback()
 
 
 def _load_configs(conn):
-    """Load timeout and ONLY TIME-storage TagMapper tags per company."""
     result = {}
-    rows = conn.execute("""
-        SELECT CompanyID, FlowJson
-        FROM Flows
-        WHERE CompanyID IS NOT NULL
-        ORDER BY CompanyID
-    """).fetchall()
-
+    rows = conn.execute("SELECT CompanyID, FlowJson FROM Flows WHERE CompanyID IS NOT NULL ORDER BY CompanyID").fetchall()
     for row in rows:
         company_id = int(row["CompanyID"])
         try:
             flow = json.loads(row["FlowJson"] or "{}")
         except Exception as exc:
-            _log(conn, company_id, "ERROR", f"Flow JSON parse failed: {exc}")
+            _log(conn, company_id, 0, "ERROR", f"Flow JSON parse failed: {exc}")
             continue
-
         nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
-
-        timeout = None
+        timeout = DEFAULT_TIMEOUT
         for node in nodes.values():
             if not isinstance(node, dict) or node.get("name") != "EdgeTimeout":
                 continue
-            data = node.get("data", {}) or {}
-            config = data.get("config", data) or {}
+            config = (node.get("data", {}) or {}).get("config", node.get("data", {}) or {})
             try:
                 timeout = float(config.get("timeout_seconds", DEFAULT_TIMEOUT))
             except (TypeError, ValueError):
@@ -128,211 +105,135 @@ def _load_configs(conn):
                 timeout = DEFAULT_TIMEOUT
             break
 
-        if timeout is None:
-            continue
-
-        tags = []
-        seen = set()
+        groups = {}
         for node in nodes.values():
             if not isinstance(node, dict) or node.get("name") != "TagMapper":
                 continue
-            data = node.get("data", {}) or {}
-            config = data.get("config", data) or {}
+            config = (node.get("data", {}) or {}).get("config", node.get("data", {}) or {})
             mappings = config.get("mappings", []) or []
             if not isinstance(mappings, list):
                 continue
             for mapping in mappings:
-                if not isinstance(mapping, dict):
-                    continue
-                if str(mapping.get("storage", "TIME")).strip().upper() != "TIME":
+                if not isinstance(mapping, dict) or str(mapping.get("storage", "TIME")).upper() != "TIME":
                     continue
                 tag = str(mapping.get("name", "")).strip()
-                key = tag.lower()
-                if tag and key not in seen:
-                    seen.add(key)
-                    tags.append(tag)
+                try:
+                    plc_id = int(mapping.get("plc_id", mapping.get("PLC_ID")))
+                except (TypeError, ValueError):
+                    continue
+                if tag:
+                    groups.setdefault(plc_id, set()).add(tag)
 
-        result[company_id] = {"timeout": timeout, "tags": tags}
-
+        for plc_id, tags in groups.items():
+            result[(company_id, plc_id)] = {"timeout": timeout, "tags": sorted(tags)}
     return result
 
 
-def _last_edge_timestamp(conn, company_id):
+def _last_edge_timestamp(conn, company_id, plc_id):
     row = conn.execute("""
         SELECT MAX(Timestamp) AS LastReceivedAt
         FROM PLC_Data
-        WHERE CompanyID = ?
+        WHERE CompanyID = ? AND PLC_ID = ?
           AND UPPER(COALESCE(StorageType, '')) = 'EDGE'
-    """, (int(company_id),)).fetchone()
+    """, (int(company_id), int(plc_id))).fetchone()
     return row["LastReceivedAt"] if row else None
 
 
-def _get_state(conn, company_id):
+def _get_state(conn, company_id, plc_id):
     row = conn.execute("""
-        SELECT CompanyID, LastReceivedAt, TimeoutSeconds, TimedOut,
-               LastTimeoutAt, UpdatedAt
+        SELECT CompanyID, PLC_ID, LastReceivedAt, TimeoutSeconds, TimedOut, LastTimeoutAt, UpdatedAt
         FROM EdgeTimeoutState
-        WHERE CompanyID = ?
-        LIMIT 1
-    """, (int(company_id),)).fetchone()
+        WHERE CompanyID = ? AND PLC_ID = ? LIMIT 1
+    """, (int(company_id), int(plc_id))).fetchone()
     return dict(row) if row else None
 
 
-def _ensure_state(conn, company_id, timeout, last_received):
-    state = _get_state(conn, company_id)
+def _ensure_state(conn, company_id, plc_id, timeout, last_received):
+    state = _get_state(conn, company_id, plc_id)
     if state is not None:
         return state
-    now = _now_string()
     conn.execute("""
         INSERT OR IGNORE INTO EdgeTimeoutState
-        (CompanyID, LastReceivedAt, TimeoutSeconds, TimedOut, LastTimeoutAt, UpdatedAt)
-        VALUES (?, ?, ?, 0, NULL, ?)
-    """, (int(company_id), last_received, float(timeout), now))
+        (CompanyID, PLC_ID, LastReceivedAt, TimeoutSeconds, TimedOut, LastTimeoutAt, UpdatedAt)
+        VALUES (?, ?, ?, ?, 0, NULL, ?)
+    """, (int(company_id), int(plc_id), last_received, float(timeout), _now_string()))
     conn.commit()
-    return _get_state(conn, company_id)
+    return _get_state(conn, company_id, plc_id)
 
 
-def _set_state(conn, company_id, timeout, last_received, timed_out, last_timeout_at=None, commit=True):
-    now = _now_string()
+def _set_state(conn, company_id, plc_id, timeout, last_received, timed_out, last_timeout_at=None, commit=True):
     conn.execute("""
         UPDATE EdgeTimeoutState
-        SET LastReceivedAt=?, TimeoutSeconds=?, TimedOut=?,
-            LastTimeoutAt=?, UpdatedAt=?
-        WHERE CompanyID=?
-    """, (last_received, float(timeout), 1 if timed_out else 0,
-          last_timeout_at, now, int(company_id)))
+        SET LastReceivedAt=?, TimeoutSeconds=?, TimedOut=?, LastTimeoutAt=?, UpdatedAt=?
+        WHERE CompanyID=? AND PLC_ID=?
+    """, (last_received, float(timeout), 1 if timed_out else 0, last_timeout_at, _now_string(), int(company_id), int(plc_id)))
     if commit:
         conn.commit()
 
 
-def _insert_zero_rows(conn, company_id, tags):
-    """Insert one synthetic TIME zero for every configured TIME tag."""
+def _insert_zero_rows(conn, company_id, plc_id, tags):
     stamp = _now_string()
-    count = 0
     for tag in tags:
         conn.execute("""
-            INSERT INTO PLC_Data
-            (CompanyID, TagName, Value, StorageType, Timestamp)
-            VALUES (?, ?, 0, 'TIME', ?)
-        """, (int(company_id), str(tag), stamp))
-        count += 1
-    return count, stamp
+            INSERT INTO PLC_Data (CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp)
+            VALUES (?, ?, ?, 0, 'TIME', ?)
+        """, (int(company_id), int(plc_id), str(tag), stamp))
+    return len(tags), stamp
 
 
-def _fire_timeout_transaction(conn, company_id, timeout, last_edge, tags, elapsed):
-    """Atomically claim the outage AND write all zero rows.
-
-    The previous implementation committed TimedOut=1 before inserting zeros.
-    If the insert failed, the outage became permanently claimed and later
-    checks skipped it. Here everything is one transaction, so a failed zero
-    insert rolls the claim back and the next check retries it.
-    """
+def _fire_timeout_transaction(conn, company_id, plc_id, timeout, last_edge, tags, elapsed):
     conn.execute("BEGIN IMMEDIATE")
     try:
-        state = _get_state(conn, company_id)
+        state = _get_state(conn, company_id, plc_id)
         if state and bool(state.get("TimedOut")):
             conn.rollback()
             return False, 0, None
-
         timeout_at = _now_string()
-        _set_state(
-            conn, company_id, timeout, str(last_edge), True, timeout_at, commit=False
-        )
-
-        count, stamp = _insert_zero_rows(conn, company_id, tags)
-
-        _log(
-            conn,
-            company_id,
-            "WARNING",
-            f"TIMEOUT FIRED timeout={timeout}s elapsed={round(elapsed,3)}s "
-            f"zero_rows={count} zero_timestamp={stamp}",
-            commit=False,
-        )
-
+        _set_state(conn, company_id, plc_id, timeout, str(last_edge), True, timeout_at, commit=False)
+        count, stamp = _insert_zero_rows(conn, company_id, plc_id, tags)
+        _log(conn, company_id, plc_id, "WARNING", f"TIMEOUT FIRED timeout={timeout}s elapsed={round(elapsed,3)}s zero_rows={count}", commit=False)
         conn.commit()
         return True, count, stamp
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        conn.rollback()
         raise
 
 
 def check_once():
+    ensure_plc_identity_schema()
     conn = get_connection()
     try:
         _ensure_tables(conn)
         configs = _load_configs(conn)
-        if not configs:
-            return
-
         now = datetime.now(SCADA_TIMEZONE).replace(tzinfo=None)
-
-        for company_id, cfg in configs.items():
+        for (company_id, plc_id), cfg in configs.items():
             timeout = float(cfg["timeout"])
             tags = list(cfg["tags"])
-            last_edge = _last_edge_timestamp(conn, company_id)
-
+            last_edge = _last_edge_timestamp(conn, company_id, plc_id)
             if last_edge is None:
-                _ensure_state(conn, company_id, timeout, None)
+                _ensure_state(conn, company_id, plc_id, timeout, None)
                 continue
-
             parsed = _parse_timestamp(last_edge)
             if parsed is None:
-                _log(conn, company_id, "ERROR", f"Invalid EDGE timestamp: {last_edge}")
+                _log(conn, company_id, plc_id, "ERROR", f"Invalid EDGE timestamp: {last_edge}")
                 continue
-
             elapsed = max(0.0, (now - parsed).total_seconds())
-            state = _ensure_state(conn, company_id, timeout, str(last_edge))
-            timed_out = bool(state.get("TimedOut"))
-
-            _log(
-                conn,
-                company_id,
-                "INFO",
-                f"check timeout={timeout}s elapsed={round(elapsed,3)}s "
-                f"timed_out={timed_out} last_edge={last_edge} tags={len(tags)}",
-            )
-
+            state = _ensure_state(conn, company_id, plc_id, timeout, str(last_edge))
             if elapsed < timeout:
-                if timed_out:
-                    _set_state(
-                        conn, company_id, timeout, str(last_edge), False,
-                        state.get("LastTimeoutAt")
-                    )
-                    _log(conn, company_id, "INFO", "EDGE RECOVERED")
+                if bool(state.get("TimedOut")):
+                    _set_state(conn, company_id, plc_id, timeout, str(last_edge), False, state.get("LastTimeoutAt"))
+                    _log(conn, company_id, plc_id, "INFO", "EDGE RECOVERED")
                 continue
-
-            if timed_out:
+            if bool(state.get("TimedOut")):
                 continue
-
             try:
-                claimed, count, stamp = _fire_timeout_transaction(
-                    conn, company_id, timeout, last_edge, tags, elapsed
-                )
+                claimed, count, stamp = _fire_timeout_transaction(conn, company_id, plc_id, timeout, last_edge, tags, elapsed)
                 if claimed:
-                    print(
-                        "EDGE TIMEOUT:",
-                        "Company=", company_id,
-                        "Timeout=", timeout,
-                        "Elapsed=", round(elapsed, 2),
-                        "ZeroRows=", count,
-                    )
+                    print("EDGE TIMEOUT:", "Company=", company_id, "PLC_ID=", plc_id, "ZeroRows=", count)
             except Exception as exc:
-                _log(
-                    conn,
-                    company_id,
-                    "ERROR",
-                    f"TIMEOUT ZERO INSERT FAILED; transaction rolled back; retry next check: {type(exc).__name__}: {exc}",
-                )
-
+                _log(conn, company_id, plc_id, "ERROR", f"TIMEOUT ZERO INSERT FAILED; retry next check: {type(exc).__name__}: {exc}")
     except Exception as exc:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        conn.rollback()
         print("EDGE TIMEOUT WORKER ERROR:", type(exc).__name__, exc)
     finally:
         conn.close()
@@ -350,19 +251,14 @@ def _worker():
 
 def start_worker():
     global _started, _thread
-    if os.environ.get("SCADA_SKIP_EDGE_TIMEOUT_WORKER", "").strip().lower() in {
-        "1", "true", "yes", "on"
-    }:
+    if os.environ.get("SCADA_SKIP_EDGE_TIMEOUT_WORKER", "").strip().lower() in {"1", "true", "yes", "on"}:
         return None
+    ensure_plc_identity_schema()
     with _lock:
         if _thread is not None and _thread.is_alive():
             return _thread
         _started = True
-        _thread = threading.Thread(
-            target=_worker,
-            name="SCADA-EdgeTimeout-Runtime",
-            daemon=True,
-        )
+        _thread = threading.Thread(target=_worker, name="SCADA-EdgeTimeout-Runtime", daemon=True)
         _thread.start()
         print("EDGE TIMEOUT RUNTIME WORKER STARTED")
         return _thread

@@ -19,10 +19,18 @@ class PLCReader:
         self._mapping_cache = None
         self._mapping_cache_time = 0.0
         self._mapping_cache_company_id = None
+        self._mapping_cache_plc_id = None
 
     def _get_config(self, key, default=None):
         value = self.config.get(key)
         return default if value is None else value
+
+    def _plc_id(self):
+        value = self._get_config("plc_id", self._get_config("PLC_ID"))
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _edge_timeout(self):
         try:
@@ -33,11 +41,21 @@ class PLCReader:
     def _get_edge_mappings(self, force=False):
         try:
             company_id = int(self._get_config("company_id"))
+            plc_id = self._plc_id()
         except (TypeError, ValueError):
             return []
 
+        if plc_id is None:
+            return []
+
         now = time.monotonic()
-        if (not force and self._mapping_cache is not None and self._mapping_cache_company_id == company_id and now - self._mapping_cache_time < MAPPING_CACHE_SECONDS):
+        if (
+            not force
+            and self._mapping_cache is not None
+            and self._mapping_cache_company_id == company_id
+            and self._mapping_cache_plc_id == plc_id
+            and now - self._mapping_cache_time < MAPPING_CACHE_SECONDS
+        ):
             return self._mapping_cache
 
         conn = None
@@ -45,7 +63,10 @@ class PLCReader:
         try:
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT FlowJson FROM Flows WHERE CompanyID = ? ORDER BY FlowID DESC LIMIT 1", (company_id,))
+            cursor.execute(
+                "SELECT FlowJson FROM Flows WHERE CompanyID = ? ORDER BY FlowID DESC LIMIT 1",
+                (company_id,),
+            )
             row = cursor.fetchone()
             if not row:
                 return self._mapping_cache or []
@@ -67,6 +88,14 @@ class PLCReader:
                 for mapping in node_mappings:
                     if not isinstance(mapping, dict):
                         continue
+                    mapping_plc_id = mapping.get("plc_id", mapping.get("PLC_ID"))
+                    try:
+                        mapping_plc_id = int(mapping_plc_id)
+                    except (TypeError, ValueError):
+                        continue
+                    if mapping_plc_id != plc_id:
+                        continue
+
                     name = str(mapping.get("name", "")).strip()
                     register = mapping.get("register")
                     if not name or register in (None, ""):
@@ -75,7 +104,7 @@ class PLCReader:
                         register = int(register)
                     except (TypeError, ValueError):
                         continue
-                    mappings.append({"register": register, "name": name})
+                    mappings.append({"register": register, "name": name, "plc_id": plc_id})
 
                     if str(mapping.get("storage", "TIME")).strip().upper() == "TRIGGER":
                         try:
@@ -84,19 +113,17 @@ class PLCReader:
                             pass
                 break
 
-            # The Edge sends every shared trigger register as a reserved
-            # historian tag. Add it to the server register map so SQLWriter
-            # receives Registers[118] (or any other configured trigger register).
             for trigger_register in sorted(trigger_registers):
                 mappings.append({
                     "register": trigger_register,
                     "name": f"{TRIGGER_TAG_PREFIX}{trigger_register}",
+                    "plc_id": plc_id,
                 })
 
             result = []
             seen = set()
             for mapping in mappings:
-                key = (mapping["register"], mapping["name"])
+                key = (mapping["register"], mapping["name"], mapping["plc_id"])
                 if key in seen:
                     continue
                 seen.add(key)
@@ -105,6 +132,7 @@ class PLCReader:
             self._mapping_cache = result
             self._mapping_cache_time = now
             self._mapping_cache_company_id = company_id
+            self._mapping_cache_plc_id = plc_id
             return result
         except Exception as exc:
             print("EDGE MAPPING LOAD ERROR:", exc)
@@ -127,11 +155,11 @@ class PLCReader:
         except (TypeError, ValueError):
             return False
 
-    def _zero_key(self, company_id, tag_name):
-        return (int(company_id), str(tag_name).strip().lower())
+    def _zero_key(self, company_id, plc_id, tag_name):
+        return (int(company_id), int(plc_id), str(tag_name).strip().lower())
 
-    def _handle_zero(self, company_id, tag_name, value):
-        key = self._zero_key(company_id, tag_name)
+    def _handle_zero(self, company_id, plc_id, tag_name, value):
+        key = self._zero_key(company_id, plc_id, tag_name)
         now = time.monotonic()
         if not self._is_zero(value):
             self._zero_memory.pop(key, None)
@@ -148,9 +176,13 @@ class PLCReader:
     def _read_edge_registers(self, register, count):
         try:
             company_id = int(self._get_config("company_id"))
+            plc_id = self._plc_id()
             start = int(register)
             end = start + int(count) - 1
         except (TypeError, ValueError):
+            return {}
+
+        if plc_id is None:
             return {}
 
         mappings = [m for m in self._get_edge_mappings() if start <= m["register"] <= end]
@@ -169,15 +201,17 @@ class PLCReader:
                 SELECT TagName, Value, Timestamp
                 FROM TagHistory AS H
                 WHERE H.CompanyID = ?
+                  AND H.PLC_ID = ?
                   AND H.TagName IN ({placeholders})
                   AND H.ID = (
                       SELECT H2.ID FROM TagHistory AS H2
                       WHERE H2.CompanyID = H.CompanyID
+                        AND H2.PLC_ID = H.PLC_ID
                         AND H2.TagName = H.TagName
                       ORDER BY H2.Timestamp DESC, H2.ID DESC LIMIT 1
                   )
                 """,
-                [company_id] + tag_names,
+                [company_id, plc_id] + tag_names,
             )
             latest_rows = {row["TagName"]: row for row in cursor.fetchall()}
             registers = {}
@@ -198,19 +232,17 @@ class PLCReader:
                 except Exception:
                     age = timeout + 1
 
-                # Do not debounce the reserved trigger register. A real 0 is
-                # essential because SQLWriter needs to see 0 before 1.
                 is_trigger_register = tag_name.startswith(TRIGGER_TAG_PREFIX)
                 if self._is_zero(value) and not is_trigger_register:
-                    if not self._handle_zero(company_id, tag_name, value):
+                    if not self._handle_zero(company_id, plc_id, tag_name, value):
                         cursor.execute(
                             """
                             SELECT Value FROM TagHistory
-                            WHERE CompanyID = ? AND TagName = ?
+                            WHERE CompanyID = ? AND PLC_ID = ? AND TagName = ?
                               AND Value IS NOT NULL AND Value != 0
                             ORDER BY Timestamp DESC, ID DESC LIMIT 1
                             """,
-                            (company_id, tag_name),
+                            (company_id, plc_id, tag_name),
                         )
                         previous = cursor.fetchone()
                         if previous:
@@ -218,12 +250,12 @@ class PLCReader:
                         else:
                             continue
                 else:
-                    self._zero_memory.pop(self._zero_key(company_id, tag_name), None)
+                    self._zero_memory.pop(self._zero_key(company_id, plc_id, tag_name), None)
 
                 registers[str(mapping["register"])] = value
 
                 if age <= timeout and (is_trigger_register or value not in (None, 0, 0.0)):
-                    self._watchdog_zero_memory.discard(self._zero_key(company_id, tag_name))
+                    self._watchdog_zero_memory.discard(self._zero_key(company_id, plc_id, tag_name))
 
             return registers
         except Exception as exc:
@@ -254,8 +286,9 @@ class PLCReader:
         slave = self._get_config("slave")
         register = self._get_config("register")
         count = self._get_config("count")
+        plc_id = self._plc_id()
 
-        required = {"ip": ip, "port": port, "slave": slave, "register": register, "count": count}
+        required = {"plc_id": plc_id, "ip": ip, "port": port, "slave": slave, "register": register, "count": count}
         missing = [name for name, value in required.items() if value in (None, "")]
         if missing:
             raise ValueError("PLCReader configuration is incomplete. Missing: " + ", ".join(missing))
@@ -273,7 +306,8 @@ class PLCReader:
             registers = self._read_direct_modbus(ip, port, slave, register, count)
 
         result = dict(data)
-        result["PLC"] = {"ip": ip, "port": port, "slave": slave, "register": register, "count": count}
+        result["PLC_ID"] = plc_id
+        result["PLC"] = {"PLC_ID": plc_id, "ip": ip, "port": port, "slave": slave, "register": register, "count": count}
         result["Registers"] = registers
         result["registers"] = registers
         return result

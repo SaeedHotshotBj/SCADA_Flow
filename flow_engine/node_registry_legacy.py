@@ -1,12 +1,13 @@
 # =====================================================
 # SCADA_FLOW EDITOR NODE REGISTRY
-# PROPERTY DEFINITIONS
+# PLC-AWARE PROPERTY DEFINITIONS
 # =====================================================
 
 NODE_REGISTRY = {
 
     "PLCReader": {
         "config": [
+            {"name": "plc_id", "label": "PLC ID", "type": "number"},
             {"name": "ip", "label": "PLC IP", "type": "text"},
             {"name": "port", "label": "PLC Port", "type": "number"},
             {"name": "slave", "label": "Slave ID", "type": "number"},
@@ -22,6 +23,7 @@ NODE_REGISTRY = {
                 "label": "Tag Definitions",
                 "type": "table",
                 "columns": [
+                    {"name": "plc_id", "label": "PLC ID", "type": "number"},
                     {"name": "register", "label": "Register", "type": "number"},
                     {"name": "name", "label": "Tag Name", "type": "text"},
                     {"name": "datatype", "label": "Data Type", "type": "select", "options": ["FLOAT", "INT", "BOOL"]},
@@ -36,171 +38,71 @@ NODE_REGISTRY = {
     },
 
     "ExpressionNode": {
-        "config": [
-            {
-                "name": "expressions",
-                "label": "Expressions",
-                "type": "table",
-                "columns": [
-                    {"name": "name", "label": "Result Name", "type": "text"},
-                    {"name": "expression", "label": "Expression", "type": "text"}
-                ]
-            }
-        ]
+        "config": [{"name": "expressions", "label": "Expressions", "type": "table", "columns": [{"name": "name", "label": "Result Name", "type": "text"}, {"name": "expression", "label": "Expression", "type": "text"}]}]
     },
 
     "SQLWriter": {
-        "config": [
-            {"name": "company_id", "label": "Company ID", "type": "number", "default": ""}
-        ]
+        "config": [{"name": "company_id", "label": "Company ID", "type": "number", "default": ""}]
     },
 
     "Roles": {
-        "config": [
-            {
-                "name": "roles",
-                "label": "Company Roles",
-                "type": "table",
-                "columns": [
-                    {"name": "role", "label": "Role Name", "type": "text"},
-                    {"name": "username", "label": "Username", "type": "text"},
-                    {"name": "password", "label": "Password", "type": "password"}
-                ]
-            }
-        ]
+        "config": [{"name": "roles", "label": "Company Roles", "type": "table", "columns": [{"name": "role", "label": "Role Name", "type": "text"}, {"name": "username", "label": "Username", "type": "text"}, {"name": "password", "label": "Password", "type": "password"}]}]
     },
 
     "RolesEngaged": {
-        "config": [
-            {
-                "name": "roles",
-                "label": "Allowed Roles",
-                "type": "table",
-                "columns": [
-                    {"name": "role", "label": "Role", "type": "select", "options": []}
-                ]
-            }
-        ]
+        "config": [{"name": "roles", "label": "Allowed Roles", "type": "table", "columns": [{"name": "role", "label": "Role", "type": "select", "options": []}]}]
     },
 
     "MachineCard": {
-        "config": [
-            {
-                "name": "machines",
-                "label": "Machines",
-                "type": "machine_cards"
-            },
-            {
-                "name": "icon_library",
-                "label": "Icon Library",
-                "type": "icon_library"
-            }
-        ]
+        "config": [{"name": "machines", "label": "Machines", "type": "machine_cards"}, {"name": "icon_library", "label": "Icon Library", "type": "icon_library"}]
     },
 
     "DashboardOutput": {
         "config": [
-            {
-                "name": "widgets",
-                "label": "Dashboard Widgets",
-                "type": "table",
-                "columns": [
-                    {"name": "tag", "label": "Tag", "type": "text"},
-                    {"name": "title", "label": "Title", "type": "text"},
-                    {"name": "unit", "label": "Unit", "type": "text"}
-                ]
-            },
-            {
-                "name": "timeout",
-                "label": "Edge Timeout (sec)",
-                "type": "number",
-                "default": 10
-            }
+            {"name": "widgets", "label": "Dashboard Widgets", "type": "table", "columns": [
+                {"name": "plc_id", "label": "PLC ID", "type": "number"},
+                {"name": "tag", "label": "Tag", "type": "text"},
+                {"name": "title", "label": "Title", "type": "text"},
+                {"name": "unit", "label": "Unit", "type": "text"}
+            ]},
+            {"name": "timeout", "label": "Edge Timeout (sec)", "type": "number", "default": 10}
         ]
     },
 
     "EdgeTimeout": {
-        "config": [
-            {
-                "name": "timeout_seconds",
-                "label": "Edge Timeout (sec)",
-                "type": "number",
-                "default": 10
-            }
-        ]
+        "config": [{"name": "timeout_seconds", "label": "Edge Timeout (sec)", "type": "number", "default": 10}]
     },
 
     "AlarmNode": {
-        "config": [
-            {
-                "name": "alarms",
-                "label": "Alarm Rules",
-                "type": "table",
-                "columns": [
-                    {"name": "tag", "label": "Tag", "type": "text"},
-                    {"name": "condition", "label": "Condition", "type": "select", "options": [">", "<", "=="]},
-                    {"name": "limit", "label": "Limit", "type": "number"},
-                    {"name": "message", "label": "Message", "type": "text"}
-                ]
-            }
-        ]
+        "config": [{"name": "alarms", "label": "Alarm Rules", "type": "table", "columns": [{"name": "plc_id", "label": "PLC ID", "type": "number"}, {"name": "tag", "label": "Tag", "type": "text"}, {"name": "condition", "label": "Condition", "type": "select", "options": [">", "<", "=="]}, {"name": "limit", "label": "Limit", "type": "number"}, {"name": "message", "label": "Message", "type": "text"}]}]
     },
 
-    "TrendReader": {
-        "config": [
-            {"name": "company_id", "label": "Company ID", "type": "number", "default": ""}
-        ]
-    },
-
-    "TrendDatabaseReader": {
-        "config": [
-            {"name": "company_id", "label": "Company ID", "type": "number", "default": ""}
-        ]
-    },
-
+    "TrendReader": {"config": [{"name": "company_id", "label": "Company ID", "type": "number", "default": ""}]},
+    "TrendDatabaseReader": {"config": [{"name": "company_id", "label": "Company ID", "type": "number", "default": ""}]},
     "TrendOutput": {
         "config": [
-            {
-                "name": "DatePicker",
-                "label": "Date Type",
-                "type": "select",
-                "options": ["GregorianPicker", "JalaliPicker"],
-                "default": "JalaliPicker"
-            }
+            {"name": "DatePicker", "label": "Date Type", "type": "select", "options": ["GregorianPicker", "JalaliPicker"], "default": "JalaliPicker"},
+            {"name": "series", "label": "Trend Series", "type": "table", "columns": [
+                {"name": "plc_id", "label": "PLC ID", "type": "number"},
+                {"name": "tag", "label": "Tag", "type": "text"},
+                {"name": "label", "label": "Series Label", "type": "text"},
+                {"name": "unit", "label": "Unit", "type": "text"}
+            ]}
         ]
     },
 
     "ReportOutput": {
         "config": [
-            {
-                "name": "DatePicker",
-                "label": "Date Type",
-                "type": "select",
-                "options": ["GregorianPicker", "JalaliPicker"],
-                "default": "JalaliPicker"
-            },
-            {
-                "name": "products",
-                "label": "Report Tags",
-                "type": "table",
-                "columns": [
-                    {"name": "name", "label": "Column Name", "type": "text"},
-                    {"name": "tag", "label": "Tag From TagMapper", "type": "text"},
-                    {"name": "unit", "label": "Unit", "type": "text"}
-                ]
-            }
+            {"name": "DatePicker", "label": "Date Type", "type": "select", "options": ["GregorianPicker", "JalaliPicker"], "default": "JalaliPicker"},
+            {"name": "products", "label": "Report Tags", "type": "table", "columns": [
+                {"name": "plc_id", "label": "PLC ID", "type": "number"},
+                {"name": "name", "label": "Column Name", "type": "text"},
+                {"name": "tag", "label": "Tag From TagMapper", "type": "text"},
+                {"name": "unit", "label": "Unit", "type": "text"},
+                {"name": "context_role", "label": "Context Role", "type": "select", "options": ["", "contract_code", "product_code"]}
+            ]}
         ]
     },
 
-    "DateConverter": {
-        "config": [
-            {
-                "name": "direction",
-                "label": "Direction",
-                "type": "select",
-                "options": ["J2G", "G2J"],
-                "default": "G2J"
-            }
-        ]
-    }
+    "DateConverter": {"config": [{"name": "direction", "label": "Direction", "type": "select", "options": ["J2G", "G2J"], "default": "G2J"}]}
 }

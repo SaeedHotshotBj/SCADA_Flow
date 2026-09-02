@@ -5,83 +5,65 @@ import time
 from database import get_company_flow
 
 
-# =====================================================
-# READ COMPANY FLOW NODES
-# =====================================================
-
 def _get_nodes(company_id):
     if company_id is None:
         return {}
-
     flow_json = get_company_flow(company_id)
     if not flow_json:
         return {}
-
     try:
         flow = json.loads(flow_json)
     except Exception as exc:
         print("Dashboard flow JSON error:", exc)
         return {}
+    return flow.get("drawflow", {}).get("Home", {}).get("data", {})
 
-    return (
-        flow.get("drawflow", {})
-        .get("Home", {})
-        .get("data", {})
-    )
+
+def _to_plc_id(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _register_to_tag(nodes):
-    """Build register -> real TagMapper name lookup for dashboard machine parameters."""
+    """Build (PLC_ID, register) -> TagMapper name lookup."""
     lookup = {}
-
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
             continue
-
         mappings = node.get("data", {}).get("mappings", [])
         if not isinstance(mappings, list):
             continue
-
         for item in mappings:
             if not isinstance(item, dict):
                 continue
-
             name = str(item.get("name", "")).strip()
             register = item.get("register")
-
+            plc_id = _to_plc_id(item.get("plc_id", item.get("PLC_ID")))
             if not name or register in (None, ""):
                 continue
-
             try:
-                lookup[str(int(register))] = name
+                register = str(int(register))
             except (TypeError, ValueError):
-                lookup[str(register).strip()] = name
-
+                register = str(register).strip()
+            lookup[(plc_id, register)] = name
     return lookup
 
 
-def _resolve_machine_tag(raw_tag, register_lookup):
-    """Resolve a MachineCard tag that may be a PLC register to its PLC_Data TagName."""
+def _resolve_machine_tag(raw_tag, plc_id, register_lookup):
     tag = str(raw_tag or "").strip()
     if not tag:
         return ""
+    try:
+        key_register = str(int(float(tag)))
+    except (TypeError, ValueError):
+        key_register = tag
+    return register_lookup.get((plc_id, key_register), tag)
 
-    return register_lookup.get(tag, tag)
-
-
-# =====================================================
-# DASHBOARD CONFIGURATION
-# =====================================================
 
 def get_dashboard_widgets(company_id):
-    """
-    Return DashboardOutput widgets followed by MachineCard definitions.
-
-    MachineCard parameters are normalized through TagMapper so a parameter
-    configured as register 144/145 can read PLC_Data rows stored as
-    Motor1V1/Motor1S.
-    """
-
+    """Return DashboardOutput widgets and MachineCards with explicit PLC identity."""
     widgets = []
     machines = []
     icon_library = []
@@ -97,7 +79,12 @@ def get_dashboard_widgets(company_id):
             if node.get("name") == "DashboardOutput":
                 configured = node.get("data", {}).get("widgets", [])
                 if isinstance(configured, list):
-                    widgets.extend(configured)
+                    for widget in configured:
+                        if not isinstance(widget, dict):
+                            continue
+                        item = dict(widget)
+                        item["plc_id"] = _to_plc_id(item.get("plc_id", item.get("PLC_ID")))
+                        widgets.append(item)
 
             elif node.get("name") == "MachineCard":
                 data = node.get("data", {})
@@ -108,7 +95,6 @@ def get_dashboard_widgets(company_id):
                     for machine in configured_machines:
                         if not isinstance(machine, dict):
                             continue
-
                         normalized = {
                             "id": str(machine.get("id", "")).strip(),
                             "name": str(machine.get("name", "")).strip(),
@@ -116,7 +102,6 @@ def get_dashboard_widgets(company_id):
                             "layout": machine.get("layout", "auto"),
                             "parameters": [],
                         }
-
                         if not normalized["id"]:
                             normalized["id"] = "machine_%s" % (len(machines) + 1)
                         if not normalized["name"]:
@@ -127,56 +112,42 @@ def get_dashboard_widgets(company_id):
                             for parameter in parameters:
                                 if not isinstance(parameter, dict):
                                     continue
-
+                                plc_id = _to_plc_id(parameter.get("plc_id", parameter.get("PLC_ID")))
                                 raw_tag = str(parameter.get("tag", "")).strip()
-                                resolved_tag = _resolve_machine_tag(raw_tag, register_lookup)
+                                resolved_tag = _resolve_machine_tag(raw_tag, plc_id, register_lookup)
                                 if not resolved_tag:
                                     continue
-
                                 label = str(parameter.get("label", "")).strip() or resolved_tag
                                 unit = str(parameter.get("unit", "")).strip()
-
                                 normalized["parameters"].append({
                                     "label": label,
                                     "tag": resolved_tag,
                                     "configured_tag": raw_tag,
+                                    "plc_id": plc_id,
                                     "unit": unit,
                                 })
-
                                 widgets.append({
                                     "tag": resolved_tag,
+                                    "plc_id": plc_id,
                                     "title": normalized["name"] + " / " + label,
                                     "unit": unit,
                                     "_dashboard_type": "machine_parameter",
                                 })
-
                         machines.append(normalized)
 
                 if isinstance(configured_icons, list):
-                    icon_library.extend(
-                        item for item in configured_icons
-                        if isinstance(item, dict)
-                    )
+                    icon_library.extend(item for item in configured_icons if isinstance(item, dict))
 
         for machine in machines:
-            widgets.append({
-                "_dashboard_type": "machine",
-                "machine": machine,
-                "icon_library": icon_library,
-            })
+            widgets.append({"_dashboard_type": "machine", "machine": machine, "icon_library": icon_library})
 
-    except Exception as e:
-        print("Dashboard widget error:", e)
+    except Exception as exc:
+        print("Dashboard widget error:", exc)
 
     return widgets
 
 
-# =====================================================
-# START EDGE TIMEOUT WORKER
-# =====================================================
-
 def _start_edge_timeout_with_retry():
-    """Start EdgeTimeout only after the application/database have had time to initialize."""
     for attempt in range(12):
         try:
             from services.edge_timeout_service import start_worker
@@ -186,7 +157,6 @@ def _start_edge_timeout_with_retry():
         except Exception as exc:
             print("EDGE TIMEOUT RETRY START ERROR:", attempt + 1, exc)
         time.sleep(2)
-
     print("EDGE TIMEOUT WORKER RETRY START FAILED")
 
 
