@@ -9,15 +9,14 @@ from socket_manager import send_dashboard_data
 
 class DashboardOutput:
 
-    DEFAULT_TIMEOUT_SECONDS = 10
-
     def __init__(self, config):
         self.config = config or {}
         self.widgets = self.config.get("widgets", [])
+        raw_timeout = self.config.get("timeout")
         try:
-            self.timeout = max(0.0, float(self.config.get("timeout", self.DEFAULT_TIMEOUT_SECONDS)))
-        except (TypeError, ValueError):
-            self.timeout = float(self.DEFAULT_TIMEOUT_SECONDS)
+            self.timeout = None if raw_timeout in (None, "") else max(0.0, float(raw_timeout))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("DashboardOutput timeout must be a number.") from exc
 
     @staticmethod
     def _plc_id(value):
