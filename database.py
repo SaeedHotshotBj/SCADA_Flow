@@ -71,7 +71,6 @@ def get_connection():
 
     conn = sqlite3.connect(
         db_path,
-        timeout=30,
         detect_types=(
             sqlite3.PARSE_DECLTYPES |
             sqlite3.PARSE_COLNAMES
@@ -83,10 +82,6 @@ def get_connection():
 
     conn.execute(
         "PRAGMA foreign_keys = ON"
-    )
-
-    conn.execute(
-        "PRAGMA busy_timeout = 10000"
     )
 
     conn.execute(
