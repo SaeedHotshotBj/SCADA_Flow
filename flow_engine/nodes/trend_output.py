@@ -2,8 +2,10 @@
 # SCADA_FLOW TREND OUTPUT NODE
 # =====================================================
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import jdatetime
+
+from services.trend_aggregation import get_trend_series, get_trend_stats
 
 
 class TrendOutput:
@@ -102,15 +104,184 @@ class TrendOutput:
                 return value
         return {}
 
+    @staticmethod
+    def _normalize_plc_id(value):
+        try:
+            value = int(value)
+            return value if value > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _debug_log(company_id, plc_id, level, message):
+        """Write Trend diagnostics to the existing Master Logs channel."""
+        conn = None
+        try:
+            from database import get_connection
+            conn = get_connection()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS EdgeTimeoutDiagnosticLog (
+                    LogID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    CompanyID INTEGER NOT NULL DEFAULT 0,
+                    PLC_ID INTEGER,
+                    Level TEXT NOT NULL DEFAULT 'INFO',
+                    Message TEXT NOT NULL DEFAULT '',
+                    Timestamp TEXT NOT NULL DEFAULT ''
+                )
+            """)
+            conn.execute("""
+                INSERT INTO EdgeTimeoutDiagnosticLog
+                (CompanyID, PLC_ID, Level, Message, Timestamp)
+                VALUES (?, ?, ?, ?, datetime('now','localtime'))
+            """, (
+                int(company_id or 0),
+                plc_id,
+                str(level).upper(),
+                str(message),
+            ))
+            conn.commit()
+        except Exception:
+            try:
+                if conn is not None:
+                    conn.rollback()
+            except Exception:
+                pass
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _load_card_trend_directly(self, data):
+        """Guarantee a MachineCard trend uses CompanyID + PLC_ID + TagName."""
+        request = data.get("TrendRequest", {}) or {}
+        selected_tag = str(request.get("Tag") or "").strip()
+        if not selected_tag:
+            return
+
+        company_id = data.get("CompanyID", request.get("CompanyID", self.config.get("company_id")))
+        try:
+            company_id = int(company_id)
+        except (TypeError, ValueError):
+            self._debug_log(0, None, "ERROR", f"TREND_DIRECT_INVALID_COMPANY tag={selected_tag}")
+            return
+
+        plc_id = self._normalize_plc_id(
+            request.get("PLC_ID", request.get("plc_id", data.get("PLC_ID")))
+        )
+        if plc_id is None:
+            self._debug_log(
+                company_id,
+                None,
+                "WARNING",
+                f"TREND_DIRECT_NO_PLC company={company_id} tag={selected_tag}",
+            )
+            return
+
+        calendar = request.get("Calendar", "Gregorian")
+        start = self._parse_timestamp(request.get("Start"))
+        end = self._parse_timestamp(request.get("End"))
+
+        if start is None and end is None:
+            end = datetime.now().replace(microsecond=0)
+            start = end - timedelta(hours=2)
+        elif start is None or end is None:
+            self._debug_log(
+                company_id,
+                plc_id,
+                "WARNING",
+                f"TREND_DIRECT_INVALID_RANGE company={company_id} plc={plc_id} tag={selected_tag} start={request.get('Start')} end={request.get('End')}",
+            )
+            return
+
+        if start > end:
+            start, end = end, start
+
+        self._debug_log(
+            company_id,
+            plc_id,
+            "INFO",
+            f"TREND_DIRECT_START company={company_id} plc={plc_id} tag={selected_tag} calendar={calendar} start={start} end={end}",
+        )
+
+        try:
+            resolution, rows = get_trend_series(
+                company_id,
+                plc_id,
+                selected_tag,
+                start,
+                end,
+            )
+
+            trend = []
+            for row in rows or []:
+                timestamp = row["Timestamp"] if "Timestamp" in row.keys() else row[0]
+                value = row["Value"] if "Value" in row.keys() else row[1]
+                if timestamp is None or value is None:
+                    continue
+                trend.append({
+                    "Tag": selected_tag,
+                    "Timestamp": timestamp,
+                    "Value": value,
+                    "PLC_ID": plc_id,
+                })
+
+            stats = get_trend_stats(
+                company_id,
+                plc_id,
+                selected_tag,
+                start,
+                end,
+            )
+
+            data["CompanyID"] = company_id
+            data["PLC_ID"] = plc_id
+            data["TrendData"] = trend
+            data["TrendStats"] = {selected_tag: stats}
+            data["TrendResolution"] = {selected_tag: resolution}
+            data["TrendRecordCount"] = len(trend)
+            data["TrendRequest"] = dict(
+                request,
+                Tag=selected_tag,
+                Tags=[selected_tag],
+                Start=start,
+                End=end,
+                Calendar=calendar,
+                CompanyID=company_id,
+                PLC_ID=plc_id,
+            )
+
+            self._debug_log(
+                company_id,
+                plc_id,
+                "INFO",
+                f"TREND_DIRECT_RESULT company={company_id} plc={plc_id} tag={selected_tag} source={resolution} rows={len(trend)}",
+            )
+        except Exception as exc:
+            self._debug_log(
+                company_id,
+                plc_id,
+                "ERROR",
+                f"TREND_DIRECT_ERROR company={company_id} plc={plc_id} tag={selected_tag} error={exc!r}",
+            )
+
     def execute(self, data=None):
         if data is None:
             data = {}
         if "ReportRequest" in data:
             return data
 
-        trend_data = data.get("TrendData", []) or []
         request = data.get("TrendRequest", {}) or {}
         selected_tag = request.get("Tag")
+
+        # MachineCard trend requests carry an explicit PLC_ID. Resolve them
+        # before producing ChartData so an older/legacy trend branch cannot
+        # drop the PLC identity and accidentally return an empty/mixed series.
+        if selected_tag and self._normalize_plc_id(request.get("PLC_ID", request.get("plc_id", data.get("PLC_ID")))) is not None:
+            self._load_card_trend_directly(data)
+
+        trend_data = data.get("TrendData", []) or []
         selected_key = self._normalize_tag(selected_tag)
 
         grouped = {}
@@ -163,13 +334,5 @@ class TrendOutput:
             "multi": len(output) > 1,
             "selected": selected_tag,
         }
-
-        print(
-            "TREND OUTPUT:",
-            "Selected=", selected_tag,
-            "Datasets=", len(output),
-            "Points=", sum(len(ds.get("data", [])) for ds in output),
-            "Stats=", result_stats,
-        )
 
         return data
