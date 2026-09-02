@@ -40,7 +40,53 @@ def _parse_timestamp(value):
         return None
 
 
+def _ensure_plc_data_identity(conn):
+    """Ensure an already-existing PLC_Data table is PLC-aware.
+
+    init_database() uses CREATE TABLE IF NOT EXISTS, so an older production
+    database can legitimately survive with the pre-PLC schema.  The timeout
+    worker must not query PLC_ID until that legacy table has been migrated.
+    """
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='PLC_Data'"
+    ).fetchone()
+    if row is None:
+        return
+
+    columns = {
+        item[1]
+        for item in conn.execute('PRAGMA table_info("PLC_Data")').fetchall()
+    }
+    if "PLC_ID" not in columns:
+        conn.execute('ALTER TABLE "PLC_Data" ADD COLUMN PLC_ID INTEGER')
+
+    conn.execute(
+        """
+        UPDATE PLC_Data
+        SET PLC_ID = (
+            SELECT MIN(p.PLC_ID)
+            FROM PLCs p
+            WHERE p.CompanyID = PLC_Data.CompanyID
+        )
+        WHERE PLC_ID IS NULL
+          AND 1 = (
+              SELECT COUNT(*)
+              FROM PLCs p2
+              WHERE p2.CompanyID = PLC_Data.CompanyID
+          )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_plc_data_company_plc_tag_time
+        ON PLC_Data(CompanyID, PLC_ID, TagName, Timestamp)
+        """
+    )
+    conn.commit()
+
+
 def _ensure_tables(conn):
+    _ensure_plc_data_identity(conn)
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS EdgeTimeoutState (
             CompanyID INTEGER NOT NULL,
