@@ -1,675 +1,374 @@
 
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SCADA FLOW - Master</title>
-
-
     <style>
-
-        * {
-            box-sizing: border-box;
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; background: #20252b; color: #fff; font-family: Arial, sans-serif; }
+        .topbar { height: 70px; display:flex; align-items:center; justify-content:space-between; padding:0 28px; background:#171b20; border-bottom:1px solid #3d464f; }
+        .brand { display:flex; align-items:center; gap:12px; }
+        .brand-icon { width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px; background:#1677ff; font-weight:bold; font-size:18px; }
+        .brand-text { font-size:20px; font-weight:bold; letter-spacing:1px; }
+        .master-label { color:#9da7b0; font-size:13px; }
+        .logout { color:#c3c9ce; text-decoration:none; padding:9px 14px; border-radius:6px; border:1px solid #48525c; }
+        .logout:hover { background:#343c44; color:white; }
+        .main { padding:28px; }
+        .page-title { margin-bottom:25px; }
+        .page-title h1 { margin:0; font-size:25px; }
+        .page-title p { margin:7px 0 0; color:#8f9aa4; font-size:14px; }
+        .control-panel, .plc-write-panel { width:820px; max-width:100%; background:#2b3239; border:1px solid #46515b; border-radius:10px; padding:22px; box-shadow:0 8px 25px rgba(0,0,0,.25); }
+        .plc-write-panel { margin-top:22px; }
+        .panel-title { margin-bottom:18px; font-size:16px; font-weight:bold; }
+        .panel-subtitle { margin:-8px 0 18px; color:#8f9aa4; font-size:12px; }
+        .select-row, .write-row { display:flex; gap:10px; align-items:center; }
+        .write-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+        label { display:block; color:#aeb7bf; font-size:12px; margin-bottom:7px; }
+        select, input { width:100%; min-width:0; padding:11px 13px; background:#20252b; color:white; border:1px solid #59636d; border-radius:7px; font-size:14px; outline:none; }
+        select:focus, input:focus { border-color:#1677ff; }
+        input:disabled, select:disabled { opacity:.6; cursor:not-allowed; }
+        .company-info, .write-info { margin-top:10px; color:#7f8a94; font-size:12px; }
+        .buttons { display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
+        button, .db-button, .log-button { padding:10px 17px; border-radius:7px; border:none; font-size:13px; font-weight:bold; cursor:pointer; text-decoration:none; display:inline-block; }
+        .enter { background:#1677ff; color:white; }
+        .enter:hover { background:#0866df; }
+        .flow { background:#3a444e; color:white; border:1px solid #596570; }
+        .flow:hover { background:#48545f; }
+        .db-button { background:#236b45; color:white; }
+        .db-button:hover { background:#2b8255; }
+        .log-button { background:#7157a5; color:white; }
+        .log-button:hover { background:#8064b8; }
+        .write-button { background:#b26a00; color:white; }
+        .write-button:hover { background:#c47a0d; }
+        .status { min-height:18px; margin-top:12px; font-size:13px; color:#9da7b0; }
+        .history-title { margin-top:22px; margin-bottom:10px; font-size:13px; color:#c3c9ce; }
+        .history-wrap { overflow:auto; border:1px solid #414b54; border-radius:8px; }
+        table { width:100%; border-collapse:collapse; font-size:12px; }
+        th, td { padding:9px 10px; border-bottom:1px solid #39434c; text-align:left; white-space:nowrap; }
+        th { background:#20252b; color:#9da7b0; font-weight:bold; }
+        tr:last-child td { border-bottom:none; }
+        .content-area { margin-top:30px; min-height:250px; background:#252b31; border:1px solid #353e46; border-radius:10px; padding:25px; }
+        .content-title { color:#8f9aa4; font-size:13px; margin-bottom:20px; }
+        @media (max-width:820px) {
+            .topbar { padding:0 15px; }
+            .main { padding:18px; }
+            .write-grid { grid-template-columns:1fr; }
+            .buttons { flex-direction:column; }
+            button, .db-button, .log-button { width:100%; text-align:center; }
         }
-
-
-        body {
-
-            margin: 0;
-
-            min-height: 100vh;
-
-            background: #20252b;
-
-            color: #ffffff;
-
-            font-family: Arial, sans-serif;
-        }
-
-
-        .topbar {
-
-            height: 70px;
-
-            display: flex;
-
-            align-items: center;
-
-            justify-content: space-between;
-
-            padding: 0 28px;
-
-            background: #171b20;
-
-            border-bottom:
-                1px solid #3d464f;
-        }
-
-
-        .brand {
-
-            display: flex;
-
-            align-items: center;
-
-            gap: 12px;
-        }
-
-
-        .brand-icon {
-
-            width: 38px;
-
-            height: 38px;
-
-            display: flex;
-
-            align-items: center;
-
-            justify-content: center;
-
-            border-radius: 8px;
-
-            background: #1677ff;
-
-            font-weight: bold;
-
-            font-size: 18px;
-        }
-
-
-        .brand-text {
-
-            font-size: 20px;
-
-            font-weight: bold;
-
-            letter-spacing: 1px;
-        }
-
-
-        .master-label {
-
-            color: #9da7b0;
-
-            font-size: 13px;
-        }
-
-
-        .logout {
-
-            color: #c3c9ce;
-
-            text-decoration: none;
-
-            padding: 9px 14px;
-
-            border-radius: 6px;
-
-            border:
-                1px solid #48525c;
-        }
-
-
-        .logout:hover {
-
-            background: #343c44;
-
-            color: white;
-        }
-
-
-        .main {
-
-            padding: 28px;
-        }
-
-
-        .page-title {
-
-            margin-bottom: 25px;
-        }
-
-
-        .page-title h1 {
-
-            margin: 0;
-
-            font-size: 25px;
-        }
-
-
-        .page-title p {
-
-            margin:
-                7px 0 0;
-
-            color: #8f9aa4;
-
-            font-size: 14px;
-        }
-
-
-        .control-panel {
-
-            width: 650px;
-
-            max-width: 100%;
-
-            background: #2b3239;
-
-            border:
-                1px solid #46515b;
-
-            border-radius: 10px;
-
-            padding: 22px;
-
-            box-shadow:
-                0 8px 25px
-                rgba(0, 0, 0, 0.25);
-        }
-
-
-        .panel-title {
-
-            margin-bottom: 18px;
-
-            font-size: 16px;
-
-            font-weight: bold;
-        }
-
-
-        .select-row {
-
-            display: flex;
-
-            gap: 10px;
-
-            align-items: center;
-        }
-
-
-        select {
-
-            flex: 1;
-
-            min-width: 0;
-
-            padding: 11px 13px;
-
-            background: #20252b;
-
-            color: white;
-
-            border:
-                1px solid #59636d;
-
-            border-radius: 7px;
-
-            font-size: 14px;
-
-            outline: none;
-
-            cursor: pointer;
-        }
-
-
-        select:focus {
-
-            border-color: #1677ff;
-        }
-
-
-        .company-info {
-
-            margin-top: 10px;
-
-            color: #7f8a94;
-
-            font-size: 12px;
-        }
-
-
-        .buttons {
-
-            display: flex;
-
-            gap: 10px;
-
-            margin-top: 18px;
-
-            flex-wrap: wrap;
-        }
-
-
-        button,
-        .db-button,
-        .log-button {
-
-            padding: 10px 17px;
-
-            border-radius: 7px;
-
-            border: none;
-
-            font-size: 13px;
-
-            font-weight: bold;
-
-            cursor: pointer;
-
-            text-decoration: none;
-
-            display: inline-block;
-        }
-
-
-        .enter {
-
-            background: #1677ff;
-
-            color: white;
-        }
-
-
-        .enter:hover {
-
-            background: #0866df;
-        }
-
-
-        .flow {
-
-            background: #3a444e;
-
-            color: white;
-
-            border:
-                1px solid #596570;
-        }
-
-
-        .flow:hover {
-
-            background: #48545f;
-        }
-
-
-        .db-button {
-
-            background: #236b45;
-
-            color: white;
-
-        }
-
-
-        .db-button:hover {
-
-            background: #2b8255;
-        }
-
-
-        .log-button {
-
-            background: #7157a5;
-
-            color: white;
-
-        }
-
-
-        .log-button:hover {
-
-            background: #8064b8;
-        }
-
-
-        .content-area {
-
-            margin-top: 30px;
-
-            min-height: 400px;
-
-            background: #252b31;
-
-            border:
-                1px solid #353e46;
-
-            border-radius: 10px;
-
-            padding: 25px;
-        }
-
-
-        .content-title {
-
-            color: #8f9aa4;
-
-            font-size: 13px;
-
-            margin-bottom: 20px;
-        }
-
-
-        @media (
-            max-width: 650px
-        ) {
-
-            .topbar {
-
-                padding: 0 15px;
-            }
-
-
-            .main {
-
-                padding: 18px;
-            }
-
-
-            .select-row {
-
-                flex-direction: column;
-
-                align-items: stretch;
-            }
-
-
-            .buttons {
-
-                flex-direction: column;
-            }
-
-
-            button,
-            .db-button,
-            .log-button {
-
-                width: 100%;
-
-                text-align: center;
-            }
-
-        }
-
     </style>
-
 </head>
-
-
 <body>
-
-
 <header class="topbar">
-
-
     <div class="brand">
-
-        <div class="brand-icon">
-            S
-        </div>
-
+        <div class="brand-icon">S</div>
         <div>
-
-            <div class="brand-text">
-                SCADA FLOW
-            </div>
-
-            <div class="master-label">
-                Master Control
-            </div>
-
+            <div class="brand-text">SCADA FLOW</div>
+            <div class="master-label">Master Control</div>
         </div>
-
     </div>
-
-
-    <a
-        class="logout"
-        href="{{ url_for('logout') }}"
-    >
-        Logout
-    </a>
-
-
+    <a class="logout" href="{{ url_for('logout') }}">Logout</a>
 </header>
 
-
 <main class="main">
-
-
     <div class="page-title">
-
-        <h1>
-            Master Panel
-        </h1>
-
-        <p>
-            Select a company, open the Flow Designer, inspect the production database, or open debug logs.
-        </p>
-
+        <h1>Master Panel</h1>
+        <p>Select a company, open the Flow Designer, inspect the production database, or directly write a value to a PLC.</p>
     </div>
-
 
     <div class="control-panel">
-
-
-        <div class="panel-title">
-            Company
-        </div>
-
-
+        <div class="panel-title">Company</div>
         <div class="select-row">
-
-
             <select id="company">
-
-                <option value="">
-                    Select Company
-                </option>
-
-
+                <option value="">Select Company</option>
                 {% for company in companies %}
-
-                <option
-                    value="{{ company.CompanyID }}"
-                >
-
-                    {{ company.CompanyName }}
-
-                </option>
-
+                <option value="{{ company.CompanyID }}">{{ company.CompanyName }}</option>
                 {% endfor %}
-
             </select>
+        </div>
+        <div id="companyInfo" class="company-info">No company selected</div>
+        <div class="buttons">
+            <button type="button" class="enter" onclick="enterCompany()">ENTER COMPANY</button>
+            <button type="button" class="flow" onclick="openFlow()">FLOW DESIGNER</button>
+            <a class="db-button" href="{{ url_for('flow_company.master_database') }}">DATABASE VIEWER</a>
+            <a class="log-button" href="/master/logs">LOGS</a>
+            <button type="button" class="write-button" onclick="focusPlcWriter()">PLC WRITE</button>
+        </div>
+    </div>
 
+    <div class="plc-write-panel" id="plcWritePanel">
+        <div class="panel-title">PLC Write</div>
+        <div class="panel-subtitle">Write one unsigned 16-bit value to a Holding Register of a PLC belonging to the selected company.</div>
 
+        <div class="write-grid">
+            <div>
+                <label for="writePlc">PLC</label>
+                <select id="writePlc" disabled>
+                    <option value="">Select company first</option>
+                </select>
+            </div>
+            <div>
+                <label for="writeRegister">Register</label>
+                <input id="writeRegister" type="number" min="0" max="65535" step="1" placeholder="0 - 65535" disabled>
+            </div>
+            <div>
+                <label for="writeValue">Value</label>
+                <input id="writeValue" type="number" min="0" max="65535" step="1" placeholder="0 - 65535" disabled>
+            </div>
         </div>
 
-
-        <div
-            id="companyInfo"
-            class="company-info"
-        >
-            No company selected
-        </div>
-
+        <div id="writeInfo" class="write-info">Select a company to load its PLCs.</div>
+        <div id="writeStatus" class="status"></div>
 
         <div class="buttons">
-
-
-            <button
-                type="button"
-                class="enter"
-                onclick="enterCompany()"
-            >
-                ENTER COMPANY
-            </button>
-
-
-            <button
-                type="button"
-                class="flow"
-                onclick="openFlow()"
-            >
-                FLOW DESIGNER
-            </button>
-
-
-            <a
-                class="db-button"
-                href="{{ url_for('flow_company.master_database') }}"
-            >
-                DATABASE VIEWER
-            </a>
-
-
-            <a
-                class="log-button"
-                href="/master/logs"
-            >
-                LOGS
-            </a>
-
-
+            <button type="button" class="write-button" id="writeSubmit" onclick="submitPlcWrite()" disabled>WRITE TO PLC</button>
         </div>
 
-
+        <div class="history-title">Recent write commands</div>
+        <div class="history-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>PLC</th>
+                        <th>Register</th>
+                        <th>Value</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Completed</th>
+                        <th>Error</th>
+                    </tr>
+                </thead>
+                <tbody id="writeHistoryBody">
+                    <tr><td colspan="8">No commands yet.</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
-
 
     <div class="content-area">
-
-        <div class="content-title">
-            Master workspace
-        </div>
-
+        <div class="content-title">Master workspace</div>
     </div>
-
-
 </main>
 
-
 <script>
+const companySelect = document.getElementById('company');
+const companyInfo = document.getElementById('companyInfo');
+const writePlc = document.getElementById('writePlc');
+const writeRegister = document.getElementById('writeRegister');
+const writeValue = document.getElementById('writeValue');
+const writeSubmit = document.getElementById('writeSubmit');
+const writeInfo = document.getElementById('writeInfo');
+const writeStatus = document.getElementById('writeStatus');
+const writeHistoryBody = document.getElementById('writeHistoryBody');
+let statusTimer = null;
 
+function getCompanyId() {
+    const companyId = companySelect.value;
+    if (!companyId) {
+        alert('Please select a company.');
+        return null;
+    }
+    return companyId;
+}
 
-    const companySelect =
-        document.getElementById(
-            "company"
-        );
+function setWriterEnabled(enabled) {
+    writePlc.disabled = !enabled;
+    writeRegister.disabled = !enabled;
+    writeValue.disabled = !enabled;
+    writeSubmit.disabled = !enabled;
+}
 
+async function loadWritePlcs() {
+    const companyId = companySelect.value;
+    writePlc.innerHTML = '';
+    writeHistoryBody.innerHTML = '<tr><td colspan="8">Loading...</td></tr>';
+    setWriterEnabled(false);
+    writeStatus.textContent = '';
 
-    const companyInfo =
-        document.getElementById(
-            "companyInfo"
-        );
+    if (!companyId) {
+        writePlc.innerHTML = '<option value="">Select company first</option>';
+        writeInfo.textContent = 'Select a company to load its PLCs.';
+        writeHistoryBody.innerHTML = '<tr><td colspan="8">No commands yet.</td></tr>';
+        return;
+    }
 
+    try {
+        const response = await fetch('/master/plc_write/plcs?company_id=' + encodeURIComponent(companyId), { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok || data.status !== 'ok') throw new Error(data.message || 'Failed to load PLCs');
 
-    companySelect.addEventListener(
-        "change",
-        function () {
+        if (!data.plcs || data.plcs.length === 0) {
+            writePlc.innerHTML = '<option value="">No PLC configured</option>';
+            writeInfo.textContent = 'This company has no PLC configuration.';
+        } else {
+            writePlc.innerHTML = data.plcs.map(plc =>
+                '<option value="' + escapeHtml(String(plc.PLC_ID)) + '">' +
+                escapeHtml((plc.PLC_Name || 'PLC ' + plc.PLC_ID) + '  [ID ' + plc.PLC_ID + ']') +
+                '</option>'
+            ).join('');
+            updatePlcInfo();
+            setWriterEnabled(true);
+        }
 
-            if (!this.value) {
+        await loadWriteHistory();
+    } catch (error) {
+        writeInfo.textContent = error.message || 'PLC load error';
+        writeHistoryBody.innerHTML = '<tr><td colspan="8">Unable to load.</td></tr>';
+    }
+}
 
-                companyInfo.textContent =
-                    "No company selected";
+function updatePlcInfo() {
+    const selected = writePlc.options[writePlc.selectedIndex];
+    if (!selected || !selected.value) {
+        writeInfo.textContent = 'No PLC selected.';
+        return;
+    }
+    const companyId = companySelect.value;
+    writeInfo.textContent = 'Company ID: ' + companyId + '  •  ' + selected.textContent;
+}
 
-                return;
+async function loadWriteHistory() {
+    const companyId = companySelect.value;
+    if (!companyId) return;
+    try {
+        const response = await fetch('/master/plc_write/history?company_id=' + encodeURIComponent(companyId), { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok || data.status !== 'ok') throw new Error(data.message || 'History error');
+        const rows = data.commands || [];
+        writeHistoryBody.innerHTML = rows.length ? rows.map(row =>
+            '<tr>' +
+            '<td>' + escapeHtml(String(row.CommandID ?? '')) + '</td>' +
+            '<td>' + escapeHtml(String(row.PLC_ID ?? '')) + '</td>' +
+            '<td>' + escapeHtml(String(row.Register ?? '')) + '</td>' +
+            '<td>' + escapeHtml(String(row.Value ?? '')) + '</td>' +
+            '<td>' + escapeHtml(String(row.Status ?? '')) + '</td>' +
+            '<td>' + escapeHtml(String(row.CreatedAt ?? '')) + '</td>' +
+            '<td>' + escapeHtml(String(row.CompletedAt ?? '')) + '</td>' +
+            '<td>' + escapeHtml(String(row.ErrorMessage ?? '')) + '</td>' +
+            '</tr>'
+        ).join('') : '<tr><td colspan="8">No commands yet.</td></tr>';
+    } catch (error) {
+        writeHistoryBody.innerHTML = '<tr><td colspan="8">Unable to load history.</td></tr>';
+    }
+}
+
+async function submitPlcWrite() {
+    const companyId = getCompanyId();
+    if (!companyId) return;
+
+    const plcId = Number(writePlc.value);
+    const register = Number(writeRegister.value);
+    const value = Number(writeValue.value);
+
+    if (!Number.isInteger(plcId) || plcId <= 0) {
+        alert('Select a valid PLC.');
+        return;
+    }
+    if (!Number.isInteger(register) || register < 0 || register > 65535) {
+        alert('Register must be an integer between 0 and 65535.');
+        return;
+    }
+    if (!Number.isInteger(value) || value < 0 || value > 65535) {
+        alert('Value must be an integer between 0 and 65535.');
+        return;
+    }
+
+    const confirmed = confirm('Write value ' + value + ' to PLC ' + plcId + ', register ' + register + '?');
+    if (!confirmed) return;
+
+    writeSubmit.disabled = true;
+    writeStatus.textContent = 'Queueing write command...';
+
+    try {
+        const response = await fetch('/master/plc_write?company_id=' + encodeURIComponent(companyId), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ PLC_ID: plcId, Register: register, Value: value })
+        });
+        const data = await response.json();
+        if (!response.ok || data.status !== 'ok') throw new Error(data.message || 'Write command failed');
+
+        writeStatus.textContent = 'Command #' + data.CommandID + ' queued. Waiting for Edge...';
+        await loadWriteHistory();
+        pollWriteStatus(companyId, data.CommandID);
+    } catch (error) {
+        writeStatus.textContent = error.message || 'Write command failed.';
+        writeSubmit.disabled = false;
+    }
+}
+
+function pollWriteStatus(companyId, commandId) {
+    if (statusTimer) clearInterval(statusTimer);
+    const started = Date.now();
+
+    statusTimer = setInterval(async () => {
+        if (Date.now() - started > 30000) {
+            clearInterval(statusTimer);
+            statusTimer = null;
+            writeStatus.textContent = 'Command #' + commandId + ' is still pending. Check history for the final result.';
+            writeSubmit.disabled = false;
+            return;
+        }
+
+        try {
+            const response = await fetch('/master/plc_write/status/' + encodeURIComponent(commandId) + '?company_id=' + encodeURIComponent(companyId), { cache: 'no-store' });
+            const data = await response.json();
+            if (!response.ok || data.status !== 'ok') throw new Error(data.message || 'Status error');
+            const command = data.command;
+            writeStatus.textContent = 'Command #' + commandId + ': ' + command.Status + (command.ErrorMessage ? ' • ' + command.ErrorMessage : '');
+
+            if (command.Status === 'SUCCESS' || command.Status === 'FAILED') {
+                clearInterval(statusTimer);
+                statusTimer = null;
+                writeSubmit.disabled = false;
+                await loadWriteHistory();
             }
-
-
-            const selected =
-                this.options[
-                    this.selectedIndex
-                ];
-
-
-            companyInfo.textContent =
-                selected.text.trim()
-                +
-                "  •  Company ID: "
-                +
-                this.value;
-
+        } catch (error) {
+            writeStatus.textContent = error.message || 'Status check failed.';
         }
-    );
+    }, 1000);
+}
 
+function focusPlcWriter() {
+    document.getElementById('plcWritePanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!companySelect.value) companySelect.focus();
+    else writeRegister.focus();
+}
 
-    function getCompanyId() {
+function escapeHtml(value) {
+    return value.replace(/[&<>"']/g, function(ch) {
+        return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[ch];
+    });
+}
 
-        const companyId =
-            companySelect.value;
-
-
-        if (!companyId) {
-
-            alert(
-                "Please select a company."
-            );
-
-            return null;
-        }
-
-
-        return companyId;
+companySelect.addEventListener('change', async function () {
+    if (!this.value) {
+        companyInfo.textContent = 'No company selected';
+    } else {
+        const selected = this.options[this.selectedIndex];
+        companyInfo.textContent = selected.text.trim() + '  •  Company ID: ' + this.value;
     }
+    await loadWritePlcs();
+});
 
+writePlc.addEventListener('change', updatePlcInfo);
 
-    function enterCompany() {
+function enterCompany() {
+    const companyId = getCompanyId();
+    if (!companyId) return;
+    window.location.href = '/dashboard?company_id=' + encodeURIComponent(companyId);
+}
 
-        const companyId =
-            getCompanyId();
+function openFlow() {
+    const companyId = getCompanyId();
+    if (!companyId) return;
+    window.location.href = '/flow?company_id=' + encodeURIComponent(companyId);
+}
 
-
-        if (!companyId) {
-            return;
-        }
-
-
-        window.location.href =
-            "/dashboard?company_id="
-            +
-            encodeURIComponent(
-                companyId
-            );
-
-    }
-
-
-    function openFlow() {
-
-        const companyId =
-            getCompanyId();
-
-
-        if (!companyId) {
-            return;
-        }
-
-
-        window.location.href =
-            "/flow?company_id="
-            +
-            encodeURIComponent(
-                companyId
-            );
-
-    }
-
+loadWritePlcs();
 </script>
-
-
 </body>
-
 </html>
