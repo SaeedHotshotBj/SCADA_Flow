@@ -24,6 +24,15 @@ from services.management_crud import (
     update_product,
     delete_product,
 )
+from services.plc_write_service import (
+    ensure_write_table,
+    get_company_plcs,
+    create_write_command,
+    get_command_status,
+    get_command_history,
+    claim_next_command,
+    complete_command,
+)
 
 
 def _management_company_id():
@@ -193,7 +202,7 @@ def management_contract_delete():
         contract_id = delete_contract(company_id, contract_code)
         return jsonify({"status": "ok", "ContractID": contract_id})
     except Exception as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
+        return jsonify({"status": "error", "message": str(exc)}), 409
 
 
 @flow_company_bp.post("/management/products")
@@ -258,3 +267,167 @@ def management_data():
         return jsonify(get_management_data(company_id, request.args.to_dict(flat=True)))
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+# =====================================================
+# MASTER PLC WRITE CONTROL
+# =====================================================
+
+
+def _master_company_id_for_write():
+    if not _is_master() or not session.get("user_id"):
+        return None
+
+    company_id = request.args.get("company_id", type=int)
+    if company_id is None:
+        company_id = session.get("selected_company_id")
+
+    try:
+        return int(company_id) if company_id is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+@flow_company_bp.get("/master/plc_write/plcs")
+def master_plc_write_plcs():
+    company_id = _master_company_id_for_write()
+    if company_id is None:
+        return jsonify({"status": "error", "message": "Master access and company are required"}), 403
+
+    ensure_write_table()
+    return jsonify({
+        "status": "ok",
+        "CompanyID": company_id,
+        "plcs": get_company_plcs(company_id),
+    })
+
+
+@flow_company_bp.post("/master/plc_write")
+def master_plc_write_create():
+    company_id = _master_company_id_for_write()
+    if company_id is None:
+        return jsonify({"status": "error", "message": "Master access and company are required"}), 403
+
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        plc_id = int(payload.get("PLC_ID"))
+        register = int(payload.get("Register"))
+        value = int(payload.get("Value"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "PLC_ID, Register and Value must be integers"}), 400
+
+    if plc_id <= 0:
+        return jsonify({"status": "error", "message": "Invalid PLC_ID"}), 400
+
+    if not 0 <= register <= 65535:
+        return jsonify({"status": "error", "message": "Register must be between 0 and 65535"}), 400
+
+    if not 0 <= value <= 65535:
+        return jsonify({"status": "error", "message": "Value must be between 0 and 65535"}), 400
+
+    ensure_write_table()
+
+    try:
+        command_id = create_write_command(
+            company_id,
+            plc_id,
+            register,
+            value,
+        )
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+    return jsonify({
+        "status": "ok",
+        "message": "Write command queued",
+        "CommandID": command_id,
+        "CompanyID": company_id,
+        "PLC_ID": plc_id,
+        "Register": register,
+        "Value": value,
+    }), 201
+
+
+@flow_company_bp.get("/master/plc_write/status/<int:command_id>")
+def master_plc_write_status(command_id):
+    company_id = _master_company_id_for_write()
+    if company_id is None:
+        return jsonify({"status": "error", "message": "Master access and company are required"}), 403
+
+    ensure_write_table()
+    row = get_command_status(company_id, command_id)
+    if row is None:
+        return jsonify({"status": "error", "message": "Command not found"}), 404
+
+    return jsonify({"status": "ok", "command": row})
+
+
+@flow_company_bp.get("/master/plc_write/history")
+def master_plc_write_history():
+    company_id = _master_company_id_for_write()
+    if company_id is None:
+        return jsonify({"status": "error", "message": "Master access and company are required"}), 403
+
+    ensure_write_table()
+    return jsonify({
+        "status": "ok",
+        "commands": get_command_history(company_id),
+    })
+
+
+# =====================================================
+# EDGE PLC WRITE QUEUE
+# =====================================================
+
+
+@flow_company_bp.get("/api/edge/write_command")
+def edge_get_write_command():
+    plc_id = request.args.get("PLC_ID", type=int)
+    if plc_id is None or plc_id <= 0:
+        return jsonify({"status": "error", "message": "PLC_ID is required"}), 400
+
+    ensure_write_table()
+    command = claim_next_command(plc_id)
+
+    if command is None:
+        return jsonify({"status": "empty"})
+
+    return jsonify({
+        "status": "ok",
+        "command": command,
+    })
+
+
+@flow_company_bp.post("/api/edge/write_result")
+def edge_write_result():
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        command_id = int(payload.get("CommandID"))
+        plc_id = int(payload.get("PLC_ID"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "CommandID and PLC_ID are required"}), 400
+
+    success = payload.get("Success") is True
+    error_message = payload.get("ErrorMessage")
+    if error_message is not None:
+        error_message = str(error_message)[:1000]
+
+    ensure_write_table()
+
+    updated = complete_command(
+        command_id,
+        plc_id,
+        success,
+        error_message,
+    )
+
+    if not updated:
+        return jsonify({"status": "error", "message": "Command not found"}), 404
+
+    return jsonify({
+        "status": "ok",
+        "CommandID": command_id,
+        "Success": success,
+    })
