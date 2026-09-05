@@ -2,7 +2,7 @@ import json
 import threading
 import time
 
-from database import get_company_flow
+from database import get_company_flow, get_connection
 
 
 def _get_nodes(company_id):
@@ -51,6 +51,53 @@ def _register_to_tag(nodes):
     return lookup
 
 
+def _tag_to_plcs(nodes):
+    """Build tag -> PLC IDs from every TagMapper in this company flow."""
+    result = {}
+    for node in nodes.values():
+        if not isinstance(node, dict) or node.get("name") != "TagMapper":
+            continue
+        mappings = node.get("data", {}).get("mappings", [])
+        if not isinstance(mappings, list):
+            continue
+        for item in mappings:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            plc_id = _to_plc_id(item.get("plc_id", item.get("PLC_ID")))
+            if not name or plc_id is None:
+                continue
+            key = name.lower()
+            result.setdefault(key, set()).add(plc_id)
+    return result
+
+
+def _company_plc_ids(company_id):
+    try:
+        conn = get_connection()
+        try:
+            return [int(row["PLC_ID"]) for row in conn.execute(
+                "SELECT PLC_ID FROM PLCs WHERE CompanyID=? ORDER BY PLC_ID",
+                (int(company_id),),
+            ).fetchall()]
+        finally:
+            conn.close()
+    except Exception as exc:
+        print("Dashboard PLC lookup error:", company_id, exc)
+        return []
+
+
+def _resolve_widget_plc(company_id, tag, plc_id, tag_plcs, company_plcs):
+    if plc_id is not None:
+        return plc_id
+    candidates = tag_plcs.get(str(tag or "").strip().lower(), set())
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    if len(company_plcs) == 1:
+        return company_plcs[0]
+    return None
+
+
 def _resolve_machine_tag(raw_tag, plc_id, register_lookup):
     tag = str(raw_tag or "").strip()
     if not tag:
@@ -71,6 +118,8 @@ def get_dashboard_widgets(company_id):
     try:
         nodes = _get_nodes(company_id)
         register_lookup = _register_to_tag(nodes)
+        tag_plcs = _tag_to_plcs(nodes)
+        company_plcs = _company_plc_ids(company_id)
 
         for node in nodes.values():
             if not isinstance(node, dict):
@@ -89,6 +138,13 @@ def get_dashboard_widgets(company_id):
                             raw_tag,
                             item["plc_id"],
                             register_lookup,
+                        )
+                        item["plc_id"] = _resolve_widget_plc(
+                            company_id,
+                            item["tag"],
+                            item["plc_id"],
+                            tag_plcs,
+                            company_plcs,
                         )
                         widgets.append(item)
 
@@ -123,6 +179,13 @@ def get_dashboard_widgets(company_id):
                                 resolved_tag = _resolve_machine_tag(raw_tag, plc_id, register_lookup)
                                 if not resolved_tag:
                                     continue
+                                plc_id = _resolve_widget_plc(
+                                    company_id,
+                                    resolved_tag,
+                                    plc_id,
+                                    tag_plcs,
+                                    company_plcs,
+                                )
                                 label = str(parameter.get("label", "")).strip() or resolved_tag
                                 unit = str(parameter.get("unit", "")).strip()
                                 normalized["parameters"].append({
