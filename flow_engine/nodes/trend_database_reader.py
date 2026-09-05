@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import jdatetime
 
 from services.trend_aggregation import get_trend_series, get_trend_stats, start_aggregation_worker
-from database import row_value
+from database import row_value, get_company_flow
 
 try:
     start_aggregation_worker()
@@ -50,6 +50,43 @@ class TrendDatabaseReader:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _flow_tag_plc_map(self, company_id):
+        """Resolve each TagMapper tag to the PLC_ID declared by that company flow."""
+        result = {}
+        try:
+            flow_json = get_company_flow(company_id)
+            if not flow_json:
+                return result
+            import json
+            flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
+            nodes = (
+                flow.get("drawflow", {})
+                    .get("Home", {})
+                    .get("data", {})
+            )
+            if not isinstance(nodes, dict):
+                return result
+
+            for node in nodes.values():
+                if not isinstance(node, dict) or node.get("name") != "TagMapper":
+                    continue
+                mappings = (node.get("data", {}) or {}).get("mappings", [])
+                if not isinstance(mappings, list):
+                    continue
+                for item in mappings:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name", "")).strip()
+                    if not name:
+                        continue
+                    plc_id = self._plc_id(item.get("plc_id", item.get("PLC_ID")))
+                    if plc_id is not None:
+                        result[self._normalize_tag(name)] = plc_id
+                break
+        except Exception as exc:
+            print("TREND TAG PLC MAP ERROR:", "Company=", company_id, "Error=", repr(exc))
+        return result
 
     def _resolve_plc_id(self, data, request):
         value = request.get("PLC_ID", request.get("plc_id", data.get("PLC_ID")))
@@ -134,35 +171,54 @@ class TrendDatabaseReader:
             data["TrendData"], data["TrendStats"], data["TrendResolution"] = [], {}, {}
             return data
 
-        plc_id = self._resolve_plc_id(data, request)
-        if plc_id is None:
-            print("TREND DATABASE READER: PLC_ID required when company has multiple PLCs")
-            data["TrendData"], data["TrendStats"], data["TrendResolution"] = [], {}, {}
-            return data
+        explicit_plc_id = self._plc_id(
+            request.get("PLC_ID", request.get("plc_id", data.get("PLC_ID")))
+        )
+        default_plc_id = explicit_plc_id if explicit_plc_id is not None else self._resolve_plc_id(data, request)
+        flow_tag_plcs = self._flow_tag_plc_map(company_id)
 
         trend, stats_by_tag, resolutions = [], {}, {}
+        resolved_plcs = {}
         for tag in tags:
+            tag_key = self._normalize_tag(tag)
+            tag_plc_id = explicit_plc_id
+            if tag_plc_id is None:
+                tag_plc_id = flow_tag_plcs.get(tag_key, default_plc_id)
+
+            if tag_plc_id is None:
+                print("TREND DATABASE READER: PLC_ID could not be resolved", "Company=", company_id, "Tag=", tag)
+                resolutions[tag] = "error"
+                stats_by_tag[tag] = {"resolution": "error", "min": None, "max": None, "weighted_average": None, "sample_count": 0}
+                continue
+
+            resolved_plcs[tag] = int(tag_plc_id)
             try:
-                resolution, rows = get_trend_series(company_id, plc_id, tag, start, end)
+                resolution, rows = get_trend_series(company_id, int(tag_plc_id), tag, start, end)
                 resolutions[tag] = resolution
                 for row in rows or []:
                     value = self._row_value(row)
                     timestamp = self._row_timestamp(row)
                     if timestamp is None or value is None:
                         continue
-                    trend.append({"Tag": tag, "Timestamp": timestamp, "Value": value, "PLC_ID": plc_id})
-                stats_by_tag[tag] = get_trend_stats(company_id, plc_id, tag, start, end)
+                    trend.append({"Tag": tag, "Timestamp": timestamp, "Value": value, "PLC_ID": int(tag_plc_id)})
+                stats_by_tag[tag] = get_trend_stats(company_id, int(tag_plc_id), tag, start, end)
             except Exception as exc:
                 resolutions[tag] = "error"
                 stats_by_tag[tag] = {"resolution":"error","min":None,"max":None,"weighted_average":None,"sample_count":0}
-                print("TREND DATABASE READER ERROR:", "Company=", company_id, "PLC_ID=", plc_id, "Tag=", tag, "Error=", repr(exc))
+                print("TREND DATABASE READER ERROR:", "Company=", company_id, "PLC_ID=", tag_plc_id, "Tag=", tag, "Error=", repr(exc))
 
         trend.sort(key=self._sort_timestamp)
         data["CompanyID"] = company_id
-        data["PLC_ID"] = plc_id
-        data["TrendRequest"] = dict(request, Tag=selected_tag if len(tags) == 1 else None, Tags=tags, Start=start, End=end, Calendar=calendar, CompanyID=company_id, PLC_ID=plc_id)
+        if explicit_plc_id is not None:
+            data["PLC_ID"] = explicit_plc_id
+        elif len(set(resolved_plcs.values())) == 1:
+            data["PLC_ID"] = next(iter(resolved_plcs.values()))
+        else:
+            data.pop("PLC_ID", None)
+        data["TrendRequest"] = dict(request, Tag=selected_tag if len(tags) == 1 else None, Tags=tags, Start=start, End=end, Calendar=calendar, CompanyID=company_id)
         data["TrendData"] = trend
         data["TrendStats"] = stats_by_tag
         data["TrendResolution"] = resolutions
         data["TrendRecordCount"] = len(trend)
+        data["TrendTagPLCs"] = resolved_plcs
         return data
