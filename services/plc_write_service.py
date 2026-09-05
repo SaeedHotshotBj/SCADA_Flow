@@ -86,6 +86,31 @@ def create_write_command(company_id, plc_id, register, value):
         conn.close()
 
 
+def clear_pending_commands_for_other_registers(company_id, plc_id, active_register):
+    """Remove pending writes for this company/PLC that target an obsolete register.
+
+    The active register comes from the current Flow Pulse node, so changing a
+    Pulse register automatically invalidates queued commands for the previous
+    register without hardcoding any register number.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            DELETE FROM PLCWriteCommands
+            WHERE CompanyID = ?
+              AND PLC_ID = ?
+              AND Register <> ?
+              AND Status = 'PENDING'
+            """,
+            (company_id, plc_id, active_register),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def get_command_status(company_id, command_id):
     conn = get_connection()
     try:
