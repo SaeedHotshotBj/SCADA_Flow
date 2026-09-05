@@ -48,7 +48,6 @@ class ReportOutput:
                 for item in mappings:
                     if isinstance(item, dict) and str(item.get("name", "")).strip():
                         definitions[str(item["name"]).strip().lower()] = item
-            break
         return definitions
 
     @staticmethod
