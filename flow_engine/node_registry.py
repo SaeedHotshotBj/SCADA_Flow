@@ -55,19 +55,19 @@ NODE_REGISTRY["ManagementPanel"] = {
     ]
 }
 
+# Pulse is fully configured by the values saved in its Drawflow node.
+# No runtime value is hardcoded here; these properties only define the editor fields.
 NODE_REGISTRY["Pulse"] = {
     "config": [
         {
             "name": "interval",
             "label": "Pulse Interval (sec)",
             "type": "number",
-            "default": 1,
         },
         {
             "name": "pulse_width",
             "label": "Pulse Width (sec)",
             "type": "number",
-            "default": 0.1,
         },
         {
             "name": "plc_id",
