@@ -71,3 +71,18 @@ NODE_REGISTRY["Pulse"] = {
         },
     ]
 }
+
+NODE_REGISTRY["PLCWrite"] = {
+    "config": [
+        {
+            "name": "plc_id",
+            "label": "PLC ID",
+            "type": "number",
+        },
+        {
+            "name": "register",
+            "label": "Register",
+            "type": "number",
+        },
+    ]
+}
