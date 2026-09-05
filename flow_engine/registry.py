@@ -17,6 +17,7 @@ from flow_engine.nodes.dashboard_output import DashboardOutput
 from flow_engine.nodes.machine_card import MachineCard
 from flow_engine.nodes.alarm_node import AlarmNode
 from flow_engine.nodes.edge_timeout import EdgeTimeout
+from flow_engine.nodes.pulse import Pulse
 
 # =====================================================
 # ROLE NODES
@@ -78,6 +79,9 @@ NODE_CLASSES = {
 
     "EdgeTimeout":
         EdgeTimeout,
+
+    "Pulse":
+        Pulse,
 
     # ROLES
     "Roles":
