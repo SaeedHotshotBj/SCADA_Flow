@@ -80,13 +80,18 @@ class ModbusWrite:
 
         )
 
+        if data is not None and "Value" in data:
 
+            value = data.get(
+
+                "Value"
+
+            )
 
 
 
 
         if register is None:
-
 
             print(
 
@@ -98,6 +103,16 @@ class ModbusWrite:
             return data
 
 
+
+        if value is None:
+
+            print(
+
+                "Value not configured"
+
+            )
+
+            return data
 
 
 
@@ -153,7 +168,6 @@ class ModbusWrite:
 
                 else:
 
-
                     print(
 
                         "PLC Write Successful"
@@ -164,7 +178,6 @@ class ModbusWrite:
 
 
             else:
-
 
                 print(
 
