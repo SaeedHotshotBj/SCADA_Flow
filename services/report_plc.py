@@ -155,6 +155,45 @@ def save_report_snapshot(company_id, tags, report_products, timestamp=None, trig
         conn.close()
 
 
+def _build_raw_report_result(products, rows):
+    keys = [str(p["tag"]).strip().lower() for p in products]
+    grouped = {}
+    for row in rows:
+        timestamp = str(row["Timestamp"])
+        plc = row["PLC_ID"]
+        group_key = (timestamp, plc)
+        item = grouped.setdefault(group_key, {
+            "timestamp": timestamp,
+            "PLC_ID": plc,
+            "values": [None] * len(products),
+            "contract_code": None,
+            "product_code": None,
+        })
+        tag_key = str(row["TagName"]).strip().lower()
+        for index, product_key in enumerate(keys):
+            if tag_key != product_key:
+                continue
+            try:
+                item["values"][index] = float(row["Value"])
+            except (TypeError, ValueError):
+                pass
+            break
+
+    result = {"columns": products, "rows": [], "totals": [0.0 for _ in products], "grand_total": 0.0}
+    totals = [0.0] * len(products)
+    for item in grouped.values():
+        row_total = 0.0
+        for index, value in enumerate(item["values"]):
+            if value is not None:
+                totals[index] += value
+                row_total += value
+        item["row_total"] = row_total
+        result["rows"].append(item)
+    result["totals"] = [round(v, 3) for v in totals]
+    result["grand_total"] = round(sum(totals), 3)
+    return result
+
+
 def get_report_data(company_id, start, end, plc_id=None):
     products = [p for p in get_report_products(company_id) if not p.get("context_role")]
     if plc_id is not None:
@@ -184,6 +223,35 @@ def get_report_data(company_id, start, end, plc_id=None):
             params.append(int(plc_id))
         sql += " ORDER BY datetime(h.Timestamp), h.ReportID, v.ReportValueID"
         rows = conn.execute(sql, params + keys).fetchall()
+
+        if not rows:
+            raw_conditions = []
+            raw_params = [int(company_id), start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")]
+            for product in products:
+                tag = str(product["tag"]).strip()
+                item_plc = _plc_id(product.get("plc_id"))
+                condition = "(LOWER(TagName)=LOWER(?)"
+                raw_params.append(tag)
+                if item_plc is not None:
+                    condition += " AND PLC_ID=?"
+                    raw_params.append(item_plc)
+                elif plc_id is not None:
+                    condition += " AND PLC_ID=?"
+                    raw_params.append(int(plc_id))
+                condition += ")"
+                raw_conditions.append(condition)
+            raw_sql = """
+                SELECT PLC_ID, TagName, Value, Timestamp
+                FROM PLC_Data
+                WHERE CompanyID=?
+                  AND datetime(Timestamp)>=datetime(?)
+                  AND datetime(Timestamp)<=datetime(?)
+                  AND (""" + " OR ".join(raw_conditions) + "")
+                ORDER BY datetime(Timestamp), ID
+            """
+            rows = conn.execute(raw_sql, raw_params).fetchall()
+            if rows:
+                return _build_raw_report_result(products, rows)
     finally:
         conn.close()
 
