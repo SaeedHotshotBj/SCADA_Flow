@@ -333,6 +333,16 @@ def get_request_company_id():
     if company_id is None:
         company_id = request.headers.get("X-Company-ID", type=int)
 
+    if company_id is None:
+        company_id = session.get("selected_company_id")
+
+    try:
+        if company_id is not None:
+            company_id = int(company_id)
+            session["selected_company_id"] = company_id
+    except (TypeError, ValueError):
+        company_id = None
+
     return company_id
 
 
@@ -1408,31 +1418,110 @@ def dashboard_latest():
         return jsonify({
             "Online": False,
             "Tags": {},
-            "Timestamps": {}
+            "Timestamps": {},
+            "TagValues": []
         })
 
     widgets = get_dashboard_widgets(company_id)
-    tag_names = [
-        widget.get("tag")
-        for widget in widgets
-        if widget.get("tag")
-    ]
+    requested = []
+    seen = set()
 
-    latest = get_latest_tag_values(company_id, tag_names)
+    for widget in widgets:
+        if not isinstance(widget, dict):
+            continue
+        tag = str(widget.get("tag", "")).strip()
+        if not tag:
+            continue
 
-    tags = {
-        tag: item["value"]
-        for tag, item in latest.items()
-    }
+        raw_plc_id = widget.get("plc_id", widget.get("PLC_ID"))
+        try:
+            plc_id = int(raw_plc_id) if raw_plc_id not in (None, "") else None
+        except (TypeError, ValueError):
+            plc_id = None
 
-    return jsonify({
-        "Online": bool(tags),
-        "Tags": tags,
-        "Timestamps": {
-            tag: item["timestamp"]
-            for tag, item in latest.items()
-        },
-    })
+        key = (tag.lower(), plc_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        requested.append((tag, plc_id))
+
+    if not requested:
+        return jsonify({
+            "Online": False,
+            "Tags": {},
+            "Timestamps": {},
+            "TagValues": []
+        })
+
+    conn = get_connection()
+    try:
+        conditions = []
+        params = [int(company_id)]
+
+        for tag, plc_id in requested:
+            if plc_id is None:
+                conditions.append("(LOWER(TagName) = LOWER(?) AND PLC_ID IS NULL)")
+                params.append(tag)
+            else:
+                conditions.append("(LOWER(TagName) = LOWER(?) AND PLC_ID = ?)")
+                params.extend([tag, int(plc_id)])
+
+        rows = conn.execute(
+            """
+            SELECT PLC_ID, TagName, Value, Timestamp
+            FROM PLC_Data
+            WHERE CompanyID = ?
+              AND (""" + " OR ".join(conditions) + """)
+            ORDER BY Timestamp DESC, ID DESC
+            """,
+            params,
+        ).fetchall()
+
+        latest_by_key = {}
+        for row in rows:
+            row_plc = row["PLC_ID"]
+            try:
+                row_plc = int(row_plc) if row_plc is not None else None
+            except (TypeError, ValueError):
+                pass
+            key = (str(row["TagName"]).strip().lower(), row_plc)
+            if key not in latest_by_key:
+                latest_by_key[key] = row
+
+        tag_values = []
+        tags = {}
+        timestamps = {}
+
+        for tag, plc_id in requested:
+            key = (tag.lower(), plc_id)
+            row = latest_by_key.get(key)
+            if row is None:
+                continue
+
+            item = {
+                "PLC_ID": plc_id,
+                "TagName": row["TagName"],
+                "Value": row["Value"],
+                "Timestamp": row["Timestamp"],
+            }
+            tag_values.append(item)
+
+            # Keep the old response fields for older clients. When duplicate
+            # tag names exist on multiple PLCs, the PLC-aware TagValues field
+            # is the authoritative source used by the current dashboard.
+            display_tag = str(row["TagName"])
+            if display_tag not in tags:
+                tags[display_tag] = row["Value"]
+                timestamps[display_tag] = row["Timestamp"]
+
+        return jsonify({
+            "Online": bool(tag_values),
+            "Tags": tags,
+            "Timestamps": timestamps,
+            "TagValues": tag_values,
+        })
+    finally:
+        conn.close()
 
 
 # =====================================================
