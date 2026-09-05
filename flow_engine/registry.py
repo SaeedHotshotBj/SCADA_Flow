@@ -18,6 +18,7 @@ from flow_engine.nodes.machine_card import MachineCard
 from flow_engine.nodes.alarm_node import AlarmNode
 from flow_engine.nodes.edge_timeout import EdgeTimeout
 from flow_engine.nodes.pulse import Pulse
+from flow_engine.nodes.plc_write import PLCWrite
 
 # =====================================================
 # ROLE NODES
@@ -82,6 +83,9 @@ NODE_CLASSES = {
 
     "Pulse":
         Pulse,
+
+    "PLCWrite":
+        PLCWrite,
 
     # ROLES
     "Roles":
