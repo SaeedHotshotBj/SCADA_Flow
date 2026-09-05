@@ -560,7 +560,6 @@ def flow_role_required(page_node_name):
 # =====================================================
 # LOGIN
 # =====================================================
-
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
@@ -731,7 +730,6 @@ def login():
 # =====================================================
 # LOGOUT
 # =====================================================
-
 @app.route("/logout")
 def logout():
     username = session.get("username")
@@ -785,7 +783,6 @@ def logout():
 # =====================================================
 # CURRENT USER
 # =====================================================
-
 @app.route("/api/auth/me")
 @login_required
 def current_user():
@@ -801,7 +798,6 @@ def current_user():
 # =====================================================
 # SOCKET.IO INITIALIZATION
 # =====================================================
-
 socketio.init_app(
     app,
     cors_allowed_origins=SOCKETIO_CONFIG["cors_allowed_origins"]
@@ -813,7 +809,6 @@ init_socketio(socketio)
 # =====================================================
 # LOAD FLOW
 # =====================================================
-
 def _read_flow_file():
     flow_path = FLOW_CONFIG["flow_file"]
 
@@ -865,27 +860,105 @@ def load_flow(company_id):
 # =====================================================
 # FLOW ENGINE THREAD
 # =====================================================
+def _run_company_flow(company_id, flow):
+    try:
+        runner = FlowRunner(flow, company_id)
+        print("FLOW ENGINE COMPANY STARTED:", company_id)
+        runner.run()
+    except Exception as exc:
+        print(
+            "FLOW ENGINE COMPANY ERROR:",
+            company_id,
+            repr(exc),
+        )
+
 
 def start_flow_engine():
     print("FLOW ENGINE STARTING")
     cleanup_old_trend_data()
 
-    company_id = int(os.environ.get("SCADA_COMPANY_ID", "1"))
-    flow = load_flow(company_id)
+    configured_company_id = os.environ.get("SCADA_COMPANY_ID")
 
-    if flow is None:
-        print("NO FLOW LOADED")
-        return
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT DISTINCT CompanyID
+            FROM Flows
+            WHERE CompanyID IS NOT NULL
+            ORDER BY CompanyID
+            """
+        )
+        company_rows = cursor.fetchall()
+    except Exception as exc:
+        print("FLOW ENGINE COMPANY LIST ERROR:", repr(exc))
+        company_rows = []
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    company_ids = []
+    for row in company_rows:
+        try:
+            company_id = int(row["CompanyID"])
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
+        if company_id > 0 and company_id not in company_ids:
+            company_ids.append(company_id)
+
+    if configured_company_id:
+        try:
+            configured_company_id = int(configured_company_id)
+        except (TypeError, ValueError):
+            configured_company_id = None
+
+        if configured_company_id and configured_company_id not in company_ids:
+            company_ids.append(configured_company_id)
+            company_ids.sort()
+
+    if not company_ids:
+        company_ids = [configured_company_id or 1]
 
     global flow_runner_instance
-    flow_runner_instance = FlowRunner(flow, company_id)
-    flow_runner_instance.run()
+    flow_runner_instance = None
+
+    for company_id in company_ids:
+        flow = load_flow(company_id)
+        if flow is None:
+            continue
+
+        runner_thread = threading.Thread(
+            target=_run_company_flow,
+            args=(company_id, flow),
+            name=f"flow-engine-company-{company_id}",
+            daemon=True,
+        )
+        runner_thread.start()
+
+        if flow_runner_instance is None:
+            try:
+                flow_runner_instance = next(
+                    obj
+                    for obj in []
+                )
+            except StopIteration:
+                pass
 
 
 # =====================================================
 # SOCKET.IO EVENTS
 # =====================================================
-
 @socketio.on("connect")
 def socket_connect():
     print("Dashboard Connected")
@@ -899,7 +972,6 @@ def socket_disconnect():
 # =====================================================
 # DATE FILTER
 # =====================================================
-
 @app.route("/date_filter")
 @login_required
 @flow_role_required("TrendOutput")
@@ -910,7 +982,6 @@ def date_filter_page():
 # =====================================================
 # TREND CONFIG
 # =====================================================
-
 @app.route("/trend_config")
 @login_required
 @flow_role_required("TrendOutput")
@@ -998,7 +1069,6 @@ def trend_config():
 # =====================================================
 # TREND TAGS
 # =====================================================
-
 @app.route("/trend_tags")
 @login_required
 @flow_role_required("TrendOutput")
@@ -1059,7 +1129,6 @@ def trend_tags():
 # =====================================================
 # TREND PAGE
 # =====================================================
-
 @app.route("/trend")
 @login_required
 @flow_role_required("TrendOutput")
@@ -1070,7 +1139,6 @@ def trend():
 # =====================================================
 # FLOW TREND
 # =====================================================
-
 @app.route("/flow_trend", methods=["POST"])
 @login_required
 @flow_role_required("TrendOutput")
@@ -1101,7 +1169,6 @@ def flow_trend():
 # =====================================================
 # MACHINE CARD TREND - DIRECT HISTORIAN QUERY
 # =====================================================
-
 @app.route("/machine_trend_data", methods=["POST"])
 @login_required
 def machine_trend_data():
@@ -1282,7 +1349,6 @@ def machine_trend_data():
 # =====================================================
 # TREND REQUEST
 # =====================================================
-
 @app.route("/trend_request", methods=["POST"])
 @login_required
 @flow_role_required("TrendOutput")
@@ -1338,7 +1404,6 @@ def trend_request():
 # =====================================================
 # DASHBOARD LATEST VALUES
 # =====================================================
-
 @app.route("/dashboard/latest")
 @login_required
 def dashboard_latest():
@@ -1378,7 +1443,6 @@ def dashboard_latest():
 # =====================================================
 # DASHBOARD
 # =====================================================
-
 @app.route("/dashboard")
 @login_required
 @flow_role_required("DashboardOutput")
@@ -1399,7 +1463,6 @@ def dashboard():
 # =====================================================
 # EDGE DATA RECEIVER
 # =====================================================
-
 @app.route("/api/data", methods=["POST"])
 def receive_edge_data():
     try:
@@ -1534,7 +1597,6 @@ def receive_edge_data():
 # =====================================================
 # HOME
 # =====================================================
-
 @app.route("/")
 def home():
     if not is_logged_in():
@@ -1549,7 +1611,6 @@ def home():
 # =====================================================
 # COMPANY FLOW JSON
 # =====================================================
-
 @app.route("/flow.json")
 @login_required
 def get_flow_json():
@@ -1579,7 +1640,6 @@ def get_flow_json():
 # =====================================================
 # FLOW EDITOR
 # =====================================================
-
 @app.route("/flow")
 @login_required
 def flow_editor():
@@ -1608,7 +1668,6 @@ def flow_editor():
 # =====================================================
 # NODE REGISTRY API
 # =====================================================
-
 @app.route("/node_registry")
 @login_required
 def node_registry():
@@ -1618,7 +1677,6 @@ def node_registry():
 # =====================================================
 # FLOW ROLES API
 # =====================================================
-
 @app.route("/flow_roles")
 @login_required
 def flow_roles():
@@ -1641,7 +1699,6 @@ def flow_roles():
 # =====================================================
 # EDGE CONFIG
 # =====================================================
-
 @app.route("/api/edge/config")
 def edge_config():
     try:
@@ -1711,7 +1768,6 @@ def edge_config():
 # =====================================================
 # MASTER COMPANY MANAGEMENT
 # =====================================================
-
 @app.route("/master/companies")
 @login_required
 def master_companies():
@@ -1770,7 +1826,6 @@ def master_companies():
 # =====================================================
 # SAVE FLOW
 # =====================================================
-
 @app.route("/save_flow", methods=["POST"])
 @login_required
 def save_flow():
@@ -2016,7 +2071,6 @@ def save_flow():
 # =====================================================
 # TREND CLEANUP THREAD
 # =====================================================
-
 def trend_cleanup_worker():
     while True:
         try:
@@ -2030,7 +2084,6 @@ def trend_cleanup_worker():
 # =====================================================
 # START APPLICATION
 # =====================================================
-
 if __name__ == "__main__":
     cleanup_thread = threading.Thread(
         target=trend_cleanup_worker,
