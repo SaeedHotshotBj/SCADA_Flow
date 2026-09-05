@@ -83,7 +83,6 @@ class TrendDatabaseReader:
                     plc_id = self._plc_id(item.get("plc_id", item.get("PLC_ID")))
                     if plc_id is not None:
                         result[self._normalize_tag(name)] = plc_id
-                break
         except Exception as exc:
             print("TREND TAG PLC MAP ERROR:", "Company=", company_id, "Error=", repr(exc))
         return result
