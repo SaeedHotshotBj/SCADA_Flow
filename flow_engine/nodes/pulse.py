@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -5,6 +6,7 @@ from services.plc_write_service import (
     ensure_write_table,
     create_write_command,
 )
+from database import get_company_flow
 
 
 _DEBUG_LOG = os.path.join(
@@ -26,29 +28,106 @@ def _debug_log(message):
 
 
 class Pulse:
-    """Generate a periodic pulse using only the values supplied by Flow.
+    """Generate a periodic pulse using the current Flow node configuration."""
 
-    Required Flow properties:
-      interval      -> period in seconds
-      pulse_width   -> ON duration in seconds
-      plc_id        -> target PLC ID
-      register      -> target holding register
-    """
+    _CONFIG_REFRESH_INTERVAL = 1.0
 
     def __init__(self, config=None):
         self.config = config or {}
         self._started_at = time.monotonic()
         self._last_write_value = object()
+        self._last_config_refresh = 0.0
         _debug_log(
-            "Pulse INIT | company_id={} | plc_id={} | register={} | "
+            "Pulse INIT | company_id={} | node_id={} | plc_id={} | register={} | "
             "interval={} | pulse_width={}".format(
                 self.config.get("company_id"),
+                self.config.get("_node_id"),
                 self.config.get("plc_id"),
                 self.config.get("register"),
                 self.config.get("interval"),
                 self.config.get("pulse_width"),
             )
         )
+
+    def _refresh_flow_config(self):
+        """Reload this exact Pulse node from the latest saved company Flow.
+
+        This keeps the running FlowRunner instance aligned with edits made in
+        the Drawflow editor without introducing hardcoded Pulse settings.
+        """
+        now = time.monotonic()
+        if now - self._last_config_refresh < self._CONFIG_REFRESH_INTERVAL:
+            return
+
+        self._last_config_refresh = now
+
+        company_id = self.config.get("company_id")
+        node_id = self.config.get("_node_id")
+        if company_id is None or node_id is None:
+            return
+
+        try:
+            flow_json = get_company_flow(int(company_id))
+            if not flow_json:
+                return
+
+            flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
+            nodes = (
+                flow.get("drawflow", {})
+                .get("Home", {})
+                .get("data", {})
+            )
+            node = nodes.get(str(node_id))
+            if not isinstance(node, dict) or node.get("name") != "Pulse":
+                return
+
+            fresh_data = node.get("data", {})
+            if not isinstance(fresh_data, dict):
+                return
+
+            previous = {
+                key: self.config.get(key)
+                for key in ("interval", "pulse_width", "plc_id", "register")
+            }
+
+            for key in ("interval", "pulse_width", "plc_id", "register"):
+                if key in fresh_data:
+                    self.config[key] = fresh_data[key]
+
+            current = {
+                key: self.config.get(key)
+                for key in ("interval", "pulse_width", "plc_id", "register")
+            }
+
+            if current != previous:
+                # Restart the timing phase when Flow configuration changes so
+                # the new settings take effect immediately and deterministically.
+                self._started_at = time.monotonic()
+                self._last_write_value = object()
+                _debug_log(
+                    "Pulse CONFIG RELOADED | company_id={} | node_id={} | "
+                    "old={} | new={}".format(
+                        company_id,
+                        node_id,
+                        previous,
+                        current,
+                    )
+                )
+                print(
+                    "PULSE CONFIG RELOADED:",
+                    "CompanyID:", company_id,
+                    "NodeID:", node_id,
+                    current,
+                )
+
+        except Exception as exc:
+            _debug_log(
+                "Pulse CONFIG RELOAD ERROR | company_id={} | node_id={} | error={}".format(
+                    company_id,
+                    node_id,
+                    repr(exc),
+                )
+            )
 
     def _number(self, key):
         value = self.config.get(key)
@@ -78,9 +157,10 @@ class Pulse:
             raise ValueError("Pulse register must be between 0 and 65535.")
 
         _debug_log(
-            "Pulse PLC WRITE | company_id={} | plc_id={} | register={} | "
+            "Pulse PLC WRITE | company_id={} | node_id={} | plc_id={} | register={} | "
             "value={} | previous_value={}".format(
                 self.config.get("company_id"),
+                self.config.get("_node_id"),
                 plc_id,
                 register,
                 pulse,
@@ -101,9 +181,10 @@ class Pulse:
             )
         except Exception as exc:
             _debug_log(
-                "Pulse QUEUE ERROR | company_id={} | plc_id={} | "
+                "Pulse QUEUE ERROR | company_id={} | node_id={} | plc_id={} | "
                 "register={} | value={} | error={}".format(
                     self.config.get("company_id"),
+                    self.config.get("_node_id"),
                     plc_id,
                     register,
                     pulse,
@@ -114,10 +195,11 @@ class Pulse:
 
         self._last_write_value = pulse
         _debug_log(
-            "Pulse COMMAND QUEUED | command_id={} | company_id={} | "
+            "Pulse COMMAND QUEUED | command_id={} | company_id={} | node_id={} | "
             "plc_id={} | register={} | value={}".format(
                 command_id,
                 self.config.get("company_id"),
+                self.config.get("_node_id"),
                 plc_id,
                 register,
                 pulse,
@@ -137,7 +219,9 @@ class Pulse:
         if data is None:
             data = {}
 
-        # Every Pulse behavior value comes directly from the Flow node config.
+        self._refresh_flow_config()
+
+        # Every Pulse behavior value comes from the current Flow node config.
         interval = self._number("interval")
         pulse_width = self._number("pulse_width")
 
