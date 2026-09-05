@@ -26,11 +26,13 @@ def _debug_log(message):
 
 
 class Pulse:
-    """Generate a periodic pulse and optionally queue it for PLC writing.
+    """Generate a periodic pulse using only the values supplied by Flow.
 
-    interval: time in seconds between the start of consecutive pulses.
-    pulse_width: time in seconds that the pulse remains ON.
-    plc_id/register: optional target for the Edge-side Modbus write.
+    Required Flow properties:
+      interval      -> period in seconds
+      pulse_width   -> ON duration in seconds
+      plc_id        -> target PLC ID
+      register      -> target holding register
     """
 
     def __init__(self, config=None):
@@ -48,19 +50,19 @@ class Pulse:
             )
         )
 
-    def _number(self, key, default=None):
-        value = self.config.get(key, default)
+    def _number(self, key):
+        value = self.config.get(key)
         if value in (None, ""):
-            return default
+            raise ValueError(f"Pulse {key} must be configured in the Flow.")
         try:
             return float(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Pulse {key} must be a number.") from exc
 
-    def _int_value(self, key, default=None):
-        value = self.config.get(key, default)
+    def _int_value(self, key):
+        value = self.config.get(key)
         if value in (None, ""):
-            return default
+            raise ValueError(f"Pulse {key} must be configured in the Flow.")
         try:
             return int(value)
         except (TypeError, ValueError) as exc:
@@ -70,14 +72,9 @@ class Pulse:
         plc_id = self._int_value("plc_id")
         register = self._int_value("register")
 
-        # Pulse remains usable as a pure pulse generator when no PLC target
-        # is configured.
-        if plc_id is None and register is None:
-            return None
-
-        if plc_id is None or plc_id <= 0:
+        if plc_id <= 0:
             raise ValueError("Pulse PLC ID must be greater than zero.")
-        if register is None or not 0 <= register <= 65535:
+        if not 0 <= register <= 65535:
             raise ValueError("Pulse register must be between 0 and 65535.")
 
         _debug_log(
@@ -140,18 +137,17 @@ class Pulse:
         if data is None:
             data = {}
 
-        interval = self._number("interval", 1)
-        pulse_width = self._number("pulse_width", 0.1)
+        # Every Pulse behavior value comes directly from the Flow node config.
+        interval = self._number("interval")
+        pulse_width = self._number("pulse_width")
 
-        if interval is None or interval <= 0:
+        if interval <= 0:
             raise ValueError("Pulse interval must be greater than zero.")
-        if pulse_width is None or pulse_width <= 0:
+        if pulse_width <= 0:
             raise ValueError("Pulse width must be greater than zero.")
         if pulse_width > interval:
             raise ValueError("Pulse width cannot be greater than the interval.")
 
-        # The interval is the actual period: each new pulse starts exactly
-        # once per interval. No other node controls or overrides this timing.
         elapsed = time.monotonic() - self._started_at
         phase = elapsed % interval
         pulse = 1 if phase < pulse_width else 0
