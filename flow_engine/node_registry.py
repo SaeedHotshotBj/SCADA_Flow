@@ -54,3 +54,20 @@ NODE_REGISTRY["ManagementPanel"] = {
         },
     ]
 }
+
+NODE_REGISTRY["Pulse"] = {
+    "config": [
+        {
+            "name": "interval",
+            "label": "Pulse Interval (sec)",
+            "type": "number",
+            "default": 1,
+        },
+        {
+            "name": "pulse_width",
+            "label": "Pulse Width (sec)",
+            "type": "number",
+            "default": 0.1,
+        },
+    ]
+}
