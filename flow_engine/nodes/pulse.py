@@ -25,8 +25,8 @@ class Pulse:
         if data is None:
             data = {}
 
-        interval = self._number("interval")
-        pulse_width = self._number("pulse_width")
+        interval = self._number("interval", 1)
+        pulse_width = self._number("pulse_width", 0.1)
 
         if interval is None or interval <= 0:
             raise ValueError("Pulse interval must be greater than zero.")
