@@ -56,6 +56,12 @@ def get_company_plcs(company_id):
 
 
 def create_write_command(company_id, plc_id, register, value):
+    """Create a write command while coalescing older pending writes for the same register.
+
+    Only commands targeting the exact same PLC/register are coalesced. This
+    prevents a fast Pulse from building a stale queue while preserving manual
+    writes to every other register.
+    """
     conn = get_connection()
     try:
         plc = conn.execute(
@@ -72,6 +78,19 @@ def create_write_command(company_id, plc_id, register, value):
         if plc is None:
             raise ValueError("PLC does not belong to the selected company")
 
+        # A newer write for the same PLC/register makes older pending writes
+        # stale. Do not touch writes to other registers.
+        conn.execute(
+            """
+            DELETE FROM PLCWriteCommands
+            WHERE CompanyID = ?
+              AND PLC_ID = ?
+              AND Register = ?
+              AND Status = 'PENDING'
+            """,
+            (company_id, plc_id, register),
+        )
+
         cursor = conn.execute(
             """
             INSERT INTO PLCWriteCommands
@@ -82,31 +101,6 @@ def create_write_command(company_id, plc_id, register, value):
         )
         conn.commit()
         return int(cursor.lastrowid)
-    finally:
-        conn.close()
-
-
-def clear_pending_commands_for_other_registers(company_id, plc_id, active_register):
-    """Remove pending writes for this company/PLC that target an obsolete register.
-
-    The active register comes from the current Flow Pulse node, so changing a
-    Pulse register automatically invalidates queued commands for the previous
-    register without hardcoding any register number.
-    """
-    conn = get_connection()
-    try:
-        cursor = conn.execute(
-            """
-            DELETE FROM PLCWriteCommands
-            WHERE CompanyID = ?
-              AND PLC_ID = ?
-              AND Register <> ?
-              AND Status = 'PENDING'
-            """,
-            (company_id, plc_id, active_register),
-        )
-        conn.commit()
-        return cursor.rowcount
     finally:
         conn.close()
 
