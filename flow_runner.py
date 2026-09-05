@@ -15,10 +15,6 @@ REALTIME_SKIP_NODE_TYPES = {
 
 class FlowRunner:
 
-    # =====================================================
-    # INIT
-    # =====================================================
-
     def __init__(self, flow_data, company_id):
         if company_id is None:
             raise ValueError("FlowRunner requires company_id")
@@ -30,22 +26,16 @@ class FlowRunner:
         self.company_id = int(company_id)
         self.load_flow()
 
-    # =====================================================
-    # CONFIG
-    # =====================================================
-
-    def get_node_config(self, node):
+    def get_node_config(self, node, node_id=None):
         data = node.get("data", {})
         if "config" in data:
             config = dict(data["config"])
         else:
             config = dict(data)
         config["company_id"] = self.company_id
+        if node_id is not None:
+            config["_node_id"] = str(node_id)
         return config
-
-    # =====================================================
-    # LOAD FLOW
-    # =====================================================
 
     def load_flow(self):
         flow = self.flow_data
@@ -60,7 +50,7 @@ class FlowRunner:
 
         for node_id, node in home.items():
             node_type = node.get("name")
-            config = self.get_node_config(node)
+            config = self.get_node_config(node, node_id)
             node_class = get_node_class(node_type)
             if not node_class:
                 continue
@@ -76,7 +66,7 @@ class FlowRunner:
             if node.get("name") != "Roles":
                 continue
 
-            role_config = self.get_node_config(node)
+            role_config = self.get_node_config(node, node_id)
             node_roles = role_config.get("roles", [])
             if not isinstance(node_roles, list):
                 continue
@@ -123,10 +113,6 @@ class FlowRunner:
                     if target is not None:
                         self.connections[source_id].append(str(target))
 
-    # =====================================================
-    # START NODES
-    # =====================================================
-
     def get_start_nodes(self, realtime=False):
         ignored_types = {"Roles", "RolesEngaged"}
 
@@ -158,10 +144,6 @@ class FlowRunner:
 
     def next_nodes(self, node_id):
         return self.connections.get(str(node_id), [])
-
-    # =====================================================
-    # NORMAL FLOW EXECUTION
-    # =====================================================
 
     def execute_node(self, node_id, data, visited=None, realtime=False):
         if visited is None:
@@ -216,18 +198,7 @@ class FlowRunner:
 
         return data
 
-    # =====================================================
-    # HISTORICAL TREND BRANCH EXECUTION
-    # =====================================================
-
     def execute_trend_branch(self, node_id, data, visited=None):
-        """Execute exactly the connected branch graph and return the first
-        descendant result that contains ChartData.
-
-        Connection topology remains the only routing mechanism. Each branch
-        gets an isolated data snapshot, so Dashboard/Report branches cannot
-        corrupt the Trend request state.
-        """
         if visited is None:
             visited = set()
 
@@ -279,10 +250,6 @@ class FlowRunner:
 
         return None
 
-    # =====================================================
-    # REALTIME ENGINE
-    # =====================================================
-
     def run(self):
         flow_status.start()
 
@@ -295,9 +262,6 @@ class FlowRunner:
         except (TypeError, ValueError):
             scan_interval = None
 
-        # Pulse timing is controlled by the Pulse node's own Flow
-        # configuration. The engine only reduces its scan period enough to
-        # observe the configured pulse width.
         for node_info in self.nodes.values():
             if node_info.get("type") != "Pulse":
                 continue
@@ -338,10 +302,6 @@ class FlowRunner:
             remaining = scan_interval - elapsed
             if remaining > 0:
                 time.sleep(remaining)
-
-    # =====================================================
-    # TREND REQUEST ENGINE
-    # =====================================================
 
     def execute_request(self, request):
         start_nodes = self.get_start_nodes(realtime=False)
@@ -406,17 +366,9 @@ class FlowRunner:
 
         return request
 
-    # =====================================================
-    # STOP
-    # =====================================================
-
     def stop(self):
         self.running = False
         flow_status.stop()
-
-    # =====================================================
-    # ROLE ACCESS
-    # =====================================================
 
     def get_flow_roles(self):
         roles = []
@@ -431,10 +383,6 @@ class FlowRunner:
                     roles.extend(node_roles)
 
         return roles
-
-    # =====================================================
-    # PAGE ACCESS
-    # =====================================================
 
     def get_page_access(self):
         access = {}
@@ -465,10 +413,6 @@ class FlowRunner:
                         access[target].append(role)
 
         return access
-
-    # =====================================================
-    # CHECK PAGE ACCESS
-    # =====================================================
 
     def can_access_page(self, node_id, user_role):
         access = self.get_page_access()
