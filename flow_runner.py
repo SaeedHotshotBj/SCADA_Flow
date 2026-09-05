@@ -195,9 +195,6 @@ class FlowRunner:
         if not children:
             return data
 
-        # Every outgoing Drawflow connection receives its own snapshot.
-        # This is essential for fan-out flows such as:
-        # TagMapper -> Dashboard / Trend / Report.
         branch_results = []
 
         for child in children:
@@ -217,9 +214,6 @@ class FlowRunner:
             )
             branch_results.append(child_result)
 
-        # Preserve the current node's own data as the return value.
-        # Side-effect nodes (DB, dashboard, reports) have already executed.
-        # The request executor below selects the branch containing ChartData.
         return data
 
     # =====================================================
@@ -301,6 +295,30 @@ class FlowRunner:
             )
         except (TypeError, ValueError):
             scan_interval = 1.0
+
+        # Pulse nodes need a scan rate high enough to observe both edges of
+        # their configured pulse width. Without this, a 1-second scan can
+        # repeatedly sample a 100-ms pulse only at its ON phase.
+        pulse_resolution = None
+        for node_info in self.nodes.values():
+            if node_info.get("type") != "Pulse":
+                continue
+
+            config = node_info.get("config", {})
+            try:
+                pulse_width = float(config.get("pulse_width", 0.1))
+            except (TypeError, ValueError):
+                continue
+
+            if pulse_width <= 0:
+                continue
+
+            resolution = max(0.01, pulse_width / 2.0)
+            if pulse_resolution is None or resolution < pulse_resolution:
+                pulse_resolution = resolution
+
+        if pulse_resolution is not None:
+            scan_interval = min(scan_interval, pulse_resolution)
 
         while self.running:
             scan_started = time.monotonic()
