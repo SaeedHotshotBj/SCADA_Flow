@@ -5,6 +5,7 @@ import time
 from services.plc_write_service import (
     ensure_write_table,
     create_write_command,
+    clear_pending_commands_for_other_registers,
 )
 from database import get_company_flow
 
@@ -100,8 +101,6 @@ class Pulse:
             }
 
             if current != previous:
-                # Restart the timing phase when Flow configuration changes so
-                # the new settings take effect immediately and deterministically.
                 self._started_at = time.monotonic()
                 self._last_write_value = object()
                 _debug_log(
@@ -155,6 +154,42 @@ class Pulse:
             raise ValueError("Pulse PLC ID must be greater than zero.")
         if not 0 <= register <= 65535:
             raise ValueError("Pulse register must be between 0 and 65535.")
+
+        try:
+            cleared = clear_pending_commands_for_other_registers(
+                self.config.get("company_id"),
+                plc_id,
+                register,
+            )
+            if cleared:
+                _debug_log(
+                    "Pulse STALE COMMANDS CLEARED | company_id={} | node_id={} | "
+                    "plc_id={} | active_register={} | removed={}".format(
+                        self.config.get("company_id"),
+                        self.config.get("_node_id"),
+                        plc_id,
+                        register,
+                        cleared,
+                    )
+                )
+                print(
+                    "PULSE STALE COMMANDS CLEARED:",
+                    "PLC_ID:", plc_id,
+                    "ACTIVE_REGISTER:", register,
+                    "REMOVED:", cleared,
+                )
+        except Exception as exc:
+            _debug_log(
+                "Pulse STALE COMMAND CLEANUP ERROR | company_id={} | node_id={} | "
+                "plc_id={} | register={} | error={}".format(
+                    self.config.get("company_id"),
+                    self.config.get("_node_id"),
+                    plc_id,
+                    register,
+                    repr(exc),
+                )
+            )
+            raise
 
         _debug_log(
             "Pulse PLC WRITE | company_id={} | node_id={} | plc_id={} | register={} | "
@@ -221,7 +256,6 @@ class Pulse:
 
         self._refresh_flow_config()
 
-        # Every Pulse behavior value comes from the current Flow node config.
         interval = self._number("interval")
         pulse_width = self._number("pulse_width")
 
