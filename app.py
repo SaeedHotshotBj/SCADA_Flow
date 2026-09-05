@@ -860,9 +860,8 @@ def load_flow(company_id):
 # =====================================================
 # FLOW ENGINE THREAD
 # =====================================================
-def _run_company_flow(company_id, flow):
+def _run_company_flow(runner, company_id):
     try:
-        runner = FlowRunner(flow, company_id)
         print("FLOW ENGINE COMPANY STARTED:", company_id)
         runner.run()
     except Exception as exc:
@@ -938,22 +937,18 @@ def start_flow_engine():
         if flow is None:
             continue
 
+        runner = FlowRunner(flow, company_id)
+
+        if flow_runner_instance is None:
+            flow_runner_instance = runner
+
         runner_thread = threading.Thread(
             target=_run_company_flow,
-            args=(company_id, flow),
+            args=(runner, company_id),
             name=f"flow-engine-company-{company_id}",
             daemon=True,
         )
         runner_thread.start()
-
-        if flow_runner_instance is None:
-            try:
-                flow_runner_instance = next(
-                    obj
-                    for obj in []
-                )
-            except StopIteration:
-                pass
 
 
 # =====================================================
