@@ -289,36 +289,31 @@ class FlowRunner:
         start_nodes = self.get_start_nodes(realtime=True)
 
         try:
-            scan_interval = max(
-                0.25,
-                float(self.flow_data.get("scan_interval", 1)),
-            )
+            scan_interval = float(self.flow_data.get("scan_interval"))
+            if scan_interval <= 0:
+                raise ValueError
         except (TypeError, ValueError):
-            scan_interval = 1.0
+            scan_interval = None
 
-        # Pulse nodes need a scan rate high enough to observe both edges of
-        # their configured pulse width. Without this, a 1-second scan can
-        # repeatedly sample a 100-ms pulse only at its ON phase.
-        pulse_resolution = None
+        # Pulse timing is controlled by the Pulse node's own Flow
+        # configuration. The engine only reduces its scan period enough to
+        # observe the configured pulse width.
         for node_info in self.nodes.values():
             if node_info.get("type") != "Pulse":
                 continue
 
-            config = node_info.get("config", {})
+            config = node_info.get("config") or {}
             try:
-                pulse_width = float(config.get("pulse_width", 0.1))
+                pulse_width = float(config.get("pulse_width"))
             except (TypeError, ValueError):
                 continue
 
             if pulse_width <= 0:
                 continue
 
-            resolution = max(0.01, pulse_width / 2.0)
-            if pulse_resolution is None or resolution < pulse_resolution:
-                pulse_resolution = resolution
-
-        if pulse_resolution is not None:
-            scan_interval = min(scan_interval, pulse_resolution)
+            pulse_resolution = pulse_width / 2.0
+            if scan_interval is None or pulse_resolution < scan_interval:
+                scan_interval = pulse_resolution
 
         while self.running:
             scan_started = time.monotonic()
@@ -335,12 +330,14 @@ class FlowRunner:
             except Exception as exc:
                 flow_status.node_error("__engine__", exc)
 
+            if scan_interval is None:
+                time.sleep(0)
+                continue
+
             elapsed = time.monotonic() - scan_started
             remaining = scan_interval - elapsed
             if remaining > 0:
                 time.sleep(remaining)
-            else:
-                time.sleep(0.01)
 
     # =====================================================
     # TREND REQUEST ENGINE
