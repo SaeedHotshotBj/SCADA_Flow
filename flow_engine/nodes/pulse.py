@@ -5,7 +5,6 @@ import time
 from services.plc_write_service import (
     ensure_write_table,
     create_write_command,
-    clear_pending_commands_for_other_registers,
 )
 from database import get_company_flow
 
@@ -154,42 +153,6 @@ class Pulse:
             raise ValueError("Pulse PLC ID must be greater than zero.")
         if not 0 <= register <= 65535:
             raise ValueError("Pulse register must be between 0 and 65535.")
-
-        try:
-            cleared = clear_pending_commands_for_other_registers(
-                self.config.get("company_id"),
-                plc_id,
-                register,
-            )
-            if cleared:
-                _debug_log(
-                    "Pulse STALE COMMANDS CLEARED | company_id={} | node_id={} | "
-                    "plc_id={} | active_register={} | removed={}".format(
-                        self.config.get("company_id"),
-                        self.config.get("_node_id"),
-                        plc_id,
-                        register,
-                        cleared,
-                    )
-                )
-                print(
-                    "PULSE STALE COMMANDS CLEARED:",
-                    "PLC_ID:", plc_id,
-                    "ACTIVE_REGISTER:", register,
-                    "REMOVED:", cleared,
-                )
-        except Exception as exc:
-            _debug_log(
-                "Pulse STALE COMMAND CLEANUP ERROR | company_id={} | node_id={} | "
-                "plc_id={} | register={} | error={}".format(
-                    self.config.get("company_id"),
-                    self.config.get("_node_id"),
-                    plc_id,
-                    register,
-                    repr(exc),
-                )
-            )
-            raise
 
         _debug_log(
             "Pulse PLC WRITE | company_id={} | node_id={} | plc_id={} | register={} | "
