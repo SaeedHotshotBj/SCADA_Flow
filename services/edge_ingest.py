@@ -21,8 +21,11 @@ def ensure_edge_event_schema():
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_plc_data_event_id ON PLC_Data(EventID) WHERE EventID IS NOT NULL")
         if "TagHistory" in tables:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(TagHistory)").fetchall()}
+            if "PLC_ID" not in columns:
+                conn.execute("ALTER TABLE TagHistory ADD COLUMN PLC_ID INTEGER")
             if "EventID" not in columns:
                 conn.execute("ALTER TABLE TagHistory ADD COLUMN EventID TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tag_history_company_plc_tag_time ON TagHistory(CompanyID, PLC_ID, TagName, Timestamp)")
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_tag_history_event_id ON TagHistory(EventID) WHERE EventID IS NOT NULL")
 
         conn.execute(
@@ -184,9 +187,20 @@ def _flow_tag_storage(company_id):
             elif len(company_plc_ids) == 1:
                 mapping_plc_ids = [company_plc_ids[0]]
 
+            register = mapping.get("register")
+            register_key = None
+            try:
+                if register not in (None, ""):
+                    register_key = str(int(float(register)))
+            except (TypeError, ValueError):
+                register_key = str(register).strip() if register is not None else None
+
             for plc_id in mapping_plc_ids:
-                if plc_id in company_plc_ids:
-                    allowed[(plc_id, name.lower())] = storage
+                if plc_id not in company_plc_ids:
+                    continue
+                allowed[(plc_id, name.lower())] = storage
+                if register_key:
+                    allowed[(plc_id, register_key)] = storage
 
     return allowed
 
@@ -202,6 +216,7 @@ def ingest_items(items):
     conn = get_connection()
     flow_cache = {}
     try:
+        conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("BEGIN IMMEDIATE")
         for item in items:
             if not isinstance(item, dict):
@@ -210,6 +225,7 @@ def ingest_items(items):
             if not event_id:
                 errors.append({"EventID": event_id, "Error": "EventID is required"})
                 continue
+
             try:
                 plc_id = int(item.get("PLC_ID"))
                 tag = str(item.get("TagName", "")).strip()
@@ -229,7 +245,10 @@ def ingest_items(items):
 
             if company_id not in flow_cache:
                 flow_cache[company_id] = _flow_tag_storage(company_id)
-            storage_type = flow_cache[company_id].get((plc_id, tag.lower()))
+            storage_map = flow_cache[company_id]
+            storage_type = storage_map.get((plc_id, tag.lower()))
+            if storage_type is None:
+                storage_type = storage_map.get((plc_id, tag))
             if storage_type is None:
                 errors.append({"EventID": event_id, "Error": "Tag is not defined for this PLC by the company Flow"})
                 continue
@@ -239,21 +258,37 @@ def ingest_items(items):
                 acks.append(event_id)
                 continue
 
-            received_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
-            conn.execute(
-                "INSERT INTO EdgeEventLedger(EventID, CompanyID, PLC_ID, TagName, EventTimestamp, ReceivedAt) VALUES (?, ?, ?, ?, ?, ?)",
-                (event_id, company_id, plc_id, tag, timestamp, received_at),
-            )
-            conn.execute(
-                "INSERT INTO PLC_Data(CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (company_id, plc_id, tag, value, storage_type, timestamp, event_id),
-            )
-            conn.execute(
-                "INSERT INTO TagHistory(CompanyID, PLC_ID, TagName, Value, Timestamp, EventID) VALUES (?, ?, ?, ?, ?, ?)",
-                (company_id, plc_id, tag, value, timestamp, event_id),
-            )
-            acks.append(event_id)
-            inserted += 1
+            savepoint = "edge_event"
+            try:
+                conn.execute(f"SAVEPOINT {savepoint}")
+                received_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
+                conn.execute(
+                    "INSERT INTO EdgeEventLedger(EventID, CompanyID, PLC_ID, TagName, EventTimestamp, ReceivedAt) VALUES (?, ?, ?, ?, ?, ?)",
+                    (event_id, company_id, plc_id, tag, timestamp, received_at),
+                )
+                conn.execute(
+                    "INSERT INTO PLC_Data(CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (company_id, plc_id, tag, value, storage_type, timestamp, event_id),
+                )
+
+                try:
+                    conn.execute(
+                        "INSERT INTO TagHistory(CompanyID, PLC_ID, TagName, Value, Timestamp, EventID) VALUES (?, ?, ?, ?, ?, ?)",
+                        (company_id, plc_id, tag, value, timestamp, event_id),
+                    )
+                except Exception as history_exc:
+                    print("EDGE TAG HISTORY WRITE WARNING:", event_id, history_exc)
+
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                acks.append(event_id)
+                inserted += 1
+            except Exception as exc:
+                try:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                except Exception:
+                    pass
+                errors.append({"EventID": event_id, "Error": str(exc)})
 
         conn.commit()
         return {"acks": acks, "errors": errors, "inserted": inserted}
