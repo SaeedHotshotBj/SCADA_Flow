@@ -1,6 +1,4 @@
 import json
-import threading
-import time
 
 from database import get_company_flow
 
@@ -32,7 +30,8 @@ def _register_to_tag(nodes):
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
             continue
-        mappings = node.get("data", {}).get("mappings", [])
+        data = node.get("data", {}) or {}
+        mappings = data.get("mappings", [])
         if not isinstance(mappings, list):
             continue
         for item in mappings:
@@ -77,7 +76,8 @@ def get_dashboard_widgets(company_id):
                 continue
 
             if node.get("name") == "DashboardOutput":
-                configured = node.get("data", {}).get("widgets", [])
+                data = node.get("data", {}) or {}
+                configured = data.get("widgets", [])
                 if isinstance(configured, list):
                     for widget in configured:
                         if not isinstance(widget, dict):
@@ -87,7 +87,7 @@ def get_dashboard_widgets(company_id):
                         widgets.append(item)
 
             elif node.get("name") == "MachineCard":
-                data = node.get("data", {})
+                data = node.get("data", {}) or {}
                 configured_machines = data.get("machines", [])
                 configured_icons = data.get("icon_library", [])
 
@@ -145,23 +145,3 @@ def get_dashboard_widgets(company_id):
         print("Dashboard widget error:", exc)
 
     return widgets
-
-
-def _start_edge_timeout_with_retry():
-    for attempt in range(12):
-        try:
-            from services.edge_timeout_service import start_worker
-            start_worker()
-            print("EDGE TIMEOUT WORKER STARTED FROM DASHBOARD SERVICE RETRY", attempt + 1)
-            return
-        except Exception as exc:
-            print("EDGE TIMEOUT RETRY START ERROR:", attempt + 1, exc)
-        time.sleep(2)
-    print("EDGE TIMEOUT WORKER RETRY START FAILED")
-
-
-threading.Thread(
-    target=_start_edge_timeout_with_retry,
-    name="SCADA-Edge-Timeout-Bootstrap",
-    daemon=True,
-).start()
