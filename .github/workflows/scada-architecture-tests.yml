@@ -1,0 +1,63 @@
+name: SCADA architecture tests
+
+on:
+  push:
+    branches: ["refactor/stability-architecture-fix"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Compile all Python modules
+        run: python -m compileall -q .
+
+      - name: Verify canonical node registry
+        run: |
+          python - <<'PY'
+          from flow_engine.node_registry import NODE_REGISTRY
+          from flow_engine.registry import NODE_REGISTRY as RUNTIME_REGISTRY
+          from flow_engine.registry import get_node_class
+
+          assert NODE_REGISTRY is RUNTIME_REGISTRY
+          required = {
+              "PLCReader", "TagMapper", "ExpressionNode", "SQLWriter",
+              "DashboardOutput", "MachineCard", "AlarmNode", "EdgeTimeout",
+              "Roles", "RolesEngaged", "TrendReader", "TrendDatabaseReader",
+              "TrendOutput", "ReportOutput", "DateConverter", "ManagementPanel",
+          }
+          assert required.issubset(NODE_REGISTRY), required - set(NODE_REGISTRY)
+          for name in required - {"ManagementPanel"}:
+              assert get_node_class(name) is not None, name
+          print("CANONICAL REGISTRY OK")
+          PY
+
+      - name: Verify service package has no import bootstrap side effect
+        run: |
+          python - <<'PY'
+          import services
+          assert services.__all__ == []
+          print("IMPORT-SAFE SERVICES PACKAGE OK")
+          PY
+
+      - name: Verify application session setting is unchanged
+        run: grep -n 'SESSION_COOKIE_SECURE.*False' app.py
+
+      - name: Verify app source imports the explicit bootstrap
+        run: |
+          grep -n 'from services.runtime_bootstrap import bootstrap as bootstrap_services' app.py
+          grep -n 'bootstrap_services(app)' app.py
