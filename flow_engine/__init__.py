@@ -1,2 +1,8 @@
-# Install the Edge trigger -> report bridge before runtime node classes are registered.
-from flow_engine import trigger_edge_report_fix  # noqa: F401
+"""SCADA_FLOW flow engine package.
+
+Importing the package performs no monkey-patching, worker startup, or runtime
+registration side effects. Runtime node resolution is explicit in
+flow_engine.registry.
+"""
+
+__all__ = []
