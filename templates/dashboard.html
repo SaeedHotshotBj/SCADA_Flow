@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SCADA LIVE DASHBOARD</title>
-<script src="https://cdn.socket.io/4.7.5/dist/socket.io.min.js"></script>
 <style>
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; }
@@ -96,7 +95,7 @@ body { background: #111827; color: #fff; font-family: Arial, sans-serif; }
               {% for p in m.get('parameters', []) %}
                 {% if p.get('tag') %}
                   <div class="machine-parameter" data-tag="{{ p.get('tag')|e }}" data-configured-tag="{{ p.get('configured_tag','')|e }}" data-plc-id="{{ p.get('plc_id') if p.get('plc_id') is not none else '' }}">
-                    <div class="machine-parameter-label">{{ p.get('label', p.get('tag',''))|e }}</div>
+                    <div class="machine-parameter-label">{{ p.get('label',p.get('tag',''))|e }}</div>
                     <div class="machine-parameter-value"><span data-value>--</span><span class="machine-parameter-unit">{{ p.get('unit','')|e }}</span></div>
                   </div>
                 {% endif %}
@@ -110,14 +109,21 @@ body { background: #111827; color: #fff; font-family: Arial, sans-serif; }
   {% if not widgets %}<div class="empty">No dashboard widgets configured in Flow.</div>{% endif %}
 </div>
 <script>
-const socket = io({transports:["websocket","polling"],reconnection:true,reconnectionAttempts:Infinity,reconnectionDelay:1000,reconnectionDelayMax:5000});
-function setOnline(){const s=document.getElementById("status");s.textContent="ONLINE";s.className="status online";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="ONLINE";e.classList.add("online-state")})}
-function setOffline(){const s=document.getElementById("status");s.textContent="OFFLINE";s.className="status offline";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="OFFLINE";e.classList.remove("online-state")})}
-function apply(tag,value,plcId){if(value===null||value===undefined)return;const normal=String(tag).toLowerCase(),pid=plcId==null?"":String(plcId);document.querySelectorAll("[data-tag]").forEach(row=>{const rowPid=String(row.dataset.plcId||"");const rowTag=String(row.dataset.tag||"").toLowerCase();const configured=String(row.dataset.configuredTag||"").toLowerCase();if((normal===rowTag||normal===configured)&&(pid===""||rowPid===pid)){const target=row.querySelector("[data-value]");if(target)target.textContent=String(value)}})}
-function applyAll(data){if(!data){setOffline();return}if(Array.isArray(data.TagValues)){data.TagValues.forEach(item=>apply(item.TagName,item.Value,item.PLC_ID))}else{Object.keys(data.Tags||{}).forEach(k=>apply(k,data.Tags[k],null))}if(data.Online===true)setOnline();else setOffline()}
-socket.on("disconnect",setOffline);socket.on("connect_error",setOffline);socket.on("tag_update",d=>{if(d&&Array.isArray(d.TagValues))applyAll(d);else if(d&&d.Tag){apply(d.Tag,d.Value,d.PLC_ID);if(d.Online===true)setOnline()}});
-async function latest(){try{const r=await fetch("/dashboard/latest_plc?t="+Date.now(),{cache:"no-store",credentials:"same-origin"});if(!r.ok)throw new Error("HTTP "+r.status);applyAll(await r.json())}catch(e){console.error("DASHBOARD DATA ERROR",e);setOffline()}}
+function normalizeTag(value){return String(value == null ? "" : value).trim().toLowerCase();}
+function setOnline(){const s=document.getElementById("status");s.textContent="ONLINE";s.className="status online";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="ONLINE";e.classList.add("online-state")});}
+function setOffline(){const s=document.getElementById("status");s.textContent="OFFLINE";s.className="status offline";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="OFFLINE";e.classList.remove("online-state")});}
+function apply(tag,value,plcId){if(value===null||value===undefined)return;const normal=normalizeTag(tag);const pid=plcId==null?"":String(plcId);document.querySelectorAll("[data-tag]").forEach(row=>{const rowPid=String(row.dataset.plcId||"");const rowTag=normalizeTag(row.dataset.tag);const configured=normalizeTag(row.dataset.configuredTag);if((normal===rowTag||normal===configured)&&(pid===""||rowPid===pid)){const target=row.querySelector("[data-value]");if(target)target.textContent=String(value);}});}
+function applyAll(data){if(!data){setOffline();return;}if(Array.isArray(data.TagValues)){data.TagValues.forEach(item=>apply(item.TagName,item.Value,item.PLC_ID));}else{Object.keys(data.Tags||{}).forEach(k=>apply(k,data.Tags[k],null));}if(data.Online===true)setOnline();else setOffline();}
+async function latest(){try{const r=await fetch("/dashboard/latest_plc?t="+Date.now(),{cache:"no-store",credentials:"same-origin",headers:{"Accept":"application/json"}});if(r.redirected)throw new Error("Dashboard data redirected to login");if(!r.ok)throw new Error("HTTP "+r.status);const data=await r.json();console.log("DASHBOARD LATEST",data);applyAll(data);}catch(e){console.error("DASHBOARD DATA ERROR",e);setOffline();}}
 latest();setInterval(latest,1000);
+if(typeof io === "function"){
+  try{
+    const socket=io({transports:["websocket","polling"],reconnection:true,reconnectionAttempts:Infinity,reconnectionDelay:1000,reconnectionDelayMax:5000});
+    socket.on("disconnect",setOffline);
+    socket.on("connect_error",setOffline);
+    socket.on("tag_update",d=>{if(d&&Array.isArray(d.TagValues))applyAll(d);else if(d&&d.Tag){apply(d.Tag,d.Value,d.PLC_ID);if(d.Online===true)setOnline();}});
+  }catch(e){console.warn("Socket.IO unavailable; polling remains active",e);}
+}
 </script>
 <script src="/static/dashboard_machine_trend.js?v=20260912"></script>
 </body>
