@@ -10,16 +10,16 @@ body{margin:0;min-height:100vh;background:#20252b;color:#fff;font-family:Arial,s
 .topbar{height:70px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:#171b20;border-bottom:1px solid #3d464f}
 .brand{display:flex;align-items:center;gap:12px}.brand-icon{width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#1677ff;font-weight:bold;font-size:18px}.brand-text{font-size:20px;font-weight:bold;letter-spacing:1px}.master-label{color:#9da7b0;font-size:13px}.logout{color:#c3c9ce;text-decoration:none;padding:9px 14px;border-radius:6px;border:1px solid #48525c}.logout:hover{background:#343c44;color:#fff}
 .main{padding:28px}.page-title{margin-bottom:25px}.page-title h1{margin:0;font-size:25px}.page-title p{margin:7px 0 0;color:#8f9aa4;font-size:14px}
-.grid{display:grid;grid-template-columns:minmax(420px,650px) minmax(420px,1fr);gap:24px;align-items:start}.panel{background:#2b3239;border:1px solid #46515b;border-radius:10px;padding:22px;box-shadow:0 8px 25px rgba(0,0,0,.25)}.panel-title{margin-bottom:16px;font-size:16px;font-weight:bold}.panel-note{font-size:12px;color:#8f9aa4;line-height:1.6;margin-bottom:14px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}.field label{display:block;margin-bottom:6px;color:#cfd5da;font-size:12px}.full{grid-column:1/-1}
-select,input{width:100%;min-width:0;padding:10px 12px;background:#20252b;color:#fff;border:1px solid #59636d;border-radius:7px;font-size:14px;outline:none}select:focus,input:focus{border-color:#1677ff}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}button,.link-btn{padding:10px 15px;border-radius:7px;border:0;font-size:13px;font-weight:bold;cursor:pointer;text-decoration:none;display:inline-block}.primary{background:#1677ff;color:#fff}.primary:hover{background:#0866df}.secondary{background:#3a444e;color:#fff;border:1px solid #596570}.secondary:hover{background:#48545f}.success{background:#236b45;color:#fff}.success:hover{background:#2b8255}.purple{background:#7157a5;color:#fff}.purple:hover{background:#8064b8}.danger{background:#8b3a3a;color:#fff}.danger:hover{background:#a94747}
-.status{margin-top:12px;padding:11px;border-radius:7px;background:#20252b;border:1px solid #3d464f;color:#aeb7bf;min-height:42px;line-height:1.5}.command-meta{margin-top:10px;color:#8f9aa4;font-size:12px;line-height:1.6}.content-area{margin-top:30px;min-height:280px;background:#252b31;border:1px solid #353e46;border-radius:10px;padding:25px}.content-title{color:#8f9aa4;font-size:13px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:minmax(420px,650px) minmax(520px,1fr);gap:24px;align-items:start}.panel{background:#2b3239;border:1px solid #46515b;border-radius:10px;padding:22px;box-shadow:0 8px 25px rgba(0,0,0,.25)}.panel-title{margin-bottom:16px;font-size:16px;font-weight:bold}.panel-note{font-size:12px;color:#8f9aa4;line-height:1.5;margin-bottom:14px}
+select,input{width:100%;min-width:0;padding:10px 12px;background:#20252b;color:#fff;border:1px solid #59636d;border-radius:7px;font-size:14px;outline:none}select:focus,input:focus{border-color:#1677ff}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}.field label{display:block;margin-bottom:6px;color:#cfd5da;font-size:12px}.full{grid-column:1/-1}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}button,.link-btn{padding:10px 15px;border-radius:7px;border:0;font-size:13px;font-weight:bold;cursor:pointer;text-decoration:none;display:inline-block}.primary{background:#1677ff;color:#fff}.primary:hover{background:#0866df}.secondary{background:#3a444e;color:#fff;border:1px solid #596570}.secondary:hover{background:#48545f}.success{background:#236b45;color:#fff}.success:hover{background:#2b8255}.purple{background:#7157a5;color:#fff}.purple:hover{background:#8064b8}.danger{background:#8b3a3a;color:#fff}.danger:hover{background:#a94747}
+.status{margin-top:12px;padding:11px;border-radius:7px;background:#20252b;border:1px solid #3d464f;color:#aeb7bf;min-height:42px;line-height:1.5}.status.ok{border-color:#31764f;color:#b9f0cc}.status.err{border-color:#8c3c3c;color:#ffbaba}.command-meta{margin-top:10px;color:#8f9aa4;font-size:12px;line-height:1.6}.content-area{margin-top:30px;min-height:280px;background:#252b31;border:1px solid #353e46;border-radius:10px;padding:25px}.content-title{color:#8f9aa4;font-size:13px;margin-bottom:20px}
 @media(max-width:1100px){.grid{grid-template-columns:1fr}}@media(max-width:650px){.topbar{padding:0 15px}.main{padding:18px}.row{grid-template-columns:1fr}.actions button,.actions a{width:100%;text-align:center}}
 </style>
 </head>
 <body>
 <header class="topbar"><div class="brand"><div class="brand-icon">S</div><div><div class="brand-text">SCADA FLOW</div><div class="master-label">Master Control</div></div></div><a class="logout" href="{{ url_for('logout') }}">Logout</a></header>
 <main class="main">
-<div class="page-title"><h1>Master Panel</h1><p>Company control, Flow Designer, database access and direct PLC command management.</p></div>
+<div class="page-title"><h1>Master Panel</h1><p>Company control, Flow Designer, database access and direct PLC write command management.</p></div>
 <div class="grid">
 <section class="panel">
 <div class="panel-title">Company</div>
@@ -29,7 +29,7 @@ select,input{width:100%;min-width:0;padding:10px 12px;background:#20252b;color:#
 </section>
 <section class="panel">
 <div class="panel-title">PLC WRITE</div>
-<div class="panel-note">Open the dedicated Master PLC Write page to select a company, PLC, holding register and value.</div>
+<div class="panel-note">Open the dedicated Master PLC Write page to create a durable write command for a PLC belonging to the selected company.</div>
 <div class="actions"><a class="danger link-btn" href="/master/plc_write">PLC WRITE</a></div>
 </section>
 </div>
