@@ -1,0 +1,103 @@
+name: SCADA architecture tests
+
+on:
+  push:
+    branches: ["refactor/stability-architecture-fix"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Compile all Python modules
+        run: python -m compileall -q .
+
+      - name: Import canonical registry
+        run: |
+          python - <<'PY'
+          from flow_engine.node_registry import NODE_REGISTRY
+          print("EDITOR KEYS:", sorted(NODE_REGISTRY.keys()))
+          assert "PLCReader" in NODE_REGISTRY
+          assert "ManagementPanel" in NODE_REGISTRY
+          print("EDITOR REGISTRY IMPORT OK")
+          PY
+
+      - name: Import runtime registry
+        run: |
+          python - <<'PY'
+          try:
+              import flow_engine.registry as runtime_registry
+          except Exception:
+              import traceback
+              traceback.print_exc()
+              raise
+          print("RUNTIME KEYS:", sorted(runtime_registry.NODE_CLASSES.keys()))
+          print("EDITOR IS RUNTIME:", runtime_registry.NODE_REGISTRY is __import__("flow_engine.node_registry", fromlist=["NODE_REGISTRY"]).NODE_REGISTRY)
+          required = {
+              "PLCReader", "TagMapper", "ExpressionNode", "SQLWriter",
+              "DashboardOutput", "MachineCard", "AlarmNode", "EdgeTimeout",
+              "Roles", "RolesEngaged", "TrendReader", "TrendDatabaseReader",
+              "TrendOutput", "ReportOutput", "DateConverter",
+          }
+          missing = required.difference(runtime_registry.NODE_CLASSES)
+          assert not missing, missing
+          print("RUNTIME REGISTRY IMPORT OK")
+          PY
+
+      - name: Verify service package has no import bootstrap side effect
+        run: |
+          python - <<'PY'
+          import services
+          assert services.__all__ == []
+          print("IMPORT-SAFE SERVICES PACKAGE OK")
+          PY
+
+      - name: Verify dashboard service has no startup thread
+        run: |
+          ! grep -nE '(^|[^A-Za-z])threading|Thread\(' services/dashboard_service.py
+          ! grep -n 'edge_timeout_service' services/dashboard_service.py
+
+      - name: Verify PLC settings are Flow-defined
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path("services/runtime_bootstrap.py").read_text(encoding="utf-8")
+          assert 'data.get("port")' in text
+          assert 'data.get("slave")' in text
+          assert 'data.get("port", 502)' not in text
+          assert 'data.get("slave", 1)' not in text
+          print("PLC CONNECTION SETTINGS ARE FLOW-DEFINED")
+          PY
+
+      - name: Verify empty global flow has no project-specific configuration
+        run: |
+          python - <<'PY'
+          import json
+          with open("flow.json", encoding="utf-8") as f:
+              flow = json.load(f)
+          nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
+          assert nodes == {}, nodes
+          print("GLOBAL FLOW IS EMPTY: COMPANY FLOWS ARE AUTHORITATIVE")
+          PY
+
+      - name: Verify application session setting is unchanged
+        run: grep -n 'SESSION_COOKIE_SECURE.*False' app.py
+
+      - name: Verify app source imports the explicit bootstrap
+        run: |
+          grep -n 'from services.runtime_bootstrap import bootstrap as bootstrap_services' app.py
+          grep -n 'bootstrap_services(app)' app.py

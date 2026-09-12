@@ -1,0 +1,63 @@
+name: One-time disable legacy flow file fallback
+
+on:
+  push:
+    branches: ["refactor/stability-architecture-fix"]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[file-flow-fallback-disabled]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Disable file-backed company flow fallback
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app.py')
+          text = p.read_text(encoding='utf-8')
+          old = '''def _read_flow_file():
+    flow_path = FLOW_CONFIG["flow_file"]
+
+    if not os.path.isabs(flow_path):
+        flow_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            flow_path,
+        )
+
+    if not os.path.exists(flow_path):
+        return None
+
+    with open(flow_path, encoding="utf-8") as f:
+        return f.read()
+'''
+          new = '''def _read_flow_file():
+    # Company flow configuration is database-backed. A global flow.json must
+    # never become an implicit cross-company fallback.
+    return None
+'''
+          assert old in text, 'expected flow file loader not found'
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Verify syntax and unchanged security exception
+        run: |
+          python3 -m py_compile app.py
+          grep -n 'SESSION_COOKIE_SECURE.*False' app.py
+
+      - name: Remove temporary workflow and commit
+        run: |
+          git rm .github/workflows/one-time-disable-file-flow-fallback.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git commit -m "Disable file flow fallback [file-flow-fallback-disabled]"
+          git push
