@@ -1,7 +1,6 @@
 """Durable Master -> Edge -> PLC write command service."""
 
 from datetime import datetime, timedelta
-import math
 
 from database import get_connection
 
@@ -46,11 +45,49 @@ def ensure_plc_write_schema():
             )
             """
         )
+
+        # Existing VPS databases may contain an older PLCWriteCommands table.
+        # CREATE TABLE IF NOT EXISTS does not add columns to that table, so
+        # migrate every column required by the current command lifecycle.
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(PLCWriteCommands)").fetchall()
+        }
+        required = {
+            "CompanyID": "INTEGER",
+            "PLC_ID": "INTEGER",
+            "Register": "INTEGER",
+            "Value": "INTEGER",
+            "Status": "TEXT NOT NULL DEFAULT 'Pending'",
+            "AttemptCount": "INTEGER NOT NULL DEFAULT 0",
+            "CreatedAt": "TEXT",
+            "ClaimedAt": "TEXT",
+            "LeaseUntil": "TEXT",
+            "CompletedAt": "TEXT",
+            "ErrorMessage": "TEXT",
+        }
+        for name, definition in required.items():
+            if name not in columns:
+                conn.execute(
+                    f'ALTER TABLE PLCWriteCommands ADD COLUMN "{name}" {definition}'
+                )
+
+        # Keep legacy rows usable after migration.
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_plc_write_pending ON PLCWriteCommands(PLC_ID, Status, CommandID)"
+            "UPDATE PLCWriteCommands SET Status='Pending' "
+            "WHERE Status IS NULL OR TRIM(Status)=''"
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_plc_write_company ON PLCWriteCommands(CompanyID, CreatedAt)"
+            "UPDATE PLCWriteCommands SET AttemptCount=0 WHERE AttemptCount IS NULL"
+        )
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_plc_write_pending "
+            "ON PLCWriteCommands(PLC_ID, Status, CommandID)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_plc_write_company "
+            "ON PLCWriteCommands(CompanyID, CreatedAt)"
         )
         conn.commit()
     finally:
@@ -58,6 +95,7 @@ def ensure_plc_write_schema():
 
 
 def queue_write(company_id, plc_id, register, value):
+    ensure_plc_write_schema()
     register = _validate_u16(register, "Register")
     value = _validate_u16(value, "Value")
     company_id = int(company_id)
@@ -76,8 +114,8 @@ def queue_write(company_id, plc_id, register, value):
         cur = conn.execute(
             """
             INSERT INTO PLCWriteCommands
-            (CompanyID, PLC_ID, Register, Value, Status, CreatedAt)
-            VALUES (?, ?, ?, ?, 'Pending', ?)
+            (CompanyID, PLC_ID, Register, Value, Status, AttemptCount, CreatedAt)
+            VALUES (?, ?, ?, ?, 'Pending', 0, ?)
             """,
             (company_id, plc_id, register, value, now),
         )
@@ -157,7 +195,7 @@ def complete_command(command_id, plc_id, success, error_message=None):
         conn.execute(
             """
             UPDATE PLCWriteCommands
-            SET Status=?, CompletedAt=?, ErrorMessage=?, LeaseUntil=NULL
+            SET Status=?, CompletedAt=?, ErrorMessage=?, LeaseUntil=NULL, ClaimedAt=NULL
             WHERE CommandID=? AND PLC_ID=? AND Status IN ('Claimed','Pending')
             """,
             (status, _now(), str(error_message)[:1000] if error_message else None, command_id, plc_id),
