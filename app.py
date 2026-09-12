@@ -36,6 +36,7 @@ from flow_engine.node_registry import NODE_REGISTRY
 from socket_manager import init_socketio
 
 from services.dashboard_service import get_dashboard_widgets
+from services.runtime_bootstrap import bootstrap as bootstrap_services
 
 from database import (
     get_connection,
@@ -119,7 +120,10 @@ def _auth_no_cache(response):
 # DATABASE INITIALIZATION
 # =====================================================
 
-init_database()
+try:
+    init_database()
+except Exception as _database_bootstrap_error:
+    print("DATABASE BOOTSTRAP ERROR:", _database_bootstrap_error)
 
 try:
     from services.plc_identity import ensure_plc_identity_schema
@@ -134,12 +138,6 @@ except Exception as _plc_identity_bootstrap_error:
 # Start only after Flask app creation and database initialization.
 # =====================================================
 
-try:
-    from services.edge_timeout_service import start_worker as _start_edge_timeout_worker
-    _start_edge_timeout_worker()
-    print("EDGE TIMEOUT WORKER BOOTSTRAP OK: app.py after init_database")
-except Exception as _edge_timeout_start_error:
-    print("EDGE TIMEOUT WORKER BOOTSTRAP ERROR:", _edge_timeout_start_error)
 
 
 # =====================================================
@@ -174,7 +172,22 @@ def _init_auth_session_revocations():
                 pass
 
 
-_init_auth_session_revocations()
+try:
+    _init_auth_session_revocations()
+except Exception as _auth_revocation_bootstrap_error:
+    print("AUTH REVOCATION BOOTSTRAP ERROR:", _auth_revocation_bootstrap_error)
+
+
+# =====================================================
+# EXPLICIT APPLICATION SERVICES BOOTSTRAP
+# =====================================================
+
+try:
+    bootstrap_services(app)
+    print("APPLICATION SERVICES BOOTSTRAP OK")
+except Exception as _service_bootstrap_error:
+    print("APPLICATION SERVICES BOOTSTRAP ERROR:", _service_bootstrap_error)
+
 
 
 # =====================================================
