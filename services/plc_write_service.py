@@ -22,7 +22,7 @@ def _validate_u16(value, field_name):
     return parsed
 
 
-def _ensure_legacy_edge_timeout_state(conn):
+def _create_edge_timeout_state(conn):
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS EdgeTimeoutState (
@@ -37,39 +37,20 @@ def _ensure_legacy_edge_timeout_state(conn):
         )
         """
     )
-    columns = {
-        row["name"]
-        for row in conn.execute("PRAGMA table_info(EdgeTimeoutState)").fetchall()
-    }
-    required = {
-        "CompanyID": "INTEGER",
-        "PLC_ID": "INTEGER",
-        "LastReceivedAt": "TEXT",
-        "TimeoutSeconds": "REAL NOT NULL DEFAULT 10.0",
-        "TimedOut": "INTEGER NOT NULL DEFAULT 0",
-        "LastTimeoutAt": "TEXT",
-        "UpdatedAt": "TEXT NOT NULL DEFAULT ''",
-    }
-    for name, definition in required.items():
-        if name not in columns:
-            conn.execute(f'ALTER TABLE EdgeTimeoutState ADD COLUMN "{name}" {definition}')
 
-    conn.execute(
-        """
-        UPDATE EdgeTimeoutState
-        SET PLC_ID=(
-            SELECT MIN(p.PLC_ID)
-            FROM PLCs p
-            WHERE p.CompanyID=EdgeTimeoutState.CompanyID
-        )
-        WHERE PLC_ID IS NULL
-          AND 1=(
-              SELECT COUNT(*)
-              FROM PLCs p2
-              WHERE p2.CompanyID=EdgeTimeoutState.CompanyID
-          )
-        """
-    )
+
+def _ensure_legacy_edge_timeout_state(conn):
+    # EdgeTimeoutState is operational cache, not historian data. Older builds
+    # created it with CompanyID alone. Rebuild that cache when its primary key
+    # cannot represent multiple PLCs for the same company.
+    existing = conn.execute("PRAGMA table_info(EdgeTimeoutState)").fetchall()
+    if existing:
+        columns = {row["name"] for row in existing}
+        pk_columns = [row["name"] for row in sorted(existing, key=lambda item: int(item["pk"])) if int(row["pk"] or 0) > 0]
+        if "PLC_ID" not in columns or pk_columns != ["CompanyID", "PLC_ID"]:
+            conn.execute("DROP TABLE IF EXISTS EdgeTimeoutState")
+
+    _create_edge_timeout_state(conn)
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_edge_timeout_state_company_plc "
         "ON EdgeTimeoutState(CompanyID, PLC_ID)"
