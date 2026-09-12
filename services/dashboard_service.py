@@ -127,6 +127,7 @@ def get_dashboard_widgets(company_id):
                                 })
                                 widgets.append({
                                     "tag": resolved_tag,
+                                    "configured_tag": raw_tag,
                                     "plc_id": plc_id,
                                     "title": normalized["name"] + " / " + label,
                                     "unit": unit,
