@@ -74,7 +74,26 @@ def _validate_numeric(value):
     return number
 
 
+def _node_connections(nodes, node_id, direction="outputs"):
+    node = nodes.get(str(node_id), {})
+    section = node.get(direction, {}) if isinstance(node, dict) else {}
+    if not isinstance(section, dict):
+        return []
+    result = []
+    for item in section.values():
+        if not isinstance(item, dict):
+            continue
+        connections = item.get("connections", [])
+        if not isinstance(connections, list):
+            continue
+        for connection in connections:
+            if isinstance(connection, dict) and connection.get("node") is not None:
+                result.append(str(connection["node"]))
+    return result
+
+
 def _flow_tag_storage(company_id):
+    """Resolve tag storage and PLC identity strictly from the saved company Flow."""
     flow_json = get_company_flow(company_id)
     if not flow_json:
         return {}
@@ -82,9 +101,49 @@ def _flow_tag_storage(company_id):
         flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
     except Exception:
         return {}
+
     nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
+    if not isinstance(nodes, dict):
+        return {}
+
+    conn = get_connection()
+    try:
+        plc_rows = conn.execute(
+            "SELECT PLC_ID FROM PLCs WHERE CompanyID=? ORDER BY PLC_ID",
+            (int(company_id),),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    company_plc_ids = [int(row["PLC_ID"]) for row in plc_rows]
+    plc_reader_to_id = {}
+    used_ids = set()
+    fallback_index = 0
+
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("name") != "PLCReader":
+            continue
+        data = node.get("data", {}) or {}
+        raw_plc_id = data.get("plc_id", data.get("PLC_ID"))
+        plc_id = None
+        try:
+            if raw_plc_id not in (None, ""):
+                plc_id = int(raw_plc_id)
+        except (TypeError, ValueError):
+            plc_id = None
+        if plc_id is None:
+            while fallback_index < len(company_plc_ids) and company_plc_ids[fallback_index] in used_ids:
+                fallback_index += 1
+            if fallback_index < len(company_plc_ids):
+                plc_id = company_plc_ids[fallback_index]
+                fallback_index += 1
+        if plc_id is None or plc_id not in company_plc_ids or plc_id in used_ids:
+            continue
+        used_ids.add(plc_id)
+        plc_reader_to_id[str(node_id)] = plc_id
+
     allowed = {}
-    for node in nodes.values():
+    for node_id, node in nodes.items():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
             continue
         data = node.get("data", {}) or {}
@@ -95,20 +154,40 @@ def _flow_tag_storage(company_id):
         mappings = data.get("mappings", [])
         if not isinstance(mappings, list):
             continue
+
+        upstream_ids = [
+            plc_reader_to_id[source]
+            for source in plc_reader_to_id
+            if str(node_id) in _node_connections(nodes, source, "outputs")
+        ]
+        upstream_ids = list(dict.fromkeys(upstream_ids))
+
         for mapping in mappings:
             if not isinstance(mapping, dict):
                 continue
             name = str(mapping.get("name", "")).strip()
-            plc_id = mapping.get("plc_id", mapping.get("PLC_ID"))
             if not name:
                 continue
-            try:
-                storage = str(mapping.get("storage", "TIME")).upper().strip()
-                if storage not in {"TIME", "TRIGGER"}:
-                    continue
-                allowed[(int(plc_id), name.lower())] = storage
-            except (TypeError, ValueError):
+            storage = str(mapping.get("storage", "TIME")).upper().strip()
+            if storage not in {"TIME", "TRIGGER"}:
                 continue
+
+            explicit = mapping.get("plc_id", mapping.get("PLC_ID"))
+            mapping_plc_ids = []
+            if explicit not in (None, ""):
+                try:
+                    mapping_plc_ids = [int(explicit)]
+                except (TypeError, ValueError):
+                    mapping_plc_ids = []
+            elif upstream_ids:
+                mapping_plc_ids = upstream_ids
+            elif len(company_plc_ids) == 1:
+                mapping_plc_ids = [company_plc_ids[0]]
+
+            for plc_id in mapping_plc_ids:
+                if plc_id in company_plc_ids:
+                    allowed[(plc_id, name.lower())] = storage
+
     return allowed
 
 
