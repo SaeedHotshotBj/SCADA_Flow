@@ -16,7 +16,10 @@ ZERO_DEBOUNCE_SECONDS = 2.0
 class HistorianService:
 
     def __init__(self):
-        ensure_plc_identity_schema()
+        # PLC identity schema migration is performed once during application
+        # bootstrap. Do not run a write-heavy schema migration every time a
+        # FlowRunner creates a SQLWriter node; doing so can contend with the
+        # historian and edge-ingest writers and lock SQLite.
         self.time_memory = {}
         self.trigger_memory = {}
         self.zero_memory = {}
