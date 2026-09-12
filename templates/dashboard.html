@@ -2,22 +2,63 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SCADA LIVE DASHBOARD</title>
 <script src="https://cdn.socket.io/4.7.5/dist/socket.io.min.js"></script>
 <style>
-*{box-sizing:border-box}html,body{margin:0;padding:0;width:100%;min-height:100%}body{background:#111827;color:#fff;font-family:Arial,sans-serif}.top-nav{height:58px;background:#0f172a;display:flex;align-items:center;gap:6px;padding:0 28px;border-bottom:1px solid #334155}.top-nav a{color:#cbd5e1;text-decoration:none;padding:10px 18px;border-radius:9px;font-size:14px;font-weight:600}.top-nav a:hover{background:#1e293b;color:#fff}.header{height:70px;display:flex;align-items:center;justify-content:space-between;padding:0 25px;background:#1f2937}.title{font-size:24px;font-weight:bold}.status{padding:8px 18px;border-radius:20px;font-weight:bold}.online{background:#166534;color:#bbf7d0}.offline{background:#7f1d1d;color:#fecaca}#dashboard{min-height:calc(100vh - 128px);padding:20px;display:flex;flex-direction:column;gap:20px}.dashboard-section{width:100%;}.dashboard-row{width:100%;display:flex;flex-wrap:nowrap;gap:20px;align-items:flex-start;overflow-x:auto;overflow-y:hidden;padding-bottom:8px}.widget{width:220px;min-width:220px;min-height:140px;background:#1f2937;border-radius:12px;box-shadow:0 4px 15px rgba(0,0,0,.3);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:18px}.widget-title{font-size:17px;color:#d1d5db;margin-bottom:15px}.widget-value{font-size:34px;font-weight:bold;width:180px;height:42px;line-height:42px;text-align:center;white-space:nowrap;overflow:hidden}.widget-unit{margin-top:8px;color:#9ca3af;font-size:14px}.machine-card{width:230px;min-width:230px;background:#1f2937;border:1px solid #374151;border-radius:16px;box-shadow:0 5px 18px rgba(0,0,0,.28);padding:14px;display:flex;flex-direction:column;gap:12px}.machine-header{display:flex;align-items:center;gap:10px;border-bottom:1px solid #374151;padding-bottom:10px}.machine-icon{width:48px;height:48px;border-radius:10px;background:#111827;display:flex;align-items:center;justify-content:center;font-size:28px;flex:0 0 auto}.machine-name{font-size:18px;font-weight:bold;flex:1}.machine-state{font-size:10px;padding:4px 7px;border-radius:10px;background:#374151;color:#d1d5db}.machine-state.online-state{background:#166534;color:#bbf7d0}.machine-parameters{display:grid;grid-template-columns:1fr;gap:7px}.machine-parameter{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px;background:#111827;border-radius:8px;padding:8px 9px;min-width:0}.machine-parameter-label{color:#d1d5db;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.machine-parameter-value{font-size:15px;font-weight:bold;white-space:nowrap}.machine-parameter-unit{color:#9ca3af;font-size:10px;margin-left:2px}.machine-empty,.empty{color:#9ca3af;text-align:center;padding:18px}
-@media(max-width:700px){#dashboard{padding:12px;gap:12px}.dashboard-row{gap:12px}.machine-card,.widget{width:210px;min-width:210px}.top-nav{padding:0 10px;overflow:auto}.top-nav a{padding:9px 12px;white-space:nowrap}}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; }
+body { background: #111827; color: #fff; font-family: Arial, sans-serif; }
+.top-nav { height: 58px; background: #0f172a; display: flex; align-items: center; gap: 6px; padding: 0 28px; border-bottom: 1px solid #334155; overflow-x: auto; }
+.top-nav a { color: #cbd5e1; text-decoration: none; padding: 10px 18px; border-radius: 9px; font-size: 14px; font-weight: 600; white-space: nowrap; }
+.top-nav a:hover { background: #1e293b; color: #fff; }
+.header { height: 70px; display: flex; align-items: center; justify-content: space-between; padding: 0 25px; background: #1f2937; }
+.title { font-size: 24px; font-weight: bold; }
+.status { padding: 8px 18px; border-radius: 20px; font-weight: bold; }
+.online { background: #166534; color: #bbf7d0; }
+.offline { background: #7f1d1d; color: #fecaca; }
+#dashboard { min-height: calc(100vh - 128px); padding: 20px; display: flex; flex-direction: column; gap: 22px; }
+.dashboard-section { width: 100%; }
+.dashboard-row { width: 100%; display: flex; flex-wrap: nowrap; gap: 20px; align-items: flex-start; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; }
+.widget { flex: 0 0 220px; min-height: 140px; background: #1f2937; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,.3); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 18px; }
+.widget-title { font-size: 17px; color: #d1d5db; margin-bottom: 15px; text-align: center; }
+.widget-value { font-size: 34px; font-weight: bold; width: 180px; height: 42px; line-height: 42px; text-align: center; white-space: nowrap; overflow: hidden; }
+.widget-unit { margin-top: 8px; color: #9ca3af; font-size: 14px; }
+.machine-card { flex: 0 0 280px; background: #1f2937; border: 1px solid #374151; border-radius: 16px; box-shadow: 0 5px 18px rgba(0,0,0,.28); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.machine-header { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #374151; padding-bottom: 10px; }
+.machine-icon { width: 48px; height: 48px; border-radius: 10px; background: #111827; display: flex; align-items: center; justify-content: center; font-size: 28px; flex: 0 0 auto; }
+.machine-name { font-size: 18px; font-weight: bold; flex: 1; min-width: 0; }
+.machine-state { font-size: 10px; padding: 4px 7px; border-radius: 10px; background: #374151; color: #d1d5db; }
+.machine-state.online-state { background: #166534; color: #bbf7d0; }
+.machine-parameters { display: grid; grid-template-columns: 1fr; gap: 7px; }
+.machine-parameter { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 7px; background: #111827; border-radius: 8px; padding: 8px 9px; min-width: 0; }
+.machine-parameter-label { color: #d1d5db; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.machine-parameter-value { font-size: 15px; font-weight: bold; white-space: nowrap; }
+.machine-parameter-unit { color: #9ca3af; font-size: 10px; margin-left: 2px; }
+.empty { color: #9ca3af; text-align: center; padding: 18px; }
+@media (max-width: 700px) {
+  #dashboard { padding: 12px; gap: 12px; }
+  .dashboard-row { gap: 12px; }
+  .widget { flex-basis: 210px; }
+  .machine-card { flex-basis: 260px; }
+}
 </style>
 </head>
 <body>
-<div class="top-nav"><a href="/dashboard">Dashboard</a><a href="/trend">Trend</a><a href="/report">Report</a><a href="/plc_control">PLC Control</a><a href="/management">Management Panel</a><a href="/logout">Logout</a></div>
+<div class="top-nav">
+<a href="/dashboard">Dashboard</a>
+<a href="/trend">Trend</a>
+<a href="/report">Report</a>
+<a href="/plc_control">PLC Control</a>
+<a href="/management">Management Panel</a>
+<a href="/logout">Logout</a>
+</div>
 <div class="header"><div class="title">SCADA LIVE DASHBOARD</div><div id="status" class="status offline">OFFLINE</div></div>
 <div id="dashboard">
   <div class="dashboard-section">
     <div class="dashboard-row">
       {% for w in widgets or [] %}
-        {% if w and w.get('_dashboard_type') not in ['machine','machine_parameter'] and w.get('tag') %}
+        {% if w and w.get('_dashboard_type') != 'machine' and w.get('_dashboard_type') != 'machine_parameter' and w.get('tag') %}
           <div class="widget" data-tag="{{ w.get('tag')|e }}" data-configured-tag="{{ w.get('configured_tag','')|e }}" data-plc-id="{{ w.get('plc_id') if w.get('plc_id') is not none else '' }}">
             <div class="widget-title">{{ w.get('title', w.get('tag',''))|e }}</div>
             <div class="widget-value" data-value>--</div>
@@ -27,23 +68,35 @@
       {% endfor %}
     </div>
   </div>
-
   <div class="dashboard-section">
     <div class="dashboard-row">
       {% for item in widgets or [] %}
         {% if item and item.get('_dashboard_type') == 'machine' %}
-          {% set m = item.get('machine',{}) %}
+          {% set m = item.get('machine', {}) %}
           <div class="machine-card">
             <div class="machine-header">
-              <div class="machine-icon">{% if m.get('icon') == 'builtin:machine' %}⚙️{% elif m.get('icon') == 'builtin:motor' %}🔧{% elif m.get('icon') == 'builtin:pump' %}💧{% elif m.get('icon') == 'builtin:fan' %}🌀{% elif m.get('icon') == 'builtin:heater' %}🔥{% elif m.get('icon') == 'builtin:power' %}⚡{% elif m.get('icon') == 'builtin:production' %}📦{% elif m.get('icon') == 'builtin:robot' %}🤖{% elif m.get('icon') == 'builtin:conveyor' %}➡️{% elif m.get('icon') == 'builtin:compressor' %}🔩{% elif m.get('icon') == 'builtin:warehouse' %}🏢{% else %}🏭{% endif %}</div>
-              <div class="machine-name">{{ m.get('name',m.get('id','Machine'))|e }}</div>
+              <div class="machine-icon">
+                {% if m.get('icon') == 'builtin:machine' %}⚙️
+                {% elif m.get('icon') == 'builtin:motor' %}🔧
+                {% elif m.get('icon') == 'builtin:pump' %}💧
+                {% elif m.get('icon') == 'builtin:fan' %}🌀
+                {% elif m.get('icon') == 'builtin:heater' %}🔥
+                {% elif m.get('icon') == 'builtin:power' %}⚡
+                {% elif m.get('icon') == 'builtin:production' %}📦
+                {% elif m.get('icon') == 'builtin:robot' %}🤖
+                {% elif m.get('icon') == 'builtin:conveyor' %}➡️
+                {% elif m.get('icon') == 'builtin:compressor' %}🔩
+                {% elif m.get('icon') == 'builtin:warehouse' %}🏢
+                {% else %}🏭{% endif %}
+              </div>
+              <div class="machine-name">{{ m.get('name', m.get('id', 'Machine'))|e }}</div>
               <div class="machine-state" data-machine-state>WAITING</div>
             </div>
             <div class="machine-parameters">
-              {% for p in m.get('parameters',[]) %}
+              {% for p in m.get('parameters', []) %}
                 {% if p.get('tag') %}
                   <div class="machine-parameter" data-tag="{{ p.get('tag')|e }}" data-configured-tag="{{ p.get('configured_tag','')|e }}" data-plc-id="{{ p.get('plc_id') if p.get('plc_id') is not none else '' }}">
-                    <div class="machine-parameter-label">{{ p.get('label',p.get('tag',''))|e }}</div>
+                    <div class="machine-parameter-label">{{ p.get('label', p.get('tag',''))|e }}</div>
                     <div class="machine-parameter-value"><span data-value>--</span><span class="machine-parameter-unit">{{ p.get('unit','')|e }}</span></div>
                   </div>
                 {% endif %}
@@ -54,17 +107,16 @@
       {% endfor %}
     </div>
   </div>
-
   {% if not widgets %}<div class="empty">No dashboard widgets configured in Flow.</div>{% endif %}
 </div>
 <script>
-const socket=io({transports:["websocket","polling"],reconnection:true,reconnectionAttempts:Infinity,reconnectionDelay:1000,reconnectionDelayMax:5000});
+const socket = io({transports:["websocket","polling"],reconnection:true,reconnectionAttempts:Infinity,reconnectionDelay:1000,reconnectionDelayMax:5000});
 function setOnline(){const s=document.getElementById("status");s.textContent="ONLINE";s.className="status online";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="ONLINE";e.classList.add("online-state")})}
 function setOffline(){const s=document.getElementById("status");s.textContent="OFFLINE";s.className="status offline";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="OFFLINE";e.classList.remove("online-state")})}
 function apply(tag,value,plcId){if(value===null||value===undefined)return;const normal=String(tag).toLowerCase(),pid=plcId==null?"":String(plcId);document.querySelectorAll("[data-tag]").forEach(row=>{const rowPid=String(row.dataset.plcId||"");const rowTag=String(row.dataset.tag||"").toLowerCase();const configured=String(row.dataset.configuredTag||"").toLowerCase();if((normal===rowTag||normal===configured)&&(pid===""||rowPid===pid)){const target=row.querySelector("[data-value]");if(target)target.textContent=String(value)}})}
 function applyAll(data){if(!data){setOffline();return}if(Array.isArray(data.TagValues)){data.TagValues.forEach(item=>apply(item.TagName,item.Value,item.PLC_ID))}else{Object.keys(data.Tags||{}).forEach(k=>apply(k,data.Tags[k],null))}if(data.Online===true)setOnline();else setOffline()}
-socket.on("disconnect",setOffline);socket.on("tag_update",d=>{if(d&&Array.isArray(d.TagValues))applyAll(d);else if(d&&d.Tag){apply(d.Tag,d.Value,d.PLC_ID);if(d.Online===true)setOnline()}});socket.on("connect_error",setOffline);
-async function latest(){try{const r=await fetch("/dashboard/latest_plc?t="+Date.now(),{cache:"no-store",credentials:"same-origin"});if(!r.ok)throw new Error("HTTP "+r.status);const data=await r.json();console.log("DASHBOARD LATEST",data);applyAll(data)}catch(e){console.error("DASHBOARD DATA ERROR",e);setOffline()}}
+socket.on("disconnect",setOffline);socket.on("connect_error",setOffline);socket.on("tag_update",d=>{if(d&&Array.isArray(d.TagValues))applyAll(d);else if(d&&d.Tag){apply(d.Tag,d.Value,d.PLC_ID);if(d.Online===true)setOnline()}});
+async function latest(){try{const r=await fetch("/dashboard/latest_plc?t="+Date.now(),{cache:"no-store",credentials:"same-origin"});if(!r.ok)throw new Error("HTTP "+r.status);applyAll(await r.json())}catch(e){console.error("DASHBOARD DATA ERROR",e);setOffline()}}
 latest();setInterval(latest,1000);
 </script>
 <script src="/static/dashboard_machine_trend.js?v=20260912"></script>
