@@ -25,7 +25,7 @@ select,input{width:100%;min-width:0;padding:10px 12px;background:#20252b;color:#
 <div class="panel-title">Company</div>
 <div class="row"><div class="field full"><label>Company</label><select id="company"><option value="">Select Company</option>{% for company in companies %}<option value="{{ company.CompanyID }}">{{ company.CompanyName }}</option>{% endfor %}</select></div></div>
 <div id="companyInfo" class="command-meta">No company selected</div>
-<div class="actions"><button class="primary" type="button" onclick="enterCompany()">ENTER COMPANY</button><button class="secondary" type="button" onclick="openFlow()">FLOW DESIGNER</button><a class="success link-btn" href="{{ url_for('flow_company.master_database') }}">DATABASE VIEWER</a><a class="purple link-btn" href="/master/logs">LOGS</a></div>
+<div class="actions"><button class="primary" type="button" onclick="enterCompany()">ENTER COMPANY</button><button class="secondary" type="button" onclick="openFlow()">FLOW DESIGNER</button><a class="success link-btn" href="/master/database">DATABASE VIEWER</a><a class="purple link-btn" href="/master/logs">LOGS</a></div>
 </section>
 <section class="panel">
 <div class="panel-title">PLC WRITE</div>
