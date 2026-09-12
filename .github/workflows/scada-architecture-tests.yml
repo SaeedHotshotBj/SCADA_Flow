@@ -66,6 +66,34 @@ jobs:
           print("IMPORT-SAFE SERVICES PACKAGE OK")
           PY
 
+      - name: Verify dashboard service has no startup thread
+        run: |
+          ! grep -nE '(^|[^A-Za-z])threading|Thread\(' services/dashboard_service.py
+          ! grep -n 'edge_timeout_service' services/dashboard_service.py
+
+      - name: Verify PLC settings are Flow-defined
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path("services/runtime_bootstrap.py").read_text(encoding="utf-8")
+          assert 'data.get("port")' in text
+          assert 'data.get("slave")' in text
+          assert 'data.get("port", 502)' not in text
+          assert 'data.get("slave", 1)' not in text
+          print("PLC CONNECTION SETTINGS ARE FLOW-DEFINED")
+          PY
+
+      - name: Verify empty global flow has no project-specific configuration
+        run: |
+          python - <<'PY'
+          import json
+          with open("flow.json", encoding="utf-8") as f:
+              flow = json.load(f)
+          nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
+          assert nodes == {}, nodes
+          print("GLOBAL FLOW IS EMPTY: COMPANY FLOWS ARE AUTHORITATIVE")
+          PY
+
       - name: Verify application session setting is unchanged
         run: grep -n 'SESSION_COOKIE_SECURE.*False' app.py
 
