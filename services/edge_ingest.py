@@ -13,8 +13,11 @@ def ensure_edge_event_schema():
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         if "PLC_Data" in tables:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(PLC_Data)").fetchall()}
+            if "PLC_ID" not in columns:
+                conn.execute("ALTER TABLE PLC_Data ADD COLUMN PLC_ID INTEGER")
             if "EventID" not in columns:
                 conn.execute("ALTER TABLE PLC_Data ADD COLUMN EventID TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_plc_data_company_plc_tag_time ON PLC_Data(CompanyID, PLC_ID, TagName, Timestamp)")
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_plc_data_event_id ON PLC_Data(EventID) WHERE EventID IS NOT NULL")
         if "TagHistory" in tables:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(TagHistory)").fetchall()}
