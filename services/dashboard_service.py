@@ -25,7 +25,6 @@ def _to_plc_id(value):
 
 
 def _register_to_tag(nodes):
-    """Build (PLC_ID, register) -> TagMapper name lookup."""
     lookup = {}
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
