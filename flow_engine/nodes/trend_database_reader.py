@@ -6,13 +6,8 @@
 from datetime import datetime, timedelta
 import jdatetime
 
-from services.trend_aggregation import get_trend_series, get_trend_stats, start_aggregation_worker
+from services.trend_aggregation import get_trend_series, get_trend_stats
 from database import row_value
-
-try:
-    start_aggregation_worker()
-except Exception as exc:
-    print("TREND AGGREGATION START ERROR:", exc)
 
 
 class TrendDatabaseReader:
@@ -123,7 +118,7 @@ class TrendDatabaseReader:
         if start is None and end is None:
             end = datetime.now().replace(microsecond=0)
             start = end - timedelta(hours=2)
-        elif start is None or end is None:
+        elif start is None or end is None or start >= end:
             data["TrendData"], data["TrendStats"], data["TrendResolution"] = [], {}, {}
             return data
 
