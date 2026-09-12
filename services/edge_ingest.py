@@ -96,7 +96,6 @@ def _node_connections(nodes, node_id, direction="outputs"):
 
 
 def _flow_tag_storage(company_id):
-    """Resolve tag storage and PLC identity strictly from the saved company Flow."""
     flow_json = get_company_flow(company_id)
     if not flow_json:
         return {}
@@ -218,9 +217,11 @@ def ingest_items(items):
     try:
         conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("BEGIN IMMEDIATE")
+
         for item in items:
             if not isinstance(item, dict):
                 continue
+
             event_id = str(item.get("EventID", "")).strip()
             if not event_id:
                 errors.append({"EventID": event_id, "Error": "EventID is required"})
@@ -237,10 +238,14 @@ def ingest_items(items):
                 errors.append({"EventID": event_id, "Error": str(exc)})
                 continue
 
-            plc = conn.execute("SELECT PLC_ID, CompanyID FROM PLCs WHERE PLC_ID=?", (plc_id,)).fetchone()
+            plc = conn.execute(
+                "SELECT PLC_ID, CompanyID FROM PLCs WHERE PLC_ID=?",
+                (plc_id,),
+            ).fetchone()
             if plc is None:
                 errors.append({"EventID": event_id, "Error": "PLC not found"})
                 continue
+
             company_id = int(plc["CompanyID"])
 
             if company_id not in flow_cache:
@@ -249,31 +254,75 @@ def ingest_items(items):
             storage_type = storage_map.get((plc_id, tag.lower()))
             if storage_type is None:
                 storage_type = storage_map.get((plc_id, tag))
+
             if storage_type is None:
-                errors.append({"EventID": event_id, "Error": "Tag is not defined for this PLC by the company Flow"})
+                error = "Tag is not defined for this PLC by the company Flow"
+                errors.append({"EventID": event_id, "Error": error})
+                print(
+                    "EDGE INGEST REJECTED:",
+                    "CompanyID=", company_id,
+                    "PLC_ID=", plc_id,
+                    "Tag=", tag,
+                    "EventID=", event_id,
+                    "Reason=", error,
+                )
                 continue
 
-            existing = conn.execute("SELECT EventID FROM EdgeEventLedger WHERE EventID=?", (event_id,)).fetchone()
+            existing = conn.execute(
+                "SELECT EventID FROM EdgeEventLedger WHERE EventID=?",
+                (event_id,),
+            ).fetchone()
             if existing is not None:
-                acks.append(event_id)
-                continue
+                stored = conn.execute(
+                    "SELECT ID FROM PLC_Data WHERE EventID=? LIMIT 1",
+                    (event_id,),
+                ).fetchone()
+                if stored is not None:
+                    acks.append(event_id)
+                    continue
+                conn.execute(
+                    "DELETE FROM EdgeEventLedger WHERE EventID=?",
+                    (event_id,),
+                )
 
             savepoint = "edge_event"
             try:
                 conn.execute(f"SAVEPOINT {savepoint}")
                 received_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
-                conn.execute(
-                    "INSERT INTO EdgeEventLedger(EventID, CompanyID, PLC_ID, TagName, EventTimestamp, ReceivedAt) VALUES (?, ?, ?, ?, ?, ?)",
-                    (event_id, company_id, plc_id, tag, timestamp, received_at),
-                )
-                conn.execute(
-                    "INSERT INTO PLC_Data(CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID) VALUES (?, ?, ?, ?, ?, ?, ?)",
+
+                cursor = conn.execute(
+                    """
+                    INSERT INTO PLC_Data
+                    (CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
                     (company_id, plc_id, tag, value, storage_type, timestamp, event_id),
+                )
+
+                row_id = cursor.lastrowid
+                verify = conn.execute(
+                    "SELECT ID, CompanyID, PLC_ID, TagName, Value, Timestamp FROM PLC_Data WHERE ID=?",
+                    (row_id,),
+                ).fetchone()
+                if verify is None:
+                    raise RuntimeError("PLC_Data insert verification failed")
+
+                conn.execute(
+                    """
+                    INSERT INTO EdgeEventLedger
+                    (EventID, CompanyID, PLC_ID, TagName, EventTimestamp, ReceivedAt)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (event_id, company_id, plc_id, tag, timestamp, received_at),
                 )
 
                 try:
                     conn.execute(
-                        "INSERT INTO TagHistory(CompanyID, PLC_ID, TagName, Value, Timestamp, EventID) VALUES (?, ?, ?, ?, ?, ?)",
+                        """
+                        INSERT INTO TagHistory
+                        (CompanyID, PLC_ID, TagName, Value, Timestamp, EventID)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
                         (company_id, plc_id, tag, value, timestamp, event_id),
                     )
                 except Exception as history_exc:
@@ -282,15 +331,32 @@ def ingest_items(items):
                 conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 acks.append(event_id)
                 inserted += 1
+
             except Exception as exc:
                 try:
                     conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                     conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 except Exception:
                     pass
+
                 errors.append({"EventID": event_id, "Error": str(exc)})
+                print(
+                    "EDGE INGEST WRITE ERROR:",
+                    "CompanyID=", company_id,
+                    "PLC_ID=", plc_id,
+                    "Tag=", tag,
+                    "EventID=", event_id,
+                    "Reason=", exc,
+                )
 
         conn.commit()
+        print(
+            "EDGE INGEST RESULT:",
+            "received=", len(items),
+            "inserted=", inserted,
+            "acks=", len(acks),
+            "errors=", len(errors),
+        )
         return {"acks": acks, "errors": errors, "inserted": inserted}
     except Exception:
         conn.rollback()
