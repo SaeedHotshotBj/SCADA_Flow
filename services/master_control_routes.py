@@ -1,7 +1,9 @@
-"""Master control and Edge transport API routes."""
+"""Master control, dashboard filtering, and Edge transport API routes."""
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request, session, render_template
 
+from database import get_connection
+from services.dashboard_service import get_dashboard_widgets
 from services.edge_ingest import ingest_items, ensure_edge_event_schema
 from services.plc_write_service import (
     claim_next_command,
@@ -22,12 +24,22 @@ def _is_master():
 def _requested_company_id():
     value = request.args.get("company_id", type=int)
     if value is None:
+        value = session.get("selected_company_id") if _is_master() else session.get("company_id")
+    if value is None:
         payload = request.get_json(silent=True) or {}
         value = payload.get("CompanyID")
     try:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+@bp.get("/master/plc_write")
+def master_plc_write_page():
+    if not _is_master():
+        return jsonify({"status": "error", "message": "Master access required"}), 403
+    from database import get_companies
+    return render_template("master_plc_write.html", companies=get_companies())
 
 
 @bp.get("/master/plc_write/plcs")
@@ -38,7 +50,6 @@ def master_plc_write_plcs():
     if company_id is None:
         return jsonify({"status": "error", "message": "CompanyID is required"}), 400
 
-    from database import get_connection
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -82,6 +93,82 @@ def master_plc_write_status(command_id):
     return jsonify({"status": "ok", "command": command})
 
 
+@bp.get("/dashboard/latest_plc")
+def dashboard_latest_plc():
+    if not session.get("user_id"):
+        return jsonify({"status": "error", "message": "Login required"}), 401
+
+    company_id = _requested_company_id()
+    if company_id is None:
+        return jsonify({"Online": False, "Tags": {}, "Timestamps": {}, "TagValues": []})
+
+    widgets = get_dashboard_widgets(company_id)
+    tag_values = []
+    seen = set()
+    conn = get_connection()
+    try:
+        for widget in widgets:
+            if not isinstance(widget, dict) or widget.get("_dashboard_type") in {"machine", "machine_parameter"}:
+                continue
+            tag = str(widget.get("tag", "")).strip()
+            if not tag:
+                continue
+            try:
+                plc_id = int(widget.get("plc_id")) if widget.get("plc_id") is not None else None
+            except (TypeError, ValueError):
+                plc_id = None
+            key = (plc_id, tag.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+
+            if plc_id is None:
+                row = conn.execute(
+                    """
+                    SELECT PLC_ID, Value, Timestamp
+                    FROM PLC_Data
+                    WHERE CompanyID=? AND LOWER(TagName)=LOWER(?)
+                    ORDER BY Timestamp DESC, ID DESC
+                    LIMIT 1
+                    """,
+                    (company_id, tag),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT PLC_ID, Value, Timestamp
+                    FROM PLC_Data
+                    WHERE CompanyID=? AND PLC_ID=? AND LOWER(TagName)=LOWER(?)
+                    ORDER BY Timestamp DESC, ID DESC
+                    LIMIT 1
+                    """,
+                    (company_id, plc_id, tag),
+                ).fetchone()
+
+            if row is None:
+                continue
+            tag_values.append({
+                "PLC_ID": row["PLC_ID"],
+                "TagName": tag,
+                "Value": row["Value"],
+                "Timestamp": row["Timestamp"],
+                "title": widget.get("title", tag),
+                "unit": widget.get("unit", ""),
+            })
+    finally:
+        conn.close()
+
+    tags = {item["TagName"]: item["Value"] for item in tag_values}
+    timestamps = {item["TagName"]: item["Timestamp"] for item in tag_values}
+    return jsonify({
+        "Online": bool(tag_values),
+        "CompanyID": company_id,
+        "Tags": tags,
+        "Timestamps": timestamps,
+        "TagValues": tag_values,
+    })
+
+
 @bp.get("/api/edge/write_command")
 def edge_write_command():
     plc_id = request.args.get("PLC_ID", type=int)
@@ -89,7 +176,6 @@ def edge_write_command():
         return jsonify({"status": "error", "message": "PLC_ID is required"}), 400
     try:
         ensure_plc_write_schema()
-        from database import get_connection
         conn = get_connection()
         try:
             plc = conn.execute("SELECT PLC_ID FROM PLCs WHERE PLC_ID=?", (plc_id,)).fetchone()
