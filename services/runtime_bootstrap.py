@@ -32,7 +32,6 @@ def _sanitize_company_flow(flow_data):
     """Normalize Drawflow IDs and remove only known accidental legacy nodes."""
     if not isinstance(flow_data, dict):
         return flow_data, False
-
     home = (flow_data.get("drawflow", {}) or {}).get("Home", {})
     nodes = home.get("data") if isinstance(home, dict) else None
     if not isinstance(nodes, dict):
@@ -41,14 +40,11 @@ def _sanitize_company_flow(flow_data):
     cleaned = json.loads(json.dumps(flow_data, ensure_ascii=False))
     cleaned_nodes = cleaned.get("drawflow", {}).get("Home", {}).get("data", {})
     changed = False
-
     remove_ids = {
         str(node_id)
         for node_id, node in cleaned_nodes.items()
-        if isinstance(node, dict)
-        and str(node.get("name", "")).strip() in LEGACY_MANAGEMENT_NODE_NAMES
+        if isinstance(node, dict) and str(node.get("name", "")).strip() in LEGACY_MANAGEMENT_NODE_NAMES
     }
-
     for node_id in list(cleaned_nodes.keys()):
         if str(node_id) in remove_ids:
             del cleaned_nodes[node_id]
@@ -88,7 +84,6 @@ def _sanitize_company_flow(flow_data):
                     changed = True
                 repaired.append(connection)
             output["connections"] = repaired
-
         for input_item in (node.get("inputs", {}) or {}).values():
             if not isinstance(input_item, dict):
                 continue
@@ -109,7 +104,6 @@ def _sanitize_company_flow(flow_data):
                     changed = True
                 repaired.append(connection)
             input_item["connections"] = repaired
-
     return cleaned, changed
 
 
@@ -120,16 +114,13 @@ def _sanitize_saved_flow(conn, row):
     except Exception as exc:
         print("FLOW JSON REPAIR PARSE ERROR:", row["FlowID"], exc)
         return None
-
     cleaned, changed = _sanitize_company_flow(flow)
     if not changed:
         return cleaned
-
     conn.execute(
         """
         UPDATE Flows
-        SET FlowJson = ?,
-            LastModified = datetime('now', 'localtime')
+        SET FlowJson = ?, LastModified = datetime('now', 'localtime')
         WHERE FlowID = ?
         """,
         (json.dumps(cleaned, ensure_ascii=False), row["FlowID"]),
@@ -160,21 +151,12 @@ def _sync_flow_plc(flow_data, company_id):
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT PLC_ID FROM PLCs WHERE CompanyID = ? ORDER BY PLC_ID LIMIT 1",
-            (int(company_id),),
-        )
+        cursor.execute("SELECT PLC_ID FROM PLCs WHERE CompanyID = ? ORDER BY PLC_ID LIMIT 1", (int(company_id),))
         row = cursor.fetchone()
         if row:
-            cursor.execute(
-                "UPDATE PLCs SET PLC_Name=?, PLC_IP=?, PLC_Port=?, Slave_ID=? WHERE PLC_ID=?",
-                (name, ip, port, slave, int(row["PLC_ID"])),
-            )
+            cursor.execute("UPDATE PLCs SET PLC_Name=?, PLC_IP=?, PLC_Port=?, Slave_ID=? WHERE PLC_ID=?", (name, ip, port, slave, int(row["PLC_ID"])))
         else:
-            cursor.execute(
-                "INSERT INTO PLCs (CompanyID, PLC_Name, PLC_IP, PLC_Port, Slave_ID) VALUES (?, ?, ?, ?, ?)",
-                (int(company_id), name, ip, port, slave),
-            )
+            cursor.execute("INSERT INTO PLCs (CompanyID, PLC_Name, PLC_IP, PLC_Port, Slave_ID) VALUES (?, ?, ?, ?, ?)", (int(company_id), name, ip, port, slave))
         conn.commit()
         return True
     except Exception as exc:
@@ -195,9 +177,7 @@ def sync_all_saved_flows():
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT FlowID, CompanyID, FlowJson FROM Flows WHERE CompanyID IS NOT NULL AND FlowJson IS NOT NULL AND TRIM(FlowJson) <> '' ORDER BY FlowID"
-        )
+        cursor.execute("SELECT FlowID, CompanyID, FlowJson FROM Flows WHERE CompanyID IS NOT NULL AND FlowJson IS NOT NULL AND TRIM(FlowJson) <> '' ORDER BY FlowID")
         rows = cursor.fetchall()
         for row in rows:
             try:
@@ -248,8 +228,7 @@ def install_save_flow_sync(app):
     def _sync_saved_flow_to_plc(response):
         if request.path == "/save_flow" and request.method == "POST" and int(response.status_code) < 400:
             company_id = getattr(g, "_flow_plc_company_id", None)
-            flow_data = getattr(g, "_flow_plc_payload", None)
-            _sync_flow_plc(flow_data, company_id)
+            _sync_flow_plc(getattr(g, "_flow_plc_payload", None), company_id)
             _sanitize_saved_flow_for_company(company_id)
         return response
 
@@ -292,7 +271,6 @@ def install_flow_json_guard(app):
         company_id = _resolve_company_id(request, session)
         if company_id is None:
             return jsonify({"error": "Company not selected"}), 403
-
         try:
             conn = get_connection()
             try:
@@ -313,6 +291,27 @@ def install_flow_json_guard(app):
             return jsonify({"status": "error", "message": str(exc)}), 500
 
     app._company_flow_json_guard_installed = True
+
+
+def _database_ready():
+    from database import get_connection
+    conn = None
+    try:
+        conn = get_connection()
+        required = {"Companies", "Users", "PLCs", "Flows", "PLC_Data", "TagHistory"}
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        existing = {str(row["name"]) for row in rows}
+        missing = required - existing
+        if missing:
+            print("APPLICATION SERVICES DATABASE NOT READY:", sorted(missing))
+            return False
+        return True
+    except Exception as exc:
+        print("APPLICATION SERVICES DATABASE CHECK ERROR:", exc)
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def register_flow_company_blueprint(app):
@@ -359,6 +358,9 @@ def bootstrap(app):
     install_save_flow_sync(app)
     install_flow_json_guard(app)
     register_flow_company_blueprint(app)
+    if not _database_ready():
+        print("APPLICATION SERVICES WORKERS SKIPPED: database is not ready")
+        return False
     sync_all_saved_flows()
     load_master_logs()
     start_edge_timeout_worker()
