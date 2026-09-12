@@ -71,20 +71,24 @@ def _validate_numeric(value):
     return number
 
 
-def _allowed_flow_tags(company_id):
+def _flow_tag_storage(company_id):
     flow_json = get_company_flow(company_id)
     if not flow_json:
-        return set()
+        return {}
     try:
         flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
     except Exception:
-        return set()
+        return {}
     nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
-    allowed = set()
+    allowed = {}
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
             continue
         data = node.get("data", {}) or {}
+        if isinstance(data.get("config"), dict):
+            merged = dict(data["config"])
+            merged.update({k: v for k, v in data.items() if k != "config"})
+            data = merged
         mappings = data.get("mappings", [])
         if not isinstance(mappings, list):
             continue
@@ -96,7 +100,10 @@ def _allowed_flow_tags(company_id):
             if not name:
                 continue
             try:
-                allowed.add((int(plc_id), name.lower()))
+                storage = str(mapping.get("storage", "TIME")).upper().strip()
+                if storage not in {"TIME", "TRIGGER"}:
+                    continue
+                allowed[(int(plc_id), name.lower())] = storage
             except (TypeError, ValueError):
                 continue
     return allowed
@@ -111,6 +118,7 @@ def ingest_items(items):
     errors = []
     inserted = 0
     conn = get_connection()
+    flow_cache = {}
     try:
         conn.execute("BEGIN IMMEDIATE")
         for item in items:
@@ -131,24 +139,20 @@ def ingest_items(items):
                 errors.append({"EventID": event_id, "Error": str(exc)})
                 continue
 
-            plc = conn.execute(
-                "SELECT PLC_ID, CompanyID FROM PLCs WHERE PLC_ID=?",
-                (plc_id,),
-            ).fetchone()
+            plc = conn.execute("SELECT PLC_ID, CompanyID FROM PLCs WHERE PLC_ID=?", (plc_id,)).fetchone()
             if plc is None:
                 errors.append({"EventID": event_id, "Error": "PLC not found"})
                 continue
             company_id = int(plc["CompanyID"])
 
-            allowed = _allowed_flow_tags(company_id)
-            if allowed and (plc_id, tag.lower()) not in allowed:
-                errors.append({"EventID": event_id, "Error": "Tag is not defined by the company Flow"})
+            if company_id not in flow_cache:
+                flow_cache[company_id] = _flow_tag_storage(company_id)
+            storage_type = flow_cache[company_id].get((plc_id, tag.lower()))
+            if storage_type is None:
+                errors.append({"EventID": event_id, "Error": "Tag is not defined for this PLC by the company Flow"})
                 continue
 
-            existing = conn.execute(
-                "SELECT EventID FROM EdgeEventLedger WHERE EventID=?",
-                (event_id,),
-            ).fetchone()
+            existing = conn.execute("SELECT EventID FROM EdgeEventLedger WHERE EventID=?", (event_id,)).fetchone()
             if existing is not None:
                 acks.append(event_id)
                 continue
@@ -159,8 +163,8 @@ def ingest_items(items):
                 (event_id, company_id, plc_id, tag, timestamp, received_at),
             )
             conn.execute(
-                "INSERT INTO PLC_Data(CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID) VALUES (?, ?, ?, ?, 'EDGE', ?, ?)",
-                (company_id, plc_id, tag, value, timestamp, event_id),
+                "INSERT INTO PLC_Data(CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (company_id, plc_id, tag, value, storage_type, timestamp, event_id),
             )
             conn.execute(
                 "INSERT INTO TagHistory(CompanyID, PLC_ID, TagName, Value, Timestamp, EventID) VALUES (?, ?, ?, ?, ?, ?)",
