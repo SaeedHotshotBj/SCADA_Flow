@@ -1,4 +1,8 @@
-"""Explicit ManagementPanel-aware SQLWriter."""
+"""Explicit ManagementPanel-aware SQLWriter.
+
+Report snapshots remain owned by ReportOutput. This class only supplies the
+management-context backfill behavior that used to be injected by monkey patch.
+"""
 
 import json
 from datetime import datetime
@@ -8,6 +12,11 @@ from flow_engine.nodes.sql_writer import SQLWriter
 
 
 class ManagementSQLWriter(SQLWriter):
+    def _get_report_products(self):
+        # ReportOutput is the single owner of ReportHistory snapshots.
+        # SQLWriter continues to handle historian/tag persistence only.
+        return []
+
     def _trigger_register_for_tag(self, tag):
         flow_json = get_company_flow(self.company_id)
         if not flow_json:
@@ -46,17 +55,21 @@ class ManagementSQLWriter(SQLWriter):
         trigger_register = self._trigger_register_for_tag(tag)
         conn = get_connection()
         try:
-            columns = {row["name"] for row in conn.execute('PRAGMA table_info("ReportHistory")').fetchall()}
+            columns = {
+                row["name"]
+                for row in conn.execute('PRAGMA table_info("ReportHistory")').fetchall()
+            }
             required = {"ReportID", "CompanyID", "Timestamp", "TriggerRegister", field}
             if not required.issubset(columns):
                 return None
-            sql = f"""
+
+            sql = """
                 SELECT ReportID FROM ReportHistory
                 WHERE CompanyID = ?
                   AND TRIM(COALESCE({field}, '')) = ''
                   AND datetime(Timestamp) >= datetime(?, '-15 seconds')
                   AND datetime(Timestamp) <= datetime(?, '+2 seconds')
-            """
+            """.format(field=field)
             params = [int(self.company_id), str(timestamp), str(timestamp)]
             if trigger_register is not None:
                 sql += " AND CAST(TriggerRegister AS TEXT) = ?"
@@ -65,8 +78,15 @@ class ManagementSQLWriter(SQLWriter):
             report = conn.execute(sql, params).fetchone()
             if report is None:
                 return None
+
             conn.execute(
-                f"UPDATE ReportHistory SET {field} = ? WHERE ReportID = ? AND CompanyID = ? AND TRIM(COALESCE({field}, '')) = ''",
+                f"""
+                UPDATE ReportHistory
+                SET {field} = ?
+                WHERE ReportID = ?
+                  AND CompanyID = ?
+                  AND TRIM(COALESCE({field}, '')) = ''
+                """,
                 (str(value).strip(), int(report["ReportID"]), int(self.company_id)),
             )
             conn.commit()
