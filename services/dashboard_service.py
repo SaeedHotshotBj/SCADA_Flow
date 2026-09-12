@@ -24,12 +24,22 @@ def _to_plc_id(value):
         return None
 
 
+def _node_config(node):
+    data = node.get("data", {}) or {}
+    config = data.get("config")
+    if isinstance(config, dict):
+        merged = dict(config)
+        merged.update({k: v for k, v in data.items() if k != "config"})
+        return merged
+    return data
+
+
 def _register_to_tag(nodes):
     lookup = {}
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
             continue
-        data = node.get("data", {}) or {}
+        data = _node_config(node)
         mappings = data.get("mappings", [])
         if not isinstance(mappings, list):
             continue
@@ -42,7 +52,7 @@ def _register_to_tag(nodes):
             if not name or register in (None, ""):
                 continue
             try:
-                register = str(int(register))
+                register = str(int(float(register)))
             except (TypeError, ValueError):
                 register = str(register).strip()
             lookup[(plc_id, register)] = name
@@ -75,7 +85,7 @@ def get_dashboard_widgets(company_id):
                 continue
 
             if node.get("name") == "DashboardOutput":
-                data = node.get("data", {}) or {}
+                data = _node_config(node)
                 configured = data.get("widgets", [])
                 if isinstance(configured, list):
                     for widget in configured:
@@ -86,7 +96,7 @@ def get_dashboard_widgets(company_id):
                         widgets.append(item)
 
             elif node.get("name") == "MachineCard":
-                data = node.get("data", {}) or {}
+                data = _node_config(node)
                 configured_machines = data.get("machines", [])
                 configured_icons = data.get("icon_library", [])
 
