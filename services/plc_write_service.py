@@ -1,7 +1,6 @@
 """Durable Master -> Edge -> PLC write command service."""
 
 from datetime import datetime, timedelta
-import math
 
 from database import get_connection
 
@@ -21,6 +20,41 @@ def _validate_u16(value, field_name):
     if parsed < 0 or parsed > 65535:
         raise ValueError(f"{field_name} must be between 0 and 65535")
     return parsed
+
+
+def _create_edge_timeout_state(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS EdgeTimeoutState (
+            CompanyID INTEGER NOT NULL,
+            PLC_ID INTEGER NOT NULL,
+            LastReceivedAt TEXT,
+            TimeoutSeconds REAL NOT NULL DEFAULT 10.0,
+            TimedOut INTEGER NOT NULL DEFAULT 0,
+            LastTimeoutAt TEXT,
+            UpdatedAt TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (CompanyID, PLC_ID)
+        )
+        """
+    )
+
+
+def _ensure_legacy_edge_timeout_state(conn):
+    # EdgeTimeoutState is operational cache, not historian data. Older builds
+    # created it with CompanyID alone. Rebuild that cache when its primary key
+    # cannot represent multiple PLCs for the same company.
+    existing = conn.execute("PRAGMA table_info(EdgeTimeoutState)").fetchall()
+    if existing:
+        columns = {row["name"] for row in existing}
+        pk_columns = [row["name"] for row in sorted(existing, key=lambda item: int(item["pk"])) if int(row["pk"] or 0) > 0]
+        if "PLC_ID" not in columns or pk_columns != ["CompanyID", "PLC_ID"]:
+            conn.execute("DROP TABLE IF EXISTS EdgeTimeoutState")
+
+    _create_edge_timeout_state(conn)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_edge_timeout_state_company_plc "
+        "ON EdgeTimeoutState(CompanyID, PLC_ID)"
+    )
 
 
 def ensure_plc_write_schema():
@@ -46,11 +80,45 @@ def ensure_plc_write_schema():
             )
             """
         )
+
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(PLCWriteCommands)").fetchall()
+        }
+        required = {
+            "CompanyID": "INTEGER",
+            "PLC_ID": "INTEGER",
+            "Register": "INTEGER",
+            "Value": "INTEGER",
+            "Status": "TEXT NOT NULL DEFAULT 'Pending'",
+            "AttemptCount": "INTEGER NOT NULL DEFAULT 0",
+            "CreatedAt": "TEXT",
+            "ClaimedAt": "TEXT",
+            "LeaseUntil": "TEXT",
+            "CompletedAt": "TEXT",
+            "ErrorMessage": "TEXT",
+        }
+        for name, definition in required.items():
+            if name not in columns:
+                conn.execute(f'ALTER TABLE PLCWriteCommands ADD COLUMN "{name}" {definition}')
+
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_plc_write_pending ON PLCWriteCommands(PLC_ID, Status, CommandID)"
+            "UPDATE PLCWriteCommands SET Status='Pending' "
+            "WHERE Status IS NULL OR TRIM(Status)=''"
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_plc_write_company ON PLCWriteCommands(CompanyID, CreatedAt)"
+            "UPDATE PLCWriteCommands SET AttemptCount=0 WHERE AttemptCount IS NULL"
+        )
+
+        _ensure_legacy_edge_timeout_state(conn)
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_plc_write_pending "
+            "ON PLCWriteCommands(PLC_ID, Status, CommandID)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_plc_write_company "
+            "ON PLCWriteCommands(CompanyID, CreatedAt)"
         )
         conn.commit()
     finally:
@@ -58,6 +126,7 @@ def ensure_plc_write_schema():
 
 
 def queue_write(company_id, plc_id, register, value):
+    ensure_plc_write_schema()
     register = _validate_u16(register, "Register")
     value = _validate_u16(value, "Value")
     company_id = int(company_id)
@@ -76,8 +145,8 @@ def queue_write(company_id, plc_id, register, value):
         cur = conn.execute(
             """
             INSERT INTO PLCWriteCommands
-            (CompanyID, PLC_ID, Register, Value, Status, CreatedAt)
-            VALUES (?, ?, ?, ?, 'Pending', ?)
+            (CompanyID, PLC_ID, Register, Value, Status, AttemptCount, CreatedAt)
+            VALUES (?, ?, ?, ?, 'Pending', 0, ?)
             """,
             (company_id, plc_id, register, value, now),
         )
@@ -157,7 +226,7 @@ def complete_command(command_id, plc_id, success, error_message=None):
         conn.execute(
             """
             UPDATE PLCWriteCommands
-            SET Status=?, CompletedAt=?, ErrorMessage=?, LeaseUntil=NULL
+            SET Status=?, CompletedAt=?, ErrorMessage=?, LeaseUntil=NULL, ClaimedAt=NULL
             WHERE CommandID=? AND PLC_ID=? AND Status IN ('Claimed','Pending')
             """,
             (status, _now(), str(error_message)[:1000] if error_message else None, command_id, plc_id),

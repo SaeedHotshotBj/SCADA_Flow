@@ -366,11 +366,35 @@ def send_dashboard_data(data):
         else:
             socketio_instance.emit("tag_update", data)
 
-        # Trend page consumes a normalized per-tag live event.
-        if isinstance(tags, dict):
+        # Prefer the PLC-aware TagValues list when available so equal tag names
+        # from different PLCs cannot collide in the dashboard browser.
+        tag_values = data.get("TagValues", []) if isinstance(data, dict) else []
+        if isinstance(tag_values, list) and tag_values:
+            for item in tag_values:
+                if not isinstance(item, dict):
+                    continue
+                tag = item.get("TagName", item.get("tag"))
+                value = item.get("Value", item.get("value"))
+                if tag is None:
+                    continue
+                payload = {
+                    "CompanyID": company_id,
+                    "PLC_ID": item.get("PLC_ID", item.get("plc_id")),
+                    "Tag": tag,
+                    "Value": value,
+                    "Timestamp": item.get("Timestamp", timestamp),
+                    "title": item.get("title", tag),
+                    "unit": item.get("unit", ""),
+                }
+                if room is not None:
+                    socketio_instance.emit("tag_update", payload, room=room)
+                else:
+                    socketio_instance.emit("tag_update", payload)
+        elif isinstance(tags, dict):
             for tag, value in tags.items():
                 payload = {
                     "CompanyID": company_id,
+                    "PLC_ID": data.get("PLC_ID"),
                     "Tag": tag,
                     "Value": value,
                     "Timestamp": timestamp,

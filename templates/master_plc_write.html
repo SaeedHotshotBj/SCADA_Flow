@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SCADA FLOW - PLC Write</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#20252b;color:#fff;font-family:Arial,sans-serif}.topbar{height:70px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:#171b20;border-bottom:1px solid #3d464f}.brand{display:flex;align-items:center;gap:12px}.brand-icon{width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#1677ff;font-weight:bold;font-size:18px}.brand-text{font-size:20px;font-weight:bold;letter-spacing:1px}.master-label{color:#9da7b0;font-size:13px}.logout{color:#c3c9ce;text-decoration:none;padding:9px 14px;border-radius:6px;border:1px solid #48525c}.logout:hover{background:#343c44;color:#fff}.main{padding:28px}.page-title{margin-bottom:25px}.page-title h1{margin:0;font-size:25px}.page-title p{margin:7px 0 0;color:#8f9aa4;font-size:14px}.panel{max-width:760px;background:#2b3239;border:1px solid #46515b;border-radius:10px;padding:22px;box-shadow:0 8px 25px rgba(0,0,0,.25)}.panel-title{margin-bottom:10px;font-size:18px;font-weight:bold}.panel-note{font-size:12px;color:#8f9aa4;line-height:1.6;margin-bottom:18px}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}.field label{display:block;margin-bottom:6px;color:#cfd5da;font-size:12px}.full{grid-column:1/-1}select,input{width:100%;min-width:0;padding:11px 12px;background:#20252b;color:#fff;border:1px solid #59636d;border-radius:7px;font-size:14px;outline:none}select:focus,input:focus{border-color:#1677ff}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}button,.link-btn{padding:11px 16px;border-radius:7px;border:0;font-size:13px;font-weight:bold;cursor:pointer;text-decoration:none;display:inline-block}.primary{background:#1677ff;color:#fff}.primary:hover{background:#0866df}.secondary{background:#3a444e;color:#fff;border:1px solid #596570}.secondary:hover{background:#48545f}.status{margin-top:14px;padding:11px;border-radius:7px;background:#20252b;border:1px solid #3d464f;color:#aeb7bf;min-height:42px;line-height:1.5}.status.ok{border-color:#31764f;color:#b9f0cc}.status.err{border-color:#8c3c3c;color:#ffbaba}.meta{margin-top:10px;color:#8f9aa4;font-size:12px;line-height:1.6}@media(max-width:650px){.topbar{padding:0 15px}.main{padding:18px}.row{grid-template-columns:1fr}.actions button,.actions a{width:100%;text-align:center}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="brand"><div class="brand-icon">S</div><div><div class="brand-text">SCADA FLOW</div><div class="master-label">Master Control / PLC Write</div></div></div><a class="logout" href="{{ url_for('logout') }}">Logout</a></header>
+<main class="main">
+<div class="page-title"><h1>PLC Write</h1><p>Write an arbitrary value to a holding register through the selected company PLC Edge connection.</p></div>
+<section class="panel">
+<div class="panel-title">PLC Write Command</div>
+<div class="panel-note">The command is queued on the server, claimed by the Edge for the selected PLC, written physically to the PLC, and then completed with a final result.</div>
+<div class="row">
+<div class="field full"><label>Company</label><select id="writeCompany"><option value="">Select Company</option>{% for company in companies %}<option value="{{ company.CompanyID }}">{{ company.CompanyName }}</option>{% endfor %}</select></div>
+<div class="field full"><label>PLC</label><select id="writePlc" disabled><option value="">Select company first</option></select></div>
+<div class="field"><label>Register (0 .. 65535)</label><input id="writeRegister" type="number" min="0" max="65535" step="1" placeholder="e.g. 200"></div>
+<div class="field"><label>Value (0 .. 65535)</label><input id="writeValue" type="number" min="0" max="65535" step="1" placeholder="e.g. 1"></div>
+</div>
+<div class="actions"><button class="primary" type="button" id="writeButton">WRITE TO PLC</button><a class="secondary link-btn" href="/master_companies">BACK TO MASTER</a></div>
+<div id="writeStatus" class="status">Ready.</div>
+<div id="writeMeta" class="meta"></div>
+</section>
+</main>
+<script>
+const companySelect=document.getElementById('writeCompany'),plcSelect=document.getElementById('writePlc'),reg=document.getElementById('writeRegister'),val=document.getElementById('writeValue'),statusBox=document.getElementById('writeStatus'),meta=document.getElementById('writeMeta'),button=document.getElementById('writeButton');
+function status(text,error){statusBox.textContent=text;statusBox.className='status '+(error?'err':'ok')}
+async function loadPlcs(){const id=companySelect.value;plcSelect.disabled=true;plcSelect.innerHTML='<option value="">Loading PLCs...</option>';if(!id){plcSelect.innerHTML='<option value="">Select company first</option>';return;}try{const r=await fetch('/master/plc_write/plcs?company_id='+encodeURIComponent(id),{cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.message||('HTTP '+r.status));plcSelect.innerHTML='<option value="">Select PLC</option>';d.forEach(p=>plcSelect.add(new Option((p.PLC_Name||('PLC '+p.PLC_ID))+' • '+(p.PLC_IP||'-')+' • Slave '+p.Slave_ID,String(p.PLC_ID))));plcSelect.disabled=false;if(d.length===1)plcSelect.value=String(d[0].PLC_ID)}catch(e){plcSelect.innerHTML='<option value="">Could not load PLCs</option>';status('PLC list error: '+e.message,true)}}
+async function poll(companyId,commandId){for(let i=0;i<60;i++){await new Promise(r=>setTimeout(r,500));try{const r=await fetch('/master/plc_write/'+encodeURIComponent(commandId)+'?company_id='+encodeURIComponent(companyId),{cache:'no-store'});if(!r.ok)continue;const d=await r.json(),c=d.command;if(!c)continue;meta.textContent='Command #'+c.CommandID+' • Status: '+c.Status+' • PLC '+c.PLC_ID+' • Register '+c.Register+' • Value '+c.Value+(c.ErrorMessage?' • '+c.ErrorMessage:'');if(c.Status==='Success'){status('PLC write completed successfully.',false);return}if(c.Status==='Failed'){status('PLC write failed: '+(c.ErrorMessage||'Unknown error'),true);return}}catch(_e){}}status('Command is still pending. Edge has not reported a final result yet.',true)}
+button.addEventListener('click',async()=>{const CompanyID=Number(companySelect.value),PLC_ID=Number(plcSelect.value),Register=Number(reg.value),Value=Number(val.value);if(!CompanyID||!PLC_ID){status('Select company and PLC.',true);return}if(!Number.isInteger(Register)||Register<0||Register>65535){status('Register must be an integer from 0 to 65535.',true);return}if(!Number.isInteger(Value)||Value<0||Value>65535){status('Value must be an integer from 0 to 65535.',true);return}button.disabled=true;meta.textContent='';status('Queueing PLC write command...',false);try{const r=await fetch('/master/plc_write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({CompanyID,PLC_ID,Register,Value})});const d=await r.json();if(!r.ok)throw new Error(d.message||('HTTP '+r.status));const c=d.command;meta.textContent='Command #'+c.CommandID+' queued • PLC '+c.PLC_ID+' • Register '+c.Register+' • Value '+c.Value;status('Command queued. Waiting for Edge result...',false);poll(CompanyID,c.CommandID)}catch(e){status('Write command error: '+e.message,true)}finally{button.disabled=false}});
+companySelect.addEventListener('change',loadPlcs);
+</script>
+</body>
+</html>
