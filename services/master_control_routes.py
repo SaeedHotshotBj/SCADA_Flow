@@ -108,7 +108,7 @@ def dashboard_latest_plc():
     conn = get_connection()
     try:
         for widget in widgets:
-            if not isinstance(widget, dict) or widget.get("_dashboard_type") in {"machine", "machine_parameter"}:
+            if not isinstance(widget, dict) or widget.get("_dashboard_type") == "machine":
                 continue
             tag = str(widget.get("tag", "")).strip()
             if not tag:
