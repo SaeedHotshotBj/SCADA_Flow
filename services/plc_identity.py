@@ -1,6 +1,11 @@
 # SCADA_FLOW PLC identity / multi-PLC schema helpers
 import datetime
 import json
+import threading
+
+
+_PLC_SCHEMA_LOCK = threading.Lock()
+_PLC_SCHEMA_READY = False
 
 
 def _table_columns(conn, table):
@@ -8,69 +13,84 @@ def _table_columns(conn, table):
 
 
 def ensure_plc_identity_schema():
-    from database import get_connection
-    conn = get_connection()
-    try:
-        conn.execute("BEGIN")
-        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-        for table in ("Tags", "PLC_Data", "AlarmHistory", "ReportHistory"):
-            if table not in tables:
-                continue
-            if "PLC_ID" not in _table_columns(conn, table):
-                conn.execute(f'ALTER TABLE "{table}" ADD COLUMN PLC_ID INTEGER')
-            conn.execute(f'''UPDATE "{table}" SET PLC_ID=(SELECT MIN(p.PLC_ID) FROM PLCs p WHERE p.CompanyID="{table}".CompanyID)
-                             WHERE PLC_ID IS NULL AND 1=(SELECT COUNT(*) FROM PLCs p2 WHERE p2.CompanyID="{table}".CompanyID)''')
+    global _PLC_SCHEMA_READY
 
-        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-        if "Flows" in tables and "PLCs" in tables:
-            for row in conn.execute("SELECT FlowID,CompanyID,FlowJson FROM Flows WHERE CompanyID IS NOT NULL").fetchall():
-                plc_rows=conn.execute("SELECT PLC_ID FROM PLCs WHERE CompanyID=? ORDER BY PLC_ID",(row["CompanyID"],)).fetchall()
-                if not plc_rows: continue
-                default_plc=int(plc_rows[0]["PLC_ID"])
-                try: flow=json.loads(row["FlowJson"] or "{}")
-                except Exception: continue
-                changed=False
-                nodes=flow.get("drawflow",{}).get("Home",{}).get("data",{}) or {}
-                for node in nodes.values():
-                    if not isinstance(node,dict): continue
-                    config=node.get("data",{}) or {}
-                    config=config.get("config",config) or {}
-                    if node.get("name")=="PLCReader" and config.get("plc_id") in (None,""):
-                        config["plc_id"]=default_plc; changed=True
-                    if node.get("name")=="TagMapper":
-                        for mapping in config.get("mappings",[]) if isinstance(config.get("mappings",[]),list) else []:
-                            if isinstance(mapping,dict) and mapping.get("plc_id",mapping.get("PLC_ID")) in (None,""):
-                                mapping["plc_id"]=default_plc; changed=True
-                if changed:
-                    conn.execute("UPDATE Flows SET FlowJson=?,LastModified=datetime('now','localtime') WHERE FlowID=?",(json.dumps(flow,ensure_ascii=False),row["FlowID"]))
+    if _PLC_SCHEMA_READY:
+        return
 
-        if "FlowTriggerState" in tables:
-            cols=_table_columns(conn,"FlowTriggerState")
-            if "PLC_ID" not in cols:
-                conn.execute("ALTER TABLE FlowTriggerState ADD COLUMN PLC_ID INTEGER")
-            conn.execute("""UPDATE FlowTriggerState SET PLC_ID=(SELECT MIN(p.PLC_ID) FROM PLCs p WHERE p.CompanyID=FlowTriggerState.CompanyID)
-                           WHERE PLC_ID IS NULL AND 1=(SELECT COUNT(*) FROM PLCs p2 WHERE p2.CompanyID=FlowTriggerState.CompanyID)""")
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_trigger_state_company_plc_register ON FlowTriggerState(CompanyID,PLC_ID,TriggerRegister)")
+    # The schema migration touches several tables and FlowJson rows. Serialize
+    # all callers inside this process so startup workers cannot contend for a
+    # SQLite write lock while the migration is running.
+    with _PLC_SCHEMA_LOCK:
+        if _PLC_SCHEMA_READY:
+            return
 
-        for table,idx,cols in (
-            ("Tags","idx_tags_company_plc_name","CompanyID,PLC_ID,TagName"),
-            ("PLC_Data","idx_plc_data_company_plc_tag_time","CompanyID,PLC_ID,TagName,Timestamp"),
-            ("TagHistory","idx_tag_history_company_plc_tag_time","CompanyID,PLC_ID,TagName,Timestamp"),
-            ("AlarmHistory","idx_alarm_history_company_plc_time","CompanyID,PLC_ID,Timestamp"),
-            ("ReportHistory","idx_report_history_company_plc_time","CompanyID,PLC_ID,Timestamp"),
-        ):
-            if table in tables:
-                conn.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON {table}({cols})")
+        from database import get_connection
+        conn = get_connection()
+        try:
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute("BEGIN IMMEDIATE")
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            for table in ("Tags", "PLC_Data", "AlarmHistory", "ReportHistory"):
+                if table not in tables:
+                    continue
+                if "PLC_ID" not in _table_columns(conn, table):
+                    conn.execute(f'ALTER TABLE "{table}" ADD COLUMN PLC_ID INTEGER')
+                conn.execute(f'''UPDATE "{table}" SET PLC_ID=(SELECT MIN(p.PLC_ID) FROM PLCs p WHERE p.CompanyID="{table}".CompanyID)
+                                 WHERE PLC_ID IS NULL AND 1=(SELECT COUNT(*) FROM PLCs p2 WHERE p2.CompanyID="{table}".CompanyID)''')
 
-        if "TagHistory" in tables and "PLC_Data" in tables:
-            conn.execute('''CREATE TRIGGER IF NOT EXISTS trg_tag_history_stamp_plc_data AFTER INSERT ON TagHistory BEGIN
-                UPDATE PLC_Data SET PLC_ID=NEW.PLC_ID WHERE ID=(SELECT ID FROM PLC_Data WHERE CompanyID=NEW.CompanyID AND LOWER(TagName)=LOWER(NEW.TagName) AND Timestamp=NEW.Timestamp AND PLC_ID IS NULL ORDER BY ID DESC LIMIT 1);
-            END''')
-        conn.commit()
-    except Exception:
-        conn.rollback(); raise
-    finally:
-        conn.close()
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "Flows" in tables and "PLCs" in tables:
+                for row in conn.execute("SELECT FlowID,CompanyID,FlowJson FROM Flows WHERE CompanyID IS NOT NULL").fetchall():
+                    plc_rows=conn.execute("SELECT PLC_ID FROM PLCs WHERE CompanyID=? ORDER BY PLC_ID",(row["CompanyID"],)).fetchall()
+                    if not plc_rows: continue
+                    default_plc=int(plc_rows[0]["PLC_ID"])
+                    try: flow=json.loads(row["FlowJson"] or "{}")
+                    except Exception: continue
+                    changed=False
+                    nodes=flow.get("drawflow",{}).get("Home",{}).get("data",{}) or {}
+                    for node in nodes.values():
+                        if not isinstance(node,dict): continue
+                        config=node.get("data",{}) or {}
+                        config=config.get("config",config) or {}
+                        if node.get("name")=="PLCReader" and config.get("plc_id") in (None,""):
+                            config["plc_id"]=default_plc; changed=True
+                        if node.get("name")=="TagMapper":
+                            for mapping in config.get("mappings",[]) if isinstance(config.get("mappings",[]),list) else []:
+                                if isinstance(mapping,dict) and mapping.get("plc_id",mapping.get("PLC_ID")) in (None,""):
+                                    mapping["plc_id"]=default_plc; changed=True
+                    if changed:
+                        conn.execute("UPDATE Flows SET FlowJson=?,LastModified=datetime('now','localtime') WHERE FlowID=?",(json.dumps(flow,ensure_ascii=False),row["FlowID"]))
+
+            if "FlowTriggerState" in tables:
+                cols=_table_columns(conn,"FlowTriggerState")
+                if "PLC_ID" not in cols:
+                    conn.execute("ALTER TABLE FlowTriggerState ADD COLUMN PLC_ID INTEGER")
+                conn.execute("""UPDATE FlowTriggerState SET PLC_ID=(SELECT MIN(p.PLC_ID) FROM PLCs p WHERE p.CompanyID=FlowTriggerState.CompanyID)
+                               WHERE PLC_ID IS NULL AND 1=(SELECT COUNT(*) FROM PLCs p2 WHERE p2.CompanyID=FlowTriggerState.CompanyID)""")
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_trigger_state_company_plc_register ON FlowTriggerState(CompanyID,PLC_ID,TriggerRegister)")
+
+            for table,idx,cols in (
+                ("Tags","idx_tags_company_plc_name","CompanyID,PLC_ID,TagName"),
+                ("PLC_Data","idx_plc_data_company_plc_tag_time","CompanyID,PLC_ID,TagName,Timestamp"),
+                ("TagHistory","idx_tag_history_company_plc_tag_time","CompanyID,PLC_ID,TagName,Timestamp"),
+                ("AlarmHistory","idx_alarm_history_company_plc_time","CompanyID,PLC_ID,Timestamp"),
+                ("ReportHistory","idx_report_history_company_plc_time","CompanyID,PLC_ID,Timestamp"),
+            ):
+                if table in tables:
+                    conn.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON {table}({cols})")
+
+            if "TagHistory" in tables and "PLC_Data" in tables:
+                conn.execute('''CREATE TRIGGER IF NOT EXISTS trg_tag_history_stamp_plc_data AFTER INSERT ON TagHistory BEGIN
+                    UPDATE PLC_Data SET PLC_ID=NEW.PLC_ID WHERE ID=(SELECT ID FROM PLC_Data WHERE CompanyID=NEW.CompanyID AND LOWER(TagName)=LOWER(NEW.TagName) AND Timestamp=NEW.Timestamp AND PLC_ID IS NULL ORDER BY ID DESC LIMIT 1);
+                END''')
+            conn.commit()
+            _PLC_SCHEMA_READY = True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def insert_plc_data(company_id,plc_id,tag,value,storage_type,timestamp=None):
