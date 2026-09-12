@@ -18,7 +18,6 @@ from config import DB_CONFIG
 
 getcontext().prec = 40
 
-# Keep enough raw TIME history to rebuild the complete 600-day TrendDay view.
 RAW_RETENTION_DAYS = int(os.environ.get("SCADA_TREND_RAW_RETENTION_DAYS", "605"))
 MINUTE_RETENTION_HOURS = int(os.environ.get("SCADA_TREND_MINUTE_RETENTION_HOURS", "2"))
 HOUR_RETENTION_DAYS = int(os.environ.get("SCADA_TREND_HOUR_RETENTION_DAYS", "2"))
@@ -174,18 +173,6 @@ def _get_anchor(conn):
     oldest = _parse_ts(row["Oldest"]) if row and row["Oldest"] else None
     newest = _parse_ts(row["Newest"]) if row and row["Newest"] else None
     return oldest, newest
-
-
-def _cursor_start(conn, resolution, earliest, latest, retention_start):
-    row = conn.execute("SELECT NextPeriodStart FROM TrendAggregationCursor WHERE Resolution=?", (resolution,)).fetchone()
-    if row:
-        return _parse_ts(row["NextPeriodStart"])
-    start = max(_period_start(earliest, resolution), _period_start(retention_start, resolution))
-    conn.execute(
-        "INSERT INTO TrendAggregationCursor(Resolution,NextPeriodStart) VALUES(?,?)",
-        (resolution, _ts(start)),
-    )
-    return start
 
 
 def _period_start(dt, resolution):
@@ -346,16 +333,24 @@ def _aggregate_resolution(conn, resolution, next_start, limit, completed_end):
             grouped[(int(row["CompanyID"]), row["PLC_ID"], row["TagName"])].append(row)
 
         keys = set(grouped) | set(state)
+        bucket_written = 0
         for key in list(keys):
             company_id, plc_id, tag = key
             stats, next_state = _aggregate_group(grouped.get(key, []), state.get(key), bucket, bucket_end)
             if stats is not None:
                 _write_aggregate(conn, f"Trend{resolution.title()}", company_id, plc_id, tag, bucket, bucket_end, stats)
                 written += 1
+                bucket_written += 1
             if next_state is not None:
                 state[key] = next_state
 
+        # Always advance by complete buckets. The row limit only controls how
+        # much work is done in one pass; it must never stop midway through a
+        # bucket because that would strand the cursor in a partially written
+        # minute/hour/day.
         bucket = bucket_end
+        if bucket_written == 0 and not rows and not state:
+            bucket = bucket_end
 
     conn.execute(
         "INSERT INTO TrendAggregationCursor(Resolution,NextPeriodStart) VALUES(?,?) ON CONFLICT(Resolution) DO UPDATE SET NextPeriodStart=excluded.NextPeriodStart",
@@ -401,14 +396,18 @@ def aggregate_once():
             ("hour", hour_start, hour_end, MAX_HOUR_BUCKETS_PER_RUN),
             ("day", day_start, day_end, MAX_DAY_BUCKETS_PER_RUN),
         ):
+            retention_floor = _period_start(retention_start, resolution)
             cursor = conn.execute("SELECT NextPeriodStart FROM TrendAggregationCursor WHERE Resolution=?", (resolution,)).fetchone()
             if cursor is None:
-                start = max(_period_start(oldest, resolution), _period_start(retention_start, resolution))
+                start = max(_period_start(oldest, resolution), retention_floor)
                 conn.execute("INSERT INTO TrendAggregationCursor(Resolution,NextPeriodStart) VALUES(?,?)", (resolution, _ts(start)))
             else:
-                start = _parse_ts(cursor["NextPeriodStart"]) or _period_start(retention_start, resolution)
-                if start < _period_start(retention_start, resolution):
-                    start = _period_start(retention_start, resolution)
+                start = _parse_ts(cursor["NextPeriodStart"]) or retention_floor
+                if start < retention_floor or start > completed_end:
+                    # Recover from a stale/future cursor. Rebuild only the
+                    # configured retention window; do not leave an empty view
+                    # permanently parked beyond the current completed bucket.
+                    start = retention_floor
                     conn.execute("UPDATE TrendAggregationCursor SET NextPeriodStart=? WHERE Resolution=?", (_ts(start), resolution))
 
             if start < completed_end:
@@ -444,6 +443,10 @@ def get_trend_series(company_id, plc_id, tag_name, start=None, end=None):
 
     resolution = get_resolution(start, end)
     table = {"minute": "TrendMinute", "hour": "TrendHour", "day": "TrendDay"}[resolution]
+    unit = {"minute": timedelta(minutes=1), "hour": timedelta(hours=1), "day": timedelta(days=1)}[resolution]
+    aligned_start = _period_start(start, resolution) == start
+    aligned_end = _period_start(end, resolution) == end
+
     conn = _connect()
     try:
         rows = conn.execute(
@@ -452,21 +455,30 @@ def get_trend_series(company_id, plc_id, tag_name, start=None, end=None):
                    MinValue, MaxValue, WeightedAverage, DurationSeconds, SampleCount
             FROM {table}
             WHERE CompanyID=? AND PLC_ID=? AND LOWER(TagName)=LOWER(?)
-              AND PeriodStart < ? AND PeriodEnd > ?
+              AND PeriodStart >= ? AND PeriodEnd <= ?
             ORDER BY PeriodStart
             """,
-            (int(company_id), int(plc_id), tag_name, _ts(end), _ts(start)),
+            (int(company_id), int(plc_id), tag_name, _ts(_period_start(start, resolution)), _ts(end)),
         ).fetchall()
-        expected = int((end - start).total_seconds() // {"minute": 60, "hour": 3600, "day": 86400}[resolution])
-        if rows and len(rows) >= max(1, min(expected, 1)):
+
+        expected = int((end - start) / unit) if aligned_start and aligned_end else 0
+        covered = len(rows) == expected and all(
+            _parse_ts(row["Timestamp"]) == start + (unit * index)
+            for index, row in enumerate(rows)
+        )
+        if expected > 0 and covered:
             return resolution, rows
 
+        # Exact-boundary or incomplete aggregate requests fall back to the raw
+        # historian so filtering and statistics remain correct instead of
+        # returning a partially populated materialized view.
         raw = conn.execute(
             """
             SELECT Timestamp, Value
             FROM PLC_Data
             WHERE CompanyID=? AND PLC_ID=? AND LOWER(TagName)=LOWER(?)
               AND Timestamp>=? AND Timestamp<=?
+              AND (StorageType IS NULL OR UPPER(StorageType) IN ('EDGE','TIME'))
             ORDER BY Timestamp, ID
             """,
             (int(company_id), int(plc_id), tag_name, _ts(start), _ts(end)),
@@ -494,10 +506,27 @@ def get_trend_stats(company_id, plc_id, tag_name, start=None, end=None):
                 parsed_rows.append((dt, value))
         if not parsed_rows:
             return {"resolution": resolution, "min": None, "max": None, "weighted_average": None, "sample_count": 0}
-        stats, _ = _aggregate_group([], parsed_rows[-1], start_dt or parsed_rows[0][0], end_dt)
+        predecessor = parsed_rows[0]
+        if start_dt is not None:
+            conn = _connect()
+            try:
+                row = conn.execute(
+                    "SELECT Timestamp, Value FROM PLC_Data WHERE CompanyID=? AND PLC_ID=? AND LOWER(TagName)=LOWER(?) AND Timestamp<? AND (StorageType IS NULL OR UPPER(StorageType) IN ('EDGE','TIME')) ORDER BY Timestamp DESC, ID DESC LIMIT 1",
+                    (int(company_id), int(plc_id), tag_name, _ts(start_dt)),
+                ).fetchone()
+                if row:
+                    predecessor = (_parse_ts(row["Timestamp"]), float(row["Value"]))
+            finally:
+                conn.close()
+        stats = _aggregate_group(
+            [{"Timestamp": _ts(dt), "Value": value} for dt, value in parsed_rows],
+            predecessor,
+            start_dt or parsed_rows[0][0],
+            end_dt,
+        )[0]
         if stats is None:
-            stats = {"min": min(v for _, v in parsed_rows), "max": max(v for _, v in parsed_rows), "weighted": float(sum(v for _, v in parsed_rows) / len(parsed_rows)), "count": len(parsed_rows)}
-        return {"resolution": resolution, "min": stats.get("min"), "max": stats.get("max"), "weighted_average": stats.get("weighted"), "sample_count": len(parsed_rows)}
+            return {"resolution": resolution, "min": None, "max": None, "weighted_average": None, "sample_count": 0}
+        return {"resolution": resolution, "min": stats["min"], "max": stats["max"], "weighted_average": stats["weighted"], "sample_count": len(parsed_rows)}
 
     minimum = min(float(row["MinValue"]) for row in rows if row["MinValue"] is not None)
     maximum = max(float(row["MaxValue"]) for row in rows if row["MaxValue"] is not None)
