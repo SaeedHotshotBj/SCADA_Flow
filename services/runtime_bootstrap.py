@@ -136,14 +136,19 @@ def _sync_flow_plc(flow_data, company_id):
     ip = str(data.get("ip", "")).strip()
     if not ip:
         return False
+
+    port_value = data.get("port")
+    slave_value = data.get("slave")
+    if port_value in (None, "") or slave_value in (None, ""):
+        print("PLC FLOW SYNC ERROR: PLCReader requires port and slave in Flow configuration")
+        return False
     try:
-        port = int(data.get("port", 502))
+        port = int(port_value)
+        slave = int(slave_value)
     except (TypeError, ValueError):
-        port = 502
-    try:
-        slave = int(data.get("slave", 1))
-    except (TypeError, ValueError):
-        slave = 1
+        print("PLC FLOW SYNC ERROR: PLCReader port/slave must be numeric")
+        return False
+
     name = str(data.get("name") or data.get("PLC_Name") or "PLC").strip()
 
     from database import get_connection
@@ -154,9 +159,15 @@ def _sync_flow_plc(flow_data, company_id):
         cursor.execute("SELECT PLC_ID FROM PLCs WHERE CompanyID = ? ORDER BY PLC_ID LIMIT 1", (int(company_id),))
         row = cursor.fetchone()
         if row:
-            cursor.execute("UPDATE PLCs SET PLC_Name=?, PLC_IP=?, PLC_Port=?, Slave_ID=? WHERE PLC_ID=?", (name, ip, port, slave, int(row["PLC_ID"])))
+            cursor.execute(
+                "UPDATE PLCs SET PLC_Name=?, PLC_IP=?, PLC_Port=?, Slave_ID=? WHERE PLC_ID=?",
+                (name, ip, port, slave, int(row["PLC_ID"])),
+            )
         else:
-            cursor.execute("INSERT INTO PLCs (CompanyID, PLC_Name, PLC_IP, PLC_Port, Slave_ID) VALUES (?, ?, ?, ?, ?)", (int(company_id), name, ip, port, slave))
+            cursor.execute(
+                "INSERT INTO PLCs (CompanyID, PLC_Name, PLC_IP, PLC_Port, Slave_ID) VALUES (?, ?, ?, ?, ?)",
+                (int(company_id), name, ip, port, slave),
+            )
         conn.commit()
         return True
     except Exception as exc:
@@ -177,7 +188,11 @@ def sync_all_saved_flows():
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT FlowID, CompanyID, FlowJson FROM Flows WHERE CompanyID IS NOT NULL AND FlowJson IS NOT NULL AND TRIM(FlowJson) <> '' ORDER BY FlowID")
+        cursor.execute(
+            "SELECT FlowID, CompanyID, FlowJson FROM Flows "
+            "WHERE CompanyID IS NOT NULL AND FlowJson IS NOT NULL "
+            "AND TRIM(FlowJson) <> '' ORDER BY FlowID"
+        )
         rows = cursor.fetchall()
         for row in rows:
             try:
