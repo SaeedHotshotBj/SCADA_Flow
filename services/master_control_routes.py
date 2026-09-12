@@ -110,33 +110,28 @@ def dashboard_latest_plc():
         for widget in widgets:
             if not isinstance(widget, dict) or widget.get("_dashboard_type") == "machine":
                 continue
+
             tag = str(widget.get("tag", "")).strip()
+            configured_tag = str(widget.get("configured_tag", "")).strip()
             if not tag:
                 continue
+
             try:
                 plc_id = int(widget.get("plc_id")) if widget.get("plc_id") is not None else None
             except (TypeError, ValueError):
                 plc_id = None
-            key = (plc_id, tag.lower())
+
+            key = (plc_id, tag.lower(), configured_tag.lower())
             if key in seen:
                 continue
             seen.add(key)
 
-            if plc_id is None:
+            row = None
+
+            if plc_id is not None:
                 row = conn.execute(
                     """
-                    SELECT PLC_ID, Value, Timestamp
-                    FROM PLC_Data
-                    WHERE CompanyID=? AND LOWER(TagName)=LOWER(?)
-                    ORDER BY Timestamp DESC, ID DESC
-                    LIMIT 1
-                    """,
-                    (company_id, tag),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    """
-                    SELECT PLC_ID, Value, Timestamp
+                    SELECT PLC_ID, TagName, Value, Timestamp
                     FROM PLC_Data
                     WHERE CompanyID=? AND PLC_ID=? AND LOWER(TagName)=LOWER(?)
                     ORDER BY Timestamp DESC, ID DESC
@@ -145,8 +140,44 @@ def dashboard_latest_plc():
                     (company_id, plc_id, tag),
                 ).fetchone()
 
+                if row is None and configured_tag and configured_tag.lower() != tag.lower():
+                    row = conn.execute(
+                        """
+                        SELECT PLC_ID, TagName, Value, Timestamp
+                        FROM PLC_Data
+                        WHERE CompanyID=? AND PLC_ID=? AND LOWER(TagName)=LOWER(?)
+                        ORDER BY Timestamp DESC, ID DESC
+                        LIMIT 1
+                        """,
+                        (company_id, plc_id, configured_tag),
+                    ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT PLC_ID, TagName, Value, Timestamp
+                    FROM PLC_Data
+                    WHERE CompanyID=? AND LOWER(TagName)=LOWER(?)
+                    ORDER BY Timestamp DESC, ID DESC
+                    LIMIT 1
+                    """,
+                    (company_id, tag),
+                ).fetchone()
+
+                if row is None and configured_tag and configured_tag.lower() != tag.lower():
+                    row = conn.execute(
+                        """
+                        SELECT PLC_ID, TagName, Value, Timestamp
+                        FROM PLC_Data
+                        WHERE CompanyID=? AND LOWER(TagName)=LOWER(?)
+                        ORDER BY Timestamp DESC, ID DESC
+                        LIMIT 1
+                        """,
+                        (company_id, configured_tag),
+                    ).fetchone()
+
             if row is None:
                 continue
+
             tag_values.append({
                 "PLC_ID": row["PLC_ID"],
                 "TagName": tag,
