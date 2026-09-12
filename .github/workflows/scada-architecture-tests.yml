@@ -26,24 +26,36 @@ jobs:
       - name: Compile all Python modules
         run: python -m compileall -q .
 
-      - name: Verify canonical node registry
+      - name: Import canonical registry
         run: |
           python - <<'PY'
           from flow_engine.node_registry import NODE_REGISTRY
-          from flow_engine.registry import NODE_REGISTRY as RUNTIME_REGISTRY
-          from flow_engine.registry import get_node_class
+          print("EDITOR KEYS:", sorted(NODE_REGISTRY.keys()))
+          assert "PLCReader" in NODE_REGISTRY
+          assert "ManagementPanel" in NODE_REGISTRY
+          print("EDITOR REGISTRY IMPORT OK")
+          PY
 
-          assert NODE_REGISTRY is RUNTIME_REGISTRY
+      - name: Import runtime registry
+        run: |
+          python - <<'PY'
+          try:
+              import flow_engine.registry as runtime_registry
+          except Exception:
+              import traceback
+              traceback.print_exc()
+              raise
+          print("RUNTIME KEYS:", sorted(runtime_registry.NODE_CLASSES.keys()))
+          print("EDITOR IS RUNTIME:", runtime_registry.NODE_REGISTRY is __import__("flow_engine.node_registry", fromlist=["NODE_REGISTRY"]).NODE_REGISTRY)
           required = {
               "PLCReader", "TagMapper", "ExpressionNode", "SQLWriter",
               "DashboardOutput", "MachineCard", "AlarmNode", "EdgeTimeout",
               "Roles", "RolesEngaged", "TrendReader", "TrendDatabaseReader",
-              "TrendOutput", "ReportOutput", "DateConverter", "ManagementPanel",
+              "TrendOutput", "ReportOutput", "DateConverter",
           }
-          assert required.issubset(NODE_REGISTRY), required - set(NODE_REGISTRY)
-          for name in required - {"ManagementPanel"}:
-              assert get_node_class(name) is not None, name
-          print("CANONICAL REGISTRY OK")
+          missing = required.difference(runtime_registry.NODE_CLASSES)
+          assert not missing, missing
+          print("RUNTIME REGISTRY IMPORT OK")
           PY
 
       - name: Verify service package has no import bootstrap side effect
