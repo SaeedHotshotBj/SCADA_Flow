@@ -22,6 +22,60 @@ def _validate_u16(value, field_name):
     return parsed
 
 
+def _ensure_legacy_edge_timeout_state(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS EdgeTimeoutState (
+            CompanyID INTEGER NOT NULL,
+            PLC_ID INTEGER NOT NULL,
+            LastReceivedAt TEXT,
+            TimeoutSeconds REAL NOT NULL DEFAULT 10.0,
+            TimedOut INTEGER NOT NULL DEFAULT 0,
+            LastTimeoutAt TEXT,
+            UpdatedAt TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (CompanyID, PLC_ID)
+        )
+        """
+    )
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(EdgeTimeoutState)").fetchall()
+    }
+    required = {
+        "CompanyID": "INTEGER",
+        "PLC_ID": "INTEGER",
+        "LastReceivedAt": "TEXT",
+        "TimeoutSeconds": "REAL NOT NULL DEFAULT 10.0",
+        "TimedOut": "INTEGER NOT NULL DEFAULT 0",
+        "LastTimeoutAt": "TEXT",
+        "UpdatedAt": "TEXT NOT NULL DEFAULT ''",
+    }
+    for name, definition in required.items():
+        if name not in columns:
+            conn.execute(f'ALTER TABLE EdgeTimeoutState ADD COLUMN "{name}" {definition}')
+
+    conn.execute(
+        """
+        UPDATE EdgeTimeoutState
+        SET PLC_ID=(
+            SELECT MIN(p.PLC_ID)
+            FROM PLCs p
+            WHERE p.CompanyID=EdgeTimeoutState.CompanyID
+        )
+        WHERE PLC_ID IS NULL
+          AND 1=(
+              SELECT COUNT(*)
+              FROM PLCs p2
+              WHERE p2.CompanyID=EdgeTimeoutState.CompanyID
+          )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_edge_timeout_state_company_plc "
+        "ON EdgeTimeoutState(CompanyID, PLC_ID)"
+    )
+
+
 def ensure_plc_write_schema():
     conn = get_connection()
     try:
@@ -46,9 +100,6 @@ def ensure_plc_write_schema():
             """
         )
 
-        # Existing VPS databases may contain an older PLCWriteCommands table.
-        # CREATE TABLE IF NOT EXISTS does not add columns to that table, so
-        # migrate every column required by the current command lifecycle.
         columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(PLCWriteCommands)").fetchall()
@@ -68,11 +119,8 @@ def ensure_plc_write_schema():
         }
         for name, definition in required.items():
             if name not in columns:
-                conn.execute(
-                    f'ALTER TABLE PLCWriteCommands ADD COLUMN "{name}" {definition}'
-                )
+                conn.execute(f'ALTER TABLE PLCWriteCommands ADD COLUMN "{name}" {definition}')
 
-        # Keep legacy rows usable after migration.
         conn.execute(
             "UPDATE PLCWriteCommands SET Status='Pending' "
             "WHERE Status IS NULL OR TRIM(Status)=''"
@@ -80,6 +128,8 @@ def ensure_plc_write_schema():
         conn.execute(
             "UPDATE PLCWriteCommands SET AttemptCount=0 WHERE AttemptCount IS NULL"
         )
+
+        _ensure_legacy_edge_timeout_state(conn)
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_plc_write_pending "
