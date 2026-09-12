@@ -338,6 +338,15 @@ def register_flow_company_blueprint(app):
         print("FLOW COMPANY BLUEPRINT REGISTER ERROR:", exc)
 
 
+def register_master_control_blueprint(app):
+    try:
+        from services.master_control_routes import bp
+        if "master_control" not in app.blueprints:
+            app.register_blueprint(bp)
+    except Exception as exc:
+        print("MASTER CONTROL BLUEPRINT REGISTER ERROR:", exc)
+
+
 def load_master_logs():
     try:
         import services.master_logs  # noqa: F401
@@ -373,9 +382,20 @@ def bootstrap(app):
     install_save_flow_sync(app)
     install_flow_json_guard(app)
     register_flow_company_blueprint(app)
+    register_master_control_blueprint(app)
     if not _database_ready():
         print("APPLICATION SERVICES WORKERS SKIPPED: database is not ready")
         return False
+    try:
+        from services.plc_write_service import ensure_plc_write_schema
+        ensure_plc_write_schema()
+    except Exception as exc:
+        print("PLC WRITE SCHEMA BOOTSTRAP ERROR:", exc)
+    try:
+        from services.edge_ingest import ensure_edge_event_schema
+        ensure_edge_event_schema()
+    except Exception as exc:
+        print("EDGE EVENT SCHEMA BOOTSTRAP ERROR:", exc)
     sync_all_saved_flows()
     load_master_logs()
     start_edge_timeout_worker()
