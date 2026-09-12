@@ -14,6 +14,7 @@ from flow_engine.nodes.alarm_node import AlarmNode
 from flow_engine.nodes.edge_timeout import EdgeTimeout
 from flow_engine.nodes.roles import Roles
 from flow_engine.nodes.roles_engaged import RolesEngaged
+from flow_engine.nodes.pulse import Pulse
 from flow_engine.nodes.trend_reader import TrendReader
 from flow_engine.nodes.trend_output import TrendOutput
 from flow_engine.nodes.trend_database_reader import TrendDatabaseReader
@@ -31,6 +32,7 @@ NODE_CLASSES = {
     "EdgeTimeout": EdgeTimeout,
     "Roles": Roles,
     "RolesEngaged": RolesEngaged,
+    "Pulse": Pulse,
     "TrendReader": TrendReader,
     "TrendDatabaseReader": TrendDatabaseReader,
     "TrendOutput": TrendOutput,

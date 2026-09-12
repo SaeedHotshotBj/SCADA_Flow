@@ -31,31 +31,70 @@ jobs:
           python - <<'PY'
           from flow_engine.node_registry import NODE_REGISTRY
           print("EDITOR KEYS:", sorted(NODE_REGISTRY.keys()))
-          assert "PLCReader" in NODE_REGISTRY
-          assert "ManagementPanel" in NODE_REGISTRY
+          required = {"PLCReader", "ManagementPanel", "Pulse"}
+          missing = required.difference(NODE_REGISTRY)
+          assert not missing, missing
           print("EDITOR REGISTRY IMPORT OK")
           PY
 
       - name: Import runtime registry
         run: |
           python - <<'PY'
-          try:
-              import flow_engine.registry as runtime_registry
-          except Exception:
-              import traceback
-              traceback.print_exc()
-              raise
+          import flow_engine.registry as runtime_registry
+          from flow_engine.node_registry import NODE_REGISTRY
           print("RUNTIME KEYS:", sorted(runtime_registry.NODE_CLASSES.keys()))
-          print("EDITOR IS RUNTIME:", runtime_registry.NODE_REGISTRY is __import__("flow_engine.node_registry", fromlist=["NODE_REGISTRY"]).NODE_REGISTRY)
+          assert runtime_registry.NODE_REGISTRY is NODE_REGISTRY
           required = {
               "PLCReader", "TagMapper", "ExpressionNode", "SQLWriter",
               "DashboardOutput", "MachineCard", "AlarmNode", "EdgeTimeout",
-              "Roles", "RolesEngaged", "TrendReader", "TrendDatabaseReader",
-              "TrendOutput", "ReportOutput", "DateConverter",
+              "Roles", "RolesEngaged", "Pulse", "TrendReader",
+              "TrendDatabaseReader", "TrendOutput", "ReportOutput", "DateConverter",
           }
           missing = required.difference(runtime_registry.NODE_CLASSES)
           assert not missing, missing
           print("RUNTIME REGISTRY IMPORT OK")
+          PY
+
+      - name: Verify Pulse runtime validation
+        run: |
+          python - <<'PY'
+          from flow_engine.nodes.pulse import Pulse
+          payload = Pulse({
+              "enabled": True,
+              "plc_id": 1,
+              "register": 100,
+              "bandwidth": 1,
+              "pulse_width": 100,
+              "interval": 1000,
+          }).execute({})
+          assert payload["PulseCommand"]["PLC_ID"] == 1
+          try:
+              Pulse({"enabled": True, "plc_id": 1, "register": 100, "bandwidth": 1, "pulse_width": 1000, "interval": 100}).execute({})
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("Pulse accepted interval <= pulse width")
+          print("PULSE VALIDATION OK")
+          PY
+
+      - name: Verify trend retention policy
+        run: |
+          python - <<'PY'
+          from services.trend_aggregation import MINUTE_RETENTION_HOURS, HOUR_RETENTION_DAYS, DAY_RETENTION_DAYS, RAW_RETENTION_DAYS
+          assert MINUTE_RETENTION_HOURS == 2
+          assert HOUR_RETENTION_DAYS == 2
+          assert DAY_RETENTION_DAYS == 600
+          assert RAW_RETENTION_DAYS >= 600
+          print("TREND RETENTION POLICY OK")
+          PY
+
+      - name: Verify Edge ingestion and Master command modules import
+        run: |
+          python - <<'PY'
+          from services.edge_ingest import ingest_items, ensure_edge_event_schema
+          from services.plc_write_service import queue_write, claim_next_command, complete_command
+          from services.master_control_routes import bp
+          print("EDGE INGEST + MASTER WRITE IMPORT OK", bp.name)
           PY
 
       - name: Verify service package has no import bootstrap side effect

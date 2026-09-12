@@ -2,8 +2,12 @@
 # SCADA_FLOW TREND OUTPUT NODE
 # =====================================================
 
-from datetime import datetime, timezone
+from datetime import datetime
 import jdatetime
+from zoneinfo import ZoneInfo
+
+
+SCADA_TIMEZONE = ZoneInfo("Asia/Tehran")
 
 
 class TrendOutput:
@@ -17,13 +21,10 @@ class TrendOutput:
         if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
             dt = value
             if getattr(dt, "tzinfo", None) is not None:
-                dt = dt.replace(tzinfo=None)
+                dt = dt.astimezone(SCADA_TIMEZONE).replace(tzinfo=None)
             return dt
 
         text = str(value).strip().replace("T", " ")
-        if text.endswith("Z"):
-            text = text[:-1]
-
         text = text.translate(str.maketrans(
             "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
             "01234567890123456789"
@@ -51,7 +52,10 @@ class TrendOutput:
                 pass
 
         try:
-            return datetime.fromisoformat(text).replace(tzinfo=None)
+            dt = datetime.fromisoformat(text)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(SCADA_TIMEZONE).replace(tzinfo=None)
+            return dt
         except Exception:
             return None
 
@@ -59,7 +63,8 @@ class TrendOutput:
         dt = self._parse_timestamp(value)
         if dt is None:
             return None
-        return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+        aware = dt.replace(tzinfo=SCADA_TIMEZONE)
+        return int(aware.timestamp() * 1000)
 
     def jalali_label(self, value):
         try:
