@@ -7,16 +7,28 @@ import math
 from database import get_connection, get_company_flow
 
 
+def _edge_trace(message, *parts):
+    """Emit a clearly searchable, stdout-only diagnostic trace for Edge ingest."""
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    if parts:
+        print(f"EDGE TRACE [{stamp}] {message}", *parts, flush=True)
+    else:
+        print(f"EDGE TRACE [{stamp}] {message}", flush=True)
+
+
 def ensure_edge_event_schema():
     conn = get_connection()
     try:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         if "PLC_Data" in tables:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(PLC_Data)").fetchall()}
+            _edge_trace("SCHEMA PLC_Data columns", sorted(columns))
             if "PLC_ID" not in columns:
                 conn.execute("ALTER TABLE PLC_Data ADD COLUMN PLC_ID INTEGER")
+                _edge_trace("SCHEMA PLC_Data ADD COLUMN", "PLC_ID")
             if "EventID" not in columns:
                 conn.execute("ALTER TABLE PLC_Data ADD COLUMN EventID TEXT")
+                _edge_trace("SCHEMA PLC_Data ADD COLUMN", "EventID")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_plc_data_company_plc_tag_time ON PLC_Data(CompanyID, PLC_ID, TagName, Timestamp)")
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_plc_data_event_id ON PLC_Data(EventID) WHERE EventID IS NOT NULL")
         if "TagHistory" in tables:
@@ -42,6 +54,7 @@ def ensure_edge_event_schema():
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_edge_ledger_company_time ON EdgeEventLedger(CompanyID, PLC_ID, TagName, EventTimestamp)")
         conn.commit()
+        _edge_trace("SCHEMA READY")
     finally:
         conn.close()
 
@@ -96,16 +109,20 @@ def _node_connections(nodes, node_id, direction="outputs"):
 
 
 def _flow_tag_storage(company_id):
+    _edge_trace("FLOW STORAGE LOOKUP START", f"CompanyID={company_id}")
     flow_json = get_company_flow(company_id)
     if not flow_json:
+        _edge_trace("FLOW STORAGE LOOKUP MISS", "no company flow")
         return {}
     try:
         flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
-    except Exception:
+    except Exception as exc:
+        _edge_trace("FLOW STORAGE LOOKUP ERROR", repr(exc))
         return {}
 
     nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
     if not isinstance(nodes, dict):
+        _edge_trace("FLOW STORAGE LOOKUP MISS", "invalid node container")
         return {}
 
     conn = get_connection()
@@ -118,6 +135,7 @@ def _flow_tag_storage(company_id):
         conn.close()
 
     company_plc_ids = [int(row["PLC_ID"]) for row in plc_rows]
+    _edge_trace("FLOW STORAGE COMPANY PLC IDS", company_plc_ids)
     plc_reader_to_id = {}
     used_ids = set()
     fallback_index = 0
@@ -143,6 +161,8 @@ def _flow_tag_storage(company_id):
             continue
         used_ids.add(plc_id)
         plc_reader_to_id[str(node_id)] = plc_id
+
+    _edge_trace("FLOW STORAGE PLC READER MAP", plc_reader_to_id)
 
     allowed = {}
     for node_id, node in nodes.items():
@@ -201,12 +221,15 @@ def _flow_tag_storage(company_id):
                 if register_key:
                     allowed[(plc_id, register_key)] = storage
 
+    _edge_trace("FLOW STORAGE LOOKUP DONE", f"CompanyID={company_id}", f"entries={len(allowed)}")
     return allowed
 
 
 def ingest_items(items):
+    _edge_trace("BATCH RECEIVED", f"type={type(items).__name__}", f"count={len(items) if isinstance(items, list) else 'N/A'}")
     ensure_edge_event_schema()
     if not isinstance(items, list):
+        _edge_trace("BATCH REJECTED", "items is not a list")
         raise ValueError("items must be a list")
 
     acks = []
@@ -217,14 +240,26 @@ def ingest_items(items):
     try:
         conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("BEGIN IMMEDIATE")
+        _edge_trace("DB TRANSACTION BEGIN")
 
-        for item in items:
+        for index, item in enumerate(items, start=1):
             if not isinstance(item, dict):
+                _edge_trace("ITEM SKIP", f"index={index}", f"type={type(item).__name__}")
                 continue
 
             event_id = str(item.get("EventID", "")).strip()
+            _edge_trace(
+                "ITEM RECEIVED",
+                f"index={index}",
+                f"EventID={event_id}",
+                f"PLC_ID={item.get('PLC_ID')}",
+                f"TagName={item.get('TagName')}",
+                f"Value={item.get('Value')}",
+                f"Timestamp={item.get('Timestamp')}",
+            )
             if not event_id:
                 errors.append({"EventID": event_id, "Error": "EventID is required"})
+                _edge_trace("ITEM REJECTED", f"index={index}", "EventID is required")
                 continue
 
             try:
@@ -236,7 +271,10 @@ def ingest_items(items):
                 timestamp = _parse_timestamp(item.get("Timestamp"))
             except Exception as exc:
                 errors.append({"EventID": event_id, "Error": str(exc)})
+                _edge_trace("ITEM PARSE ERROR", f"EventID={event_id}", repr(exc))
                 continue
+
+            _edge_trace("ITEM PARSED", f"EventID={event_id}", f"PLC_ID={plc_id}", f"Tag={tag}", f"Value={value}", f"Timestamp={timestamp}")
 
             plc = conn.execute(
                 "SELECT PLC_ID, CompanyID FROM PLCs WHERE PLC_ID=?",
@@ -244,9 +282,11 @@ def ingest_items(items):
             ).fetchone()
             if plc is None:
                 errors.append({"EventID": event_id, "Error": "PLC not found"})
+                _edge_trace("ITEM REJECTED", f"EventID={event_id}", f"PLC_ID={plc_id}", "PLC not found")
                 continue
 
             company_id = int(plc["CompanyID"])
+            _edge_trace("PLC RESOLVED", f"EventID={event_id}", f"CompanyID={company_id}", f"PLC_ID={plc_id}")
 
             if company_id not in flow_cache:
                 flow_cache[company_id] = _flow_tag_storage(company_id)
@@ -255,17 +295,12 @@ def ingest_items(items):
             if storage_type is None:
                 storage_type = storage_map.get((plc_id, tag))
 
+            _edge_trace("STORAGE RESOLUTION", f"EventID={event_id}", f"CompanyID={company_id}", f"PLC_ID={plc_id}", f"Tag={tag}", f"StorageType={storage_type}")
+
             if storage_type is None:
                 error = "Tag is not defined for this PLC by the company Flow"
                 errors.append({"EventID": event_id, "Error": error})
-                print(
-                    "EDGE INGEST REJECTED:",
-                    "CompanyID=", company_id,
-                    "PLC_ID=", plc_id,
-                    "Tag=", tag,
-                    "EventID=", event_id,
-                    "Reason=", error,
-                )
+                _edge_trace("ITEM REJECTED", f"EventID={event_id}", f"Reason={error}")
                 continue
 
             existing = conn.execute(
@@ -279,7 +314,9 @@ def ingest_items(items):
                 ).fetchone()
                 if stored is not None:
                     acks.append(event_id)
+                    _edge_trace("ITEM DUPLICATE ACK", f"EventID={event_id}", f"PLC_Data.ID={stored['ID']}")
                     continue
+                _edge_trace("ITEM LEDGER ORPHAN", f"EventID={event_id}", "ledger exists but PLC_Data row is missing")
                 conn.execute(
                     "DELETE FROM EdgeEventLedger WHERE EventID=?",
                     (event_id,),
@@ -300,12 +337,20 @@ def ingest_items(items):
                 )
 
                 row_id = cursor.lastrowid
+                _edge_trace("PLC_DATA INSERT", f"EventID={event_id}", f"row_id={row_id}", f"CompanyID={company_id}", f"PLC_ID={plc_id}", f"Tag={tag}", f"StorageType={storage_type}")
+
                 verify = conn.execute(
-                    "SELECT ID, CompanyID, PLC_ID, TagName, Value, Timestamp FROM PLC_Data WHERE ID=?",
+                    "SELECT ID, CompanyID, PLC_ID, TagName, Value, Timestamp, StorageType, EventID FROM PLC_Data WHERE ID=?",
                     (row_id,),
                 ).fetchone()
                 if verify is None:
                     raise RuntimeError("PLC_Data insert verification failed")
+
+                _edge_trace(
+                    "PLC_DATA VERIFY",
+                    f"EventID={event_id}",
+                    f"row={dict(verify)}",
+                )
 
                 conn.execute(
                     """
@@ -315,6 +360,7 @@ def ingest_items(items):
                     """,
                     (event_id, company_id, plc_id, tag, timestamp, received_at),
                 )
+                _edge_trace("LEDGER INSERT", f"EventID={event_id}")
 
                 try:
                     conn.execute(
@@ -325,19 +371,22 @@ def ingest_items(items):
                         """,
                         (company_id, plc_id, tag, value, timestamp, event_id),
                     )
+                    _edge_trace("TAG_HISTORY INSERT", f"EventID={event_id}")
                 except Exception as history_exc:
-                    print("EDGE TAG HISTORY WRITE WARNING:", event_id, history_exc)
+                    print("EDGE TAG HISTORY WRITE WARNING:", event_id, history_exc, flush=True)
+                    _edge_trace("TAG_HISTORY WARNING", f"EventID={event_id}", repr(history_exc))
 
                 conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 acks.append(event_id)
                 inserted += 1
+                _edge_trace("ITEM SUCCESS BEFORE COMMIT", f"EventID={event_id}", f"row_id={row_id}")
 
             except Exception as exc:
                 try:
                     conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                     conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-                except Exception:
-                    pass
+                except Exception as rollback_exc:
+                    _edge_trace("SAVEPOINT ROLLBACK ERROR", f"EventID={event_id}", repr(rollback_exc))
 
                 errors.append({"EventID": event_id, "Error": str(exc)})
                 print(
@@ -347,22 +396,28 @@ def ingest_items(items):
                     "Tag=", tag,
                     "EventID=", event_id,
                     "Reason=", exc,
+                    flush=True,
                 )
+                _edge_trace("ITEM WRITE ERROR", f"EventID={event_id}", repr(exc))
 
         conn.commit()
+        _edge_trace("DB TRANSACTION COMMIT", f"received={len(items)}", f"inserted={inserted}", f"acks={len(acks)}", f"errors={len(errors)}")
         print(
             "EDGE INGEST RESULT:",
             "received=", len(items),
             "inserted=", inserted,
             "acks=", len(acks),
             "errors=", len(errors),
+            flush=True,
         )
         return {"acks": acks, "errors": errors, "inserted": inserted}
-    except Exception:
+    except Exception as exc:
         conn.rollback()
+        _edge_trace("DB TRANSACTION ROLLBACK", repr(exc))
         raise
     finally:
         conn.close()
+        _edge_trace("DB CONNECTION CLOSED")
 
 
 __all__ = ["ensure_edge_event_schema", "ingest_items"]
