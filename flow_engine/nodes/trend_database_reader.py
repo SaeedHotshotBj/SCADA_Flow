@@ -6,7 +6,7 @@
 from datetime import datetime, timedelta
 import jdatetime
 
-from services.trend_aggregation import get_trend_series, get_trend_stats
+from services.trend_query import get_trend_series, get_trend_stats
 from database import row_value
 
 
