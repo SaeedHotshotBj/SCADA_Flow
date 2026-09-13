@@ -319,9 +319,6 @@ def management_production_context_write():
 def _inject_production_ui_scripts(response):
     """Load only the UI pieces belonging to the production-context change."""
     try:
-        if request.method != "GET" or not response.is_streamed:
-            pass
-
         if (
             request.method != "GET"
             or not response.mimetype
@@ -330,14 +327,11 @@ def _inject_production_ui_scripts(response):
         ):
             return response
 
-        script = ""
-        if request.path == "/report":
-            script = '<script src="/static/report_filters.js?v=20260913"></script>'
-        elif request.path == "/management":
-            script = '<script src="/static/management_production.js?v=20260913"></script>'
-
-        if not script:
-            return response
+        script = (
+            '<script src="/static/report_filters.js?v=20260913"></script>'
+            if request.path == "/report"
+            else '<script src="/static/management_production.js?v=20260913"></script>'
+        )
         body = response.get_data(as_text=True)
         if "</body>" in body:
             response.set_data(body.replace("</body>", script + "</body>", 1))
