@@ -72,7 +72,6 @@ class ReportRuntime:
                         name = str(mapping.get("name", "")).strip()
                         if name:
                             result[name.lower()] = mapping
-            break
         return result
 
     def _latest_values(self, company_id, tags, plc_id=None):
@@ -112,6 +111,12 @@ class ReportRuntime:
             conn.close()
 
     def _management_context(self, company_id, plc_id=None):
+        """Resolve management context only through Flow TagMapper tags.
+
+        ManagementPanel stores the names of the ContractCode/ProductCode tags.
+        Those names must exist in the same company's TagMapper definitions; no
+        raw PLC register is read here.
+        """
         result = {"ContractCode": None, "ProductCode": None}
         nodes = self._nodes(company_id)
         config = None
@@ -123,72 +128,21 @@ class ReportRuntime:
         if not isinstance(config, dict):
             return result
 
-        contract_register = config.get("contract_code_register")
-        product_register = config.get("product_code_register")
+        contract_tag = str(config.get("contract_code_tag", "")).strip()
+        product_tag = str(config.get("product_code_tag", "")).strip()
+        definitions = self._definitions(company_id)
 
-        def latest_by_register(register):
-            if register in (None, ""):
+        def latest_tag_value(tag_name):
+            if not tag_name or tag_name.lower() not in definitions:
                 return None
-            try:
-                register_int = int(float(register))
-            except (TypeError, ValueError):
-                return None
+            latest = self._latest_values(company_id, [tag_name], plc_id=plc_id)
+            for name, item in latest.items():
+                if str(name).strip().lower() == tag_name.lower():
+                    return item.get("value")
+            return None
 
-            tag_name = None
-            for node in nodes.values():
-                if not isinstance(node, dict) or node.get("name") != "TagMapper":
-                    continue
-                mappings = (node.get("data", {}) or {}).get("mappings", [])
-                for mapping in mappings if isinstance(mappings, list) else []:
-                    if not isinstance(mapping, dict):
-                        continue
-                    try:
-                        mapping_register = int(float(mapping.get("register")))
-                    except (TypeError, ValueError):
-                        continue
-                    if mapping_register != register_int:
-                        continue
-                    mapping_plc = mapping.get("plc_id", mapping.get("PLC_ID"))
-                    try:
-                        mapping_plc = int(mapping_plc) if mapping_plc not in (None, "") else None
-                    except (TypeError, ValueError):
-                        mapping_plc = None
-                    if plc_id is not None and mapping_plc is not None and mapping_plc != int(plc_id):
-                        continue
-                    tag_name = str(mapping.get("name", "")).strip() or None
-                    if tag_name:
-                        break
-                if tag_name:
-                    break
-            if not tag_name:
-                return None
-
-            conn = get_connection()
-            try:
-                if plc_id is not None:
-                    row = conn.execute(
-                        """
-                        SELECT Value FROM TagHistory
-                        WHERE CompanyID = ? AND PLC_ID = ? AND LOWER(TagName) = LOWER(?)
-                        ORDER BY ID DESC LIMIT 1
-                        """,
-                        (company_id, int(plc_id), tag_name),
-                    ).fetchone()
-                else:
-                    row = conn.execute(
-                        """
-                        SELECT Value FROM PLC_Data
-                        WHERE CompanyID = ? AND LOWER(TagName) = LOWER(?)
-                        ORDER BY ID DESC LIMIT 1
-                        """,
-                        (company_id, tag_name),
-                    ).fetchone()
-                return row["Value"] if row else None
-            finally:
-                conn.close()
-
-        contract = latest_by_register(contract_register)
-        product = latest_by_register(product_register)
+        contract = latest_tag_value(contract_tag)
+        product = latest_tag_value(product_tag)
         if contract not in (None, ""):
             result["ContractCode"] = str(contract).strip()
         if product not in (None, ""):
