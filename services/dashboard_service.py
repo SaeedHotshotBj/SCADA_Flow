@@ -133,8 +133,6 @@ def _flow_tag_plcs(company_id, nodes):
             for key in keys:
                 result.setdefault(key, set()).update(pid for pid in plc_ids if pid in company_plc_ids)
 
-        break
-
     return result
 
 
@@ -183,7 +181,6 @@ def _register_to_tag(nodes, tag_plcs):
             for plc_id in plc_ids:
                 lookup[(plc_id, register_key)] = name
 
-        break
     return lookup
 
 
