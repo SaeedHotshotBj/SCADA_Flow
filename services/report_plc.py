@@ -51,6 +51,7 @@ def ensure_report_tables():
             if name not in cols:
                 conn.execute(f"ALTER TABLE ReportHistory ADD COLUMN {name} {typ}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_report_history_company_plc_time ON ReportHistory(CompanyID,PLC_ID,Timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_report_history_company_context_time ON ReportHistory(CompanyID,ContractCode,ProductCode,Timestamp)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_report_values_report_tag ON ReportValues(ReportID,TagName)")
         conn.commit()
     finally:
@@ -66,21 +67,27 @@ def get_report_products(company_id):
             data = node.get("data", {}) or {}
             config = data.get("config", data) or {}
             configured = config.get("products", [])
-            if not isinstance(configured, list):
-                continue
-            for item in configured:
-                if not isinstance(item, dict):
-                    continue
-                tag = str(item.get("tag", "")).strip()
-                if not tag:
-                    continue
-                products.append({
-                    "name": str(item.get("name", tag)).strip() or tag,
-                    "tag": tag,
-                    "plc_id": _plc_id(item.get("plc_id", item.get("PLC_ID"))),
-                    "unit": str(item.get("unit", "")).strip(),
-                    "context_role": str(item.get("context_role", item.get("context", ""))).strip().lower(),
-                })
+            if isinstance(configured, list):
+                for item in configured:
+                    if not isinstance(item, dict):
+                        continue
+                    tag = str(item.get("tag", "")).strip()
+                    if not tag:
+                        continue
+                    products.append({
+                        "name": str(item.get("name", tag)).strip() or tag,
+                        "tag": tag,
+                        "plc_id": _plc_id(item.get("plc_id", item.get("PLC_ID"))),
+                        "unit": str(item.get("unit", "")).strip(),
+                        "context_role": str(item.get("context_role", item.get("context", ""))).strip().lower(),
+                    })
+
+            contract_tag = str(config.get("contract_code_tag", "ContractCode")).strip() or "ContractCode"
+            product_tag = str(config.get("product_code_tag", "ProductCode")).strip() or "ProductCode"
+            products.append({"name": "کد قرارداد", "tag": contract_tag, "plc_id": None, "unit": "", "context_role": "contract_code"})
+            products.append({"name": "کد محصول", "tag": product_tag, "plc_id": None, "unit": "", "context_role": "product_code"})
+            break
+
         unique, seen = [], set()
         for product in products:
             key = (product["tag"].lower(), product.get("plc_id"), product.get("context_role", ""))
@@ -113,6 +120,10 @@ def save_report_snapshot(company_id, tags, report_products, timestamp=None, trig
     timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     plc_id = _plc_id(plc_id)
     contract, product = _context(report_products, tags)
+    if not contract or not product:
+        print("REPORT SNAPSHOT SKIPPED: missing production context")
+        return None
+
     lookup = {str(k).strip().lower(): (k, v) for k, v in tags.items()}
     values = []
     seen = set()
@@ -155,11 +166,11 @@ def save_report_snapshot(company_id, tags, report_products, timestamp=None, trig
         conn.close()
 
 
-def get_report_data(company_id, start, end, plc_id=None):
+def get_report_data(company_id, start, end, plc_id=None, contract_code=None, product_code=None):
     products = [p for p in get_report_products(company_id) if not p.get("context_role")]
     if plc_id is not None:
         products = [p for p in products if p.get("plc_id") in (None, int(plc_id))]
-    result = {"columns": products, "rows": [], "totals": [0.0 for _ in products], "grand_total": 0.0}
+    result = {"columns": products, "rows": [], "totals": [0.0 for _ in products], "grand_total": 0.0, "filters": {"ContractCode": str(contract_code or "").strip(), "ProductCode": str(product_code or "").strip()}}
     if company_id is None or not products or not start or not end:
         return result
     ensure_report_tables()
@@ -182,6 +193,14 @@ def get_report_data(company_id, start, end, plc_id=None):
         if plc_id is not None:
             sql += " AND h.PLC_ID = ?"
             params.append(int(plc_id))
+        contract_filter = str(contract_code or "").strip()
+        product_filter = str(product_code or "").strip()
+        if contract_filter:
+            sql += " AND LOWER(TRIM(COALESCE(h.ContractCode,''))) = LOWER(TRIM(?))"
+            params.append(contract_filter)
+        if product_filter:
+            sql += " AND LOWER(TRIM(COALESCE(h.ProductCode,''))) = LOWER(TRIM(?))"
+            params.append(product_filter)
         sql += " ORDER BY datetime(h.Timestamp), h.ReportID, v.ReportValueID"
         rows = conn.execute(sql, params + keys).fetchall()
     finally:
@@ -189,13 +208,7 @@ def get_report_data(company_id, start, end, plc_id=None):
 
     grouped = {}
     for row in rows:
-        item = grouped.setdefault(row["ReportID"], {
-            "timestamp": str(row["Timestamp"]),
-            "PLC_ID": row["PLC_ID"],
-            "values": [None] * len(products),
-            "contract_code": row["ContractCode"],
-            "product_code": row["ProductCode"],
-        })
+        item = grouped.setdefault(row["ReportID"], {"timestamp": str(row["Timestamp"]), "PLC_ID": row["PLC_ID"], "contract_code": row["ContractCode"], "product_code": row["ProductCode"], "values": [None] * len(products)})
         try:
             index = keys.index(str(row["TagName"]).strip().lower())
         except ValueError:
