@@ -6,124 +6,51 @@
     <title>SCADA FLOW - Database</title>
     <style>
         * { box-sizing: border-box; }
-        body {
-            margin: 0;
-            min-height: 100vh;
-            background: #20252b;
-            color: #fff;
-            font-family: Arial, sans-serif;
-        }
-        .topbar {
-            min-height: 70px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            background: #171b20;
-            border-bottom: 1px solid #3d464f;
-            gap: 15px;
-        }
+        body { margin: 0; min-height: 100vh; background: #20252b; color: #fff; font-family: Arial, sans-serif; }
+        .topbar { min-height: 70px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; background: #171b20; border-bottom: 1px solid #3d464f; gap: 15px; }
         .brand { font-size: 20px; font-weight: bold; }
         .subtitle { color: #9da7b0; font-size: 12px; margin-top: 4px; }
         .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .btn, select {
-            padding: 9px 13px;
-            border-radius: 6px;
-            border: 1px solid #4b5660;
-            background: #2b3239;
-            color: #fff;
-            text-decoration: none;
-        }
+        .btn, select, input { padding: 9px 13px; border-radius: 6px; border: 1px solid #4b5660; background: #2b3239; color: #fff; text-decoration: none; }
         select { min-width: 220px; }
+        input { min-width: 240px; }
         .btn:hover { background: #3a444e; }
-        .clear-btn {
-            border-color: #8f3030;
-            background: #6f2424;
-            cursor: pointer;
-        }
+        .clear-btn { border-color: #8f3030; background: #6f2424; cursor: pointer; }
         .clear-btn:hover { background: #8b2d2d; }
-        .clear-btn:disabled {
-            opacity: .45;
-            cursor: not-allowed;
-        }
+        .clear-btn:disabled { opacity: .45; cursor: not-allowed; }
         .main { padding: 24px; }
-        .panel {
-            background: #292f35;
-            border: 1px solid #414b54;
-            border-radius: 10px;
-            padding: 18px;
-            margin-bottom: 18px;
-        }
-        .toolbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
+        .panel { background: #292f35; border: 1px solid #414b54; border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+        .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .cleanup-grid { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(230px, 1fr) auto auto; gap: 12px; align-items: end; margin-top: 14px; }
+        .field label { display: block; color: #cfd6dc; font-size: 12px; margin-bottom: 6px; }
+        .field select, .field input { width: 100%; min-width: 0; background: #20252b; }
+        .action-btn { cursor: pointer; border: 1px solid #4b5660; background: #35404a; color: #fff; padding: 9px 13px; border-radius: 6px; white-space: nowrap; }
+        .action-btn:hover { background: #46535f; }
+        .action-btn.danger { border-color: #8f3030; background: #6f2424; }
+        .action-btn.danger:hover { background: #8b2d2d; }
+        .action-btn:disabled { opacity: .45; cursor: not-allowed; }
         .info { color: #9da7b0; font-size: 13px; }
-        .warning {
-            margin-top: 12px;
-            padding: 10px 12px;
-            border-radius: 7px;
-            background: #3a2525;
-            border: 1px solid #664040;
-            color: #f2b5b5;
-            font-size: 12px;
-        }
-        .success {
-            margin-top: 12px;
-            padding: 10px 12px;
-            border-radius: 7px;
-            background: #203b2b;
-            border: 1px solid #3c6a4e;
-            color: #b7e2c3;
-            font-size: 12px;
-        }
-        .table-wrap {
-            overflow: auto;
-            max-height: 70vh;
-            border: 1px solid #414b54;
-            border-radius: 7px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            min-width: max-content;
-        }
-        th, td {
-            padding: 9px 11px;
-            border-bottom: 1px solid #3b444c;
-            border-right: 1px solid #343d45;
-            text-align: left;
-            vertical-align: top;
-            font-size: 12px;
-            max-width: 420px;
-            word-break: break-word;
-        }
-        th {
-            position: sticky;
-            top: 0;
-            background: #171b20;
-            color: #fff;
-            z-index: 1;
-        }
+        .warning { margin-top: 12px; padding: 10px 12px; border-radius: 7px; background: #3a2525; border: 1px solid #664040; color: #f2b5b5; font-size: 12px; }
+        .success { margin-top: 12px; padding: 10px 12px; border-radius: 7px; background: #203b2b; border: 1px solid #3c6a4e; color: #b7e2c3; font-size: 12px; }
+        .preview { margin-top: 12px; padding: 12px; border-radius: 7px; background: #222930; border: 1px solid #414b54; color: #cbd3d9; font-size: 12px; display: none; }
+        .preview strong { color: #fff; }
+        .table-wrap { overflow: auto; max-height: 70vh; border: 1px solid #414b54; border-radius: 7px; }
+        table { width: 100%; border-collapse: collapse; min-width: max-content; }
+        th, td { padding: 9px 11px; border-bottom: 1px solid #3b444c; border-right: 1px solid #343d45; text-align: left; vertical-align: top; font-size: 12px; max-width: 420px; word-break: break-word; }
+        th { position: sticky; top: 0; background: #171b20; color: #fff; z-index: 1; }
         tr:hover td { background: #30373e; }
         .empty { padding: 30px; color: #9da7b0; text-align: center; }
         .pager { display: flex; gap: 8px; align-items: center; }
         .disabled { opacity: .45; pointer-events: none; }
-        @media (max-width: 700px) {
-            .main { padding: 14px; }
-            .topbar { padding: 0 14px; }
-            select { width: 100%; }
-        }
+        @media (max-width: 1000px) { .cleanup-grid { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 700px) { .main { padding: 14px; } .topbar { padding: 0 14px; } select, input { width: 100%; } .cleanup-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
 <header class="topbar">
     <div>
         <div class="brand">SCADA FLOW — Database Viewer</div>
-        <div class="subtitle">Master database browser • clear selected table rows</div>
+        <div class="subtitle">Master database browser • historical cleanup by date</div>
     </div>
     <div class="actions">
         <a class="btn" href="{{ url_for('master_companies') }}">Master Panel</a>
@@ -144,80 +71,88 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="info">
-                {{ total_rows }} rows • showing {{ rows|length }} • offset {{ offset }}
-            </div>
+            <div class="info">{{ total_rows }} rows • showing {{ rows|length }} • offset {{ offset }}</div>
         </form>
 
         <div class="toolbar" style="margin-top: 14px;">
-            <div class="info">
-                Selected table: <strong>{{ selected_table }}</strong>
-                {% if selected_table_protected %}
-                    • protected
-                {% endif %}
-            </div>
-
+            <div class="info">Selected table: <strong>{{ selected_table }}</strong>{% if selected_table_protected %} • protected{% endif %}</div>
             {% if selected_table_protected %}
-                <button class="btn clear-btn" disabled>
-                    Protected Table
-                </button>
+                <button class="btn clear-btn" disabled>Protected Table</button>
             {% else %}
-                <button
-                    class="btn clear-btn"
-                    type="button"
-                    onclick="clearSelectedTable()"
-                >
-                    Clear Rows
-                </button>
+                <button class="btn clear-btn" type="button" onclick="clearSelectedTable()">Clear Rows</button>
             {% endif %}
         </div>
 
         {% if selected_table_protected %}
-        <div class="warning">
-            Configuration and authentication tables are protected so this action cannot accidentally delete
-            Companies, Users, PLC configuration, Tags, Flows, or authentication state.
-        </div>
+        <div class="warning">Configuration and authentication tables are protected so this action cannot accidentally delete Companies, Users, PLC configuration, Tags, Flows, or authentication state.</div>
         {% else %}
-        <div class="warning">
-            This clears all rows from the selected table but keeps the table structure. This cannot be undone.
-        </div>
+        <div class="warning">This clears all rows from the selected table but keeps the table structure. This cannot be undone.</div>
         {% endif %}
 
         <div id="clearMessage"></div>
     </div>
 
     <div class="panel">
-        <div class="toolbar" style="margin-bottom: 12px;">
-            <div class="info">
-                Database table: <strong>{{ selected_table }}</strong>
+        <div class="toolbar">
+            <div>
+                <div style="font-size:16px;font-weight:bold;">Historical Data Cleanup</div>
+                <div class="info" style="margin-top:4px;">Delete only rows older than the selected date/time from the selected table.</div>
             </div>
+            <div id="cleanupStatus" class="info"></div>
+        </div>
+
+        {% if selected_table_protected %}
+        <div class="warning">Historical deletion is disabled for this protected configuration table.</div>
+        {% else %}
+        <div class="cleanup-grid">
+            <div class="field">
+                <label for="cleanupTable">Table</label>
+                <select id="cleanupTable" onchange="loadCleanupColumns()">
+                    {% for item in table_info %}
+                        {% if not item.protected %}
+                        <option value="{{ item.name }}" {% if item.name == selected_table %}selected{% endif %}>{{ item.name }}</option>
+                        {% endif %}
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="cleanupColumn">Date/Time Column</label>
+                <select id="cleanupColumn" onchange="resetCleanupPreview"><option value="">Loading...</option></select>
+            </div>
+
+            <div class="field">
+                <label for="cleanupBefore">Delete Before</label>
+                <input id="cleanupBefore" type="datetime-local" step="1" onchange="resetCleanupPreview()">
+            </div>
+
+            <button id="cleanupPreviewButton" class="action-btn" type="button" onclick="previewCleanup()">Preview</button>
+            <button id="cleanupDeleteButton" class="action-btn danger" type="button" onclick="deleteCleanup()" disabled>Delete Historical Data</button>
+        </div>
+
+        <div id="cleanupPreview" class="preview"></div>
+        <div id="cleanupMessage"></div>
+        {% endif %}
+    </div>
+
+    <div class="panel">
+        <div class="toolbar" style="margin-bottom: 12px;">
+            <div class="info">Database table: <strong>{{ selected_table }}</strong></div>
             <div class="pager">
                 {% set previous_offset = [offset - limit, 0]|max %}
                 {% set next_offset = offset + limit %}
-                <a class="btn {% if offset == 0 %}disabled{% endif %}"
-                   href="{{ url_for('flow_company.master_database', table=selected_table, offset=previous_offset, limit=limit) }}">Previous</a>
-                <a class="btn {% if next_offset >= total_rows %}disabled{% endif %}"
-                   href="{{ url_for('flow_company.master_database', table=selected_table, offset=next_offset, limit=limit) }}">Next</a>
+                <a class="btn {% if offset == 0 %}disabled{% endif %}" href="{{ url_for('flow_company.master_database', table=selected_table, offset=previous_offset, limit=limit) }}">Previous</a>
+                <a class="btn {% if next_offset >= total_rows %}disabled{% endif %}" href="{{ url_for('flow_company.master_database', table=selected_table, offset=next_offset, limit=limit) }}">Next</a>
             </div>
         </div>
 
         {% if columns %}
         <div class="table-wrap">
             <table>
-                <thead>
-                    <tr>
-                        {% for column in columns %}
-                        <th>{{ column }}</th>
-                        {% endfor %}
-                    </tr>
-                </thead>
+                <thead><tr>{% for column in columns %}<th>{{ column }}</th>{% endfor %}</tr></thead>
                 <tbody>
                     {% for row in rows %}
-                    <tr>
-                        {% for value in row %}
-                        <td>{{ value if value is not none else '' }}</td>
-                        {% endfor %}
-                    </tr>
+                    <tr>{% for value in row %}<td>{{ value if value is not none else '' }}</td>{% endfor %}</tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -229,67 +164,148 @@
 </main>
 
 <script>
+const CLEANUP_SCHEMA_URL = {{ url_for('flow_company.master_database_cleanup_schema')|tojson }};
+const CLEANUP_PREVIEW_URL = {{ url_for('flow_company.master_database_cleanup_preview')|tojson }};
+const CLEANUP_DELETE_URL = {{ url_for('flow_company.master_database_cleanup_delete')|tojson }};
+
+function cleanupValue(id) {
+    const element = document.getElementById(id);
+    return element ? element.value.trim() : '';
+}
+
+function resetCleanupPreview() {
+    const preview = document.getElementById('cleanupPreview');
+    const button = document.getElementById('cleanupDeleteButton');
+    if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
+    if (button) { button.disabled = true; }
+}
+
+async function loadCleanupColumns() {
+    resetCleanupPreview();
+    const table = cleanupValue('cleanupTable');
+    const columnSelect = document.getElementById('cleanupColumn');
+    const status = document.getElementById('cleanupStatus');
+    if (!table || !columnSelect) return;
+    columnSelect.innerHTML = '<option value="">Loading...</option>';
+    if (status) status.textContent = '';
+
+    try {
+        const response = await fetch(`${CLEANUP_SCHEMA_URL}?table=${encodeURIComponent(table)}`, { headers: { 'Accept': 'application/json' } });
+        const result = await response.json();
+        if (!response.ok || result.status !== 'ok') throw new Error(result.message || 'Could not read table schema.');
+        if (result.protected) { columnSelect.innerHTML = '<option value="">Protected table</option>'; return; }
+        const columns = Array.isArray(result.columns) ? result.columns : [];
+        if (!columns.length) {
+            columnSelect.innerHTML = '<option value="">No date/time column</option>';
+            if (status) status.textContent = 'This table has no detected date/time column.';
+            return;
+        }
+        columnSelect.innerHTML = columns.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}${item.type ? ` [${escapeHtml(item.type)}]` : ''}</option>`).join('');
+        if (status) status.textContent = `${columns.length} date/time column(s) available.`;
+    } catch (error) {
+        columnSelect.innerHTML = '<option value="">Load failed</option>';
+        if (status) status.textContent = error.message;
+    }
+}
+
+function escapeHtml(value) {
+    return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+}
+
+async function previewCleanup() {
+    const table = cleanupValue('cleanupTable');
+    const column = cleanupValue('cleanupColumn');
+    const before = cleanupValue('cleanupBefore');
+    const preview = document.getElementById('cleanupPreview');
+    const message = document.getElementById('cleanupMessage');
+    const deleteButton = document.getElementById('cleanupDeleteButton');
+    if (!table || !column || !before) {
+        if (message) message.innerHTML = '<div class="warning">Select a table, date/time column and cutoff date first.</div>';
+        return;
+    }
+    if (message) message.innerHTML = '';
+    if (preview) { preview.style.display = 'block'; preview.textContent = 'Calculating...'; }
+    if (deleteButton) deleteButton.disabled = true;
+
+    try {
+        const response = await fetch(CLEANUP_PREVIEW_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ table, column, before })
+        });
+        const result = await response.json();
+        if (!response.ok || result.status !== 'ok') throw new Error(result.message || 'Preview failed.');
+        if (preview) {
+            preview.innerHTML = `<strong>${escapeHtml(result.rows_to_delete)}</strong> row(s) will be deleted<br>Table: <strong>${escapeHtml(result.table)}</strong><br>Column: <strong>${escapeHtml(result.column)}</strong><br>Delete before: <strong>${escapeHtml(result.before)}</strong><br>Current range: <strong>${escapeHtml(result.minimum ?? 'none')}</strong> → <strong>${escapeHtml(result.maximum ?? 'none')}</strong>`;
+        }
+        if (deleteButton) deleteButton.disabled = Number(result.rows_to_delete || 0) <= 0;
+    } catch (error) {
+        if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
+        if (message) message.innerHTML = `<div class="warning">${escapeHtml(error.message)}</div>`;
+    }
+}
+
+async function deleteCleanup() {
+    const table = cleanupValue('cleanupTable');
+    const column = cleanupValue('cleanupColumn');
+    const before = cleanupValue('cleanupBefore');
+    const message = document.getElementById('cleanupMessage');
+    const deleteButton = document.getElementById('cleanupDeleteButton');
+    if (!table || !column || !before) return;
+
+    const confirmation = `DELETE BEFORE ${table}`;
+    const confirmed = window.prompt(`This will permanently delete rows from ${table} where ${column} is before ${before}.\n\nType exactly:\n${confirmation}`, '');
+    if (confirmed !== confirmation) {
+        if (message) message.innerHTML = '<div class="warning">Deletion cancelled.</div>';
+        return;
+    }
+
+    if (deleteButton) { deleteButton.disabled = true; deleteButton.textContent = 'Deleting...'; }
+    if (message) message.innerHTML = '';
+
+    try {
+        const response = await fetch(CLEANUP_DELETE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ table, column, before, confirmation })
+        });
+        const result = await response.json();
+        if (!response.ok || result.status !== 'ok') throw new Error(result.message || 'Delete failed.');
+        if (message) message.innerHTML = `<div class="success">${escapeHtml(result.message)}</div>`;
+        resetCleanupPreview();
+        setTimeout(() => window.location.reload(), 900);
+    } catch (error) {
+        if (message) message.innerHTML = `<div class="warning">${escapeHtml(error.message)}</div>`;
+    } finally {
+        if (deleteButton) { deleteButton.disabled = true; deleteButton.textContent = 'Delete Historical Data'; }
+    }
+}
+
 async function clearSelectedTable() {
     const table = {{ selected_table|tojson }};
-
-    if (!table) {
-        return;
-    }
-
-    const confirmed = window.confirm(
-        `Clear ALL rows from "${table}"?\n\nThe table structure will remain, but the data cannot be recovered.`
-    );
-
-    if (!confirmed) {
-        return;
-    }
-
+    if (!table) return;
+    const confirmed = window.confirm(`Clear ALL rows from "${table}"?\n\nThe table structure will remain, but the data cannot be recovered.`);
+    if (!confirmed) return;
     const button = document.querySelector('.clear-btn');
     const message = document.getElementById('clearMessage');
-
-    if (button) {
-        button.disabled = true;
-        button.textContent = 'Clearing...';
-    }
-
+    if (button) { button.disabled = true; button.textContent = 'Clearing...'; }
     message.innerHTML = '';
 
     try {
-        const response = await fetch(
-            '{{ url_for("flow_company.master_database_clear") }}',
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ table })
-            }
-        );
-
+        const response = await fetch('{{ url_for("flow_company.master_database_clear") }}', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ table })
+        });
         const result = await response.json();
-
-        if (!response.ok || result.status !== 'ok') {
-            throw new Error(result.message || 'Clear failed.');
-        }
-
-        message.innerHTML =
-            `<div class="success">${result.message}</div>`;
-
-        setTimeout(() => {
-            window.location.reload();
-        }, 700);
-
+        if (!response.ok || result.status !== 'ok') throw new Error(result.message || 'Clear failed.');
+        message.innerHTML = `<div class="success">${result.message}</div>`;
+        setTimeout(() => window.location.reload(), 700);
     } catch (error) {
-
-        message.innerHTML =
-            `<div class="warning">${error.message}</div>`;
-
-        if (button) {
-            button.disabled = false;
-            button.textContent = 'Clear Rows';
-        }
+        message.innerHTML = `<div class="warning">${error.message}</div>`;
+        if (button) { button.disabled = false; button.textContent = 'Clear Rows'; }
     }
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (document.getElementById('cleanupTable')) loadCleanupColumns();
+});
 </script>
 </body>
 </html>
