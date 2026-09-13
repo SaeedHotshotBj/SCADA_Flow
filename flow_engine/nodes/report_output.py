@@ -149,10 +149,19 @@ class ReportOutput:
         start = self.normalize_date(request.get("Start"), calendar)
         end = self.normalize_date(request.get("End"), calendar)
         plc_id = self._plc_id(request.get("PLC_ID", request.get("plc_id")))
+        contract_code = str(request.get("ContractCode", request.get("contract_code", "")) or "").strip()
+        product_code = str(request.get("ProductCode", request.get("product_code", "")) or "").strip()
 
         report = {"columns": self.products, "rows": [], "totals": [0.0 for _ in self.products], "grand_total": 0.0}
         if company_id is not None and start is not None and end is not None and end >= start:
-            report = get_report_data(company_id, start, end, plc_id=plc_id)
+            report = get_report_data(
+                company_id,
+                start,
+                end,
+                plc_id=plc_id,
+                contract_code=contract_code,
+                product_code=product_code,
+            )
 
         data["ReportData"] = report
         data["ChartData"] = {
@@ -160,6 +169,8 @@ class ReportOutput:
             "calendar": calendar,
             "date_picker": self.date_picker,
             "PLC_ID": plc_id,
+            "ContractCode": contract_code,
+            "ProductCode": product_code,
             "report": report,
             "labels": [item.get("name", item.get("tag", "")) for item in report.get("columns", [])],
             "datasets": [{"label": "مجموع گزارش", "data": report.get("totals", [])}],

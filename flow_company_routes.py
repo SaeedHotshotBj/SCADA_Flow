@@ -7,7 +7,7 @@ from flow_company_routes_legacy import flow_company_bp, _report_company_id, _is_
 
 from flask import jsonify, request, session, render_template
 
-from services.management_service import (
+from services.management_production_service import (
     ensure_management_tables,
     management_flow_allowed,
     get_config as get_management_config,
@@ -60,6 +60,7 @@ def management_page():
         + str(int(company_id))
         + ';</script>'
         '<script src="/static/management_dropdowns.js?v=20260902"></script>'
+        '<script src="/static/management_production_filters.js?v=20260913"></script>'
     )
     if "</body>" in html:
         html = html.replace("</body>", dropdown_bootstrap + "</body>", 1)
