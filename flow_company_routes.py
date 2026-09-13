@@ -7,7 +7,7 @@ from flow_company_routes_legacy import flow_company_bp, _report_company_id, _is_
 
 from flask import jsonify, request, session, render_template
 
-from services.management_service import (
+from services.management_production_service import (
     ensure_management_tables,
     management_flow_allowed,
     get_config as get_management_config,
@@ -234,7 +234,7 @@ def management_product_delete():
         product_id = request.args.get("product_id", type=int)
         _prepare_management_db()
         deleted_id = delete_product(company_id, product_id)
-        return jsonify({"status": "ok", "ProductID": deleted_id})
+        return jsonify({"status": "ok", "ProductID": deleted_id}), 200
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 409
 
