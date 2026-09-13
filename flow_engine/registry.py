@@ -20,6 +20,7 @@ from flow_engine.nodes.trend_output import TrendOutput
 from flow_engine.nodes.trend_database_reader import TrendDatabaseReader
 from flow_engine.nodes.report_output import ReportOutput
 from flow_engine.nodes.date_converter import DateConverterNode
+from flow_engine.nodes.production_context import ProductionContext
 
 NODE_CLASSES = {
     "PLCReader": PLCReader,
@@ -38,6 +39,7 @@ NODE_CLASSES = {
     "TrendOutput": TrendOutput,
     "ReportOutput": ReportOutput,
     "DateConverter": DateConverterNode,
+    "ProductionContext": ProductionContext,
 }
 
 
