@@ -7,8 +7,8 @@ import json
 from datetime import datetime
 import jdatetime
 
-from database import get_company_flow, get_connection, get_latest_tag_values
-from services.report_service import get_report_data, ensure_report_tables, save_report_snapshot
+from database import get_company_flow, get_connection
+from services.report_service import get_report_data, save_report_snapshot
 
 
 class ReportOutput:
@@ -18,6 +18,8 @@ class ReportOutput:
         self.company_id = self.config.get("company_id")
         self.date_picker = self.config.get("DatePicker", "JalaliPicker")
         self.products = self.config.get("products", [])
+        self.contract_code_tag = str(self.config.get("contract_code_tag", "ContractCode")).strip() or "ContractCode"
+        self.product_code_tag = str(self.config.get("product_code_tag", "ProductCode")).strip() or "ProductCode"
         self._last_report_event_key = None
 
     @staticmethod
@@ -68,7 +70,10 @@ class ReportOutput:
 
     def _report_tag_definitions(self):
         definitions = self._load_definitions()
-        result = []
+        result = [
+            ({"tag": self.contract_code_tag, "context_role": "contract_code"}, definitions.get(self.contract_code_tag.lower(), {})),
+            ({"tag": self.product_code_tag, "context_role": "product_code"}, definitions.get(self.product_code_tag.lower(), {})),
+        ]
         for item in self.products:
             if not isinstance(item, dict):
                 continue
@@ -120,7 +125,11 @@ class ReportOutput:
         report_id = save_report_snapshot(
             self.company_id,
             tags,
-            self.products,
+            [
+                {"tag": self.contract_code_tag, "context_role": "contract_code"},
+                {"tag": self.product_code_tag, "context_role": "product_code"},
+                *self.products,
+            ],
             timestamp=str(timestamp).replace("T", " "),
             trigger_tag=event.get("tag"),
             trigger_register=event.get("register"),
@@ -149,10 +158,19 @@ class ReportOutput:
         start = self.normalize_date(request.get("Start"), calendar)
         end = self.normalize_date(request.get("End"), calendar)
         plc_id = self._plc_id(request.get("PLC_ID", request.get("plc_id")))
+        contract_code = str(request.get("ContractCode", request.get("contract_code", ""))).strip()
+        product_code = str(request.get("ProductCode", request.get("product_code", ""))).strip()
 
         report = {"columns": self.products, "rows": [], "totals": [0.0 for _ in self.products], "grand_total": 0.0}
         if company_id is not None and start is not None and end is not None and end >= start:
-            report = get_report_data(company_id, start, end, plc_id=plc_id)
+            report = get_report_data(
+                company_id,
+                start,
+                end,
+                plc_id=plc_id,
+                contract_code=contract_code,
+                product_code=product_code,
+            )
 
         data["ReportData"] = report
         data["ChartData"] = {
@@ -160,6 +178,8 @@ class ReportOutput:
             "calendar": calendar,
             "date_picker": self.date_picker,
             "PLC_ID": plc_id,
+            "ContractCode": contract_code,
+            "ProductCode": product_code,
             "report": report,
             "labels": [item.get("name", item.get("tag", "")) for item in report.get("columns", [])],
             "datasets": [{"label": "مجموع گزارش", "data": report.get("totals", [])}],
