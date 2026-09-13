@@ -117,5 +117,6 @@ function applyAll(data){if(!data){setOffline();return;}if(Array.isArray(data.Tag
 async function latest(){try{const r=await fetch("/dashboard/latest_plc?t="+Date.now(),{cache:"no-store",credentials:"same-origin",headers:{"Accept":"application/json"}});if(r.redirected)throw new Error("Dashboard data redirected to login");if(!r.ok)throw new Error("HTTP "+r.status);const data=await r.json();applyAll(data);}catch(e){console.error("DASHBOARD DATA ERROR",e);setOffline();}}
 latest();setInterval(latest,1000);
 </script>
+<script src="/static/dashboard_machine_trend.js?v=3"></script>
 </body>
 </html>
