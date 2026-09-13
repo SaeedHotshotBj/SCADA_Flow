@@ -121,11 +121,14 @@ def _flow_tag_plcs(company_id, nodes):
 
             keys = {name.lower()}
             register = mapping.get("register")
+            normalized_register = None
             if register not in (None, ""):
                 try:
-                    keys.add(str(int(float(register))).lower())
+                    normalized_register = str(int(float(register)))
                 except (TypeError, ValueError):
-                    keys.add(str(register).strip().lower())
+                    normalized_register = str(register).strip()
+                if normalized_register:
+                    keys.add(normalized_register.lower())
 
             for key in keys:
                 result.setdefault(key, set()).update(pid for pid in plc_ids if pid in company_plc_ids)
@@ -150,7 +153,7 @@ def _resolve_widget_plc_id(widget, tag_plcs):
     return next(iter(candidates)) if len(candidates) == 1 else None
 
 
-def _register_to_tag(nodes):
+def _register_to_tag(nodes, tag_plcs):
     lookup = {}
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
@@ -164,14 +167,23 @@ def _register_to_tag(nodes):
                 continue
             name = str(item.get("name", "")).strip()
             register = item.get("register")
-            plc_id = _to_plc_id(item.get("plc_id", item.get("PLC_ID")))
             if not name or register in (None, ""):
                 continue
             try:
-                register = str(int(float(register)))
+                register_key = str(int(float(register)))
             except (TypeError, ValueError):
-                register = str(register).strip()
-            lookup[(plc_id, register)] = name
+                register_key = str(register).strip()
+
+            explicit_plc = _to_plc_id(item.get("plc_id", item.get("PLC_ID")))
+            if explicit_plc is not None:
+                plc_ids = [explicit_plc]
+            else:
+                plc_ids = list(tag_plcs.get(name.lower(), set()))
+
+            for plc_id in plc_ids:
+                lookup[(plc_id, register_key)] = name
+
+        break
     return lookup
 
 
@@ -194,8 +206,8 @@ def get_dashboard_widgets(company_id):
 
     try:
         nodes = _get_nodes(company_id)
-        register_lookup = _register_to_tag(nodes)
         tag_plcs = _flow_tag_plcs(company_id, nodes)
+        register_lookup = _register_to_tag(nodes, tag_plcs)
 
         for node in nodes.values():
             if not isinstance(node, dict):
