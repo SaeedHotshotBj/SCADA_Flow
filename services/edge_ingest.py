@@ -3,47 +3,70 @@
 from datetime import datetime
 import json
 import math
+import sqlite3
+import threading
 
 from database import get_connection, get_company_flow
 
 
-def ensure_edge_event_schema():
-    conn = get_connection()
-    try:
-        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-        if "PLC_Data" in tables:
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(PLC_Data)").fetchall()}
-            if "PLC_ID" not in columns:
-                conn.execute("ALTER TABLE PLC_Data ADD COLUMN PLC_ID INTEGER")
-            if "EventID" not in columns:
-                conn.execute("ALTER TABLE PLC_Data ADD COLUMN EventID TEXT")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_plc_data_company_plc_tag_time ON PLC_Data(CompanyID, PLC_ID, TagName, Timestamp)")
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_plc_data_event_id ON PLC_Data(EventID) WHERE EventID IS NOT NULL")
-        if "TagHistory" in tables:
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(TagHistory)").fetchall()}
-            if "PLC_ID" not in columns:
-                conn.execute("ALTER TABLE TagHistory ADD COLUMN PLC_ID INTEGER")
-            if "EventID" not in columns:
-                conn.execute("ALTER TABLE TagHistory ADD COLUMN EventID TEXT")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_tag_history_company_plc_tag_time ON TagHistory(CompanyID, PLC_ID, TagName, Timestamp)")
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_tag_history_event_id ON TagHistory(EventID) WHERE EventID IS NOT NULL")
+_EDGE_SCHEMA_LOCK = threading.Lock()
+_EDGE_SCHEMA_READY = False
 
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS EdgeEventLedger (
-                EventID TEXT PRIMARY KEY,
-                CompanyID INTEGER NOT NULL,
-                PLC_ID INTEGER NOT NULL,
-                TagName TEXT NOT NULL,
-                EventTimestamp TEXT NOT NULL,
-                ReceivedAt TEXT NOT NULL
+
+def ensure_edge_event_schema():
+    global _EDGE_SCHEMA_READY
+
+    if _EDGE_SCHEMA_READY:
+        return
+
+    with _EDGE_SCHEMA_LOCK:
+        if _EDGE_SCHEMA_READY:
+            return
+
+        conn = get_connection()
+        try:
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute("BEGIN IMMEDIATE")
+
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "PLC_Data" in tables:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(PLC_Data)").fetchall()}
+                if "PLC_ID" not in columns:
+                    conn.execute("ALTER TABLE PLC_Data ADD COLUMN PLC_ID INTEGER")
+                if "EventID" not in columns:
+                    conn.execute("ALTER TABLE PLC_Data ADD COLUMN EventID TEXT")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_plc_data_company_plc_tag_time ON PLC_Data(CompanyID, PLC_ID, TagName, Timestamp)")
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_plc_data_event_id ON PLC_Data(EventID) WHERE EventID IS NOT NULL")
+
+            if "TagHistory" in tables:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(TagHistory)").fetchall()}
+                if "PLC_ID" not in columns:
+                    conn.execute("ALTER TABLE TagHistory ADD COLUMN PLC_ID INTEGER")
+                if "EventID" not in columns:
+                    conn.execute("ALTER TABLE TagHistory ADD COLUMN EventID TEXT")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_tag_history_company_plc_tag_time ON TagHistory(CompanyID, PLC_ID, TagName, Timestamp)")
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_tag_history_event_id ON TagHistory(EventID) WHERE EventID IS NOT NULL")
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS EdgeEventLedger (
+                    EventID TEXT PRIMARY KEY,
+                    CompanyID INTEGER NOT NULL,
+                    PLC_ID INTEGER NOT NULL,
+                    TagName TEXT NOT NULL,
+                    EventTimestamp TEXT NOT NULL,
+                    ReceivedAt TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_edge_ledger_company_time ON EdgeEventLedger(CompanyID, PLC_ID, TagName, EventTimestamp)")
-        conn.commit()
-    finally:
-        conn.close()
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_edge_ledger_company_time ON EdgeEventLedger(CompanyID, PLC_ID, TagName, EventTimestamp)")
+            conn.commit()
+            _EDGE_SCHEMA_READY = True
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def _parse_timestamp(value):
@@ -204,6 +227,44 @@ def _flow_tag_storage(company_id):
     return allowed
 
 
+def _insert_or_ack_existing(conn, event_id, company_id, plc_id, tag, value, timestamp, storage_type):
+    try:
+        conn.execute(
+            """
+            INSERT INTO PLC_Data
+            (CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (company_id, plc_id, tag, value, storage_type, timestamp, event_id),
+        )
+        return "inserted"
+    except sqlite3.IntegrityError:
+        existing = conn.execute(
+            "SELECT ID, CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID FROM PLC_Data WHERE EventID=? LIMIT 1",
+            (event_id,),
+        ).fetchone()
+        if existing is None:
+            raise
+
+        received_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO EdgeEventLedger
+            (EventID, CompanyID, PLC_ID, TagName, EventTimestamp, ReceivedAt)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                existing["CompanyID"],
+                existing["PLC_ID"],
+                existing["TagName"],
+                existing["Timestamp"],
+                received_at,
+            ),
+        )
+        return "existing"
+
+
 def ingest_items(items):
     ensure_edge_event_schema()
     if not isinstance(items, list):
@@ -290,23 +351,21 @@ def ingest_items(items):
                 conn.execute(f"SAVEPOINT {savepoint}")
                 received_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
 
-                conn.execute(
-                    """
-                    INSERT INTO PLC_Data
-                    (CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (company_id, plc_id, tag, value, storage_type, timestamp, event_id),
+                insert_state = _insert_or_ack_existing(
+                    conn,
+                    event_id,
+                    company_id,
+                    plc_id,
+                    tag,
+                    value,
+                    timestamp,
+                    storage_type,
                 )
 
-                verify = conn.execute(
-                    "SELECT ID, CompanyID, PLC_ID, TagName, Value, Timestamp, StorageType, EventID FROM PLC_Data WHERE EventID=? LIMIT 1",
-                    (event_id,),
-                ).fetchone()
-                if verify is None:
-                    raise RuntimeError("PLC_Data insert verification failed")
-
-                row_id = verify["ID"]
+                if insert_state == "existing":
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    acks.append(event_id)
+                    continue
 
                 conn.execute(
                     """
