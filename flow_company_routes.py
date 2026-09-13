@@ -60,6 +60,7 @@ def management_page():
         + str(int(company_id))
         + ';</script>'
         '<script src="/static/management_dropdowns.js?v=20260902"></script>'
+        '<script src="/static/management_production_filters.js?v=20260913"></script>'
     )
     if "</body>" in html:
         html = html.replace("</body>", dropdown_bootstrap + "</body>", 1)
@@ -234,7 +235,7 @@ def management_product_delete():
         product_id = request.args.get("product_id", type=int)
         _prepare_management_db()
         deleted_id = delete_product(company_id, product_id)
-        return jsonify({"status": "ok", "ProductID": deleted_id}), 200
+        return jsonify({"status": "ok", "ProductID": deleted_id})
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 409
 
