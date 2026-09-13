@@ -179,7 +179,7 @@ def get_report_data(company_id, start, end, plc_id=None, contract_code=None, pro
               AND datetime(h.Timestamp) <= datetime(?)
               AND LOWER(v.TagName) IN ({placeholders})
         """
-        params = [company_id, start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")]
+        params = [company_id, start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")] + keys
         if plc_id is not None:
             sql += " AND h.PLC_ID = ?"
             params.append(int(plc_id))
@@ -192,7 +192,7 @@ def get_report_data(company_id, start, end, plc_id=None, contract_code=None, pro
             sql += " AND LOWER(COALESCE(h.ProductCode,'')) = LOWER(?)"
             params.append(product_code)
         sql += " ORDER BY datetime(h.Timestamp), h.ReportID, v.ReportValueID"
-        rows = conn.execute(sql, params + keys).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     finally:
         conn.close()
 
