@@ -258,3 +258,9 @@ def management_data():
         return jsonify(get_management_data(company_id, request.args.to_dict(flat=True)))
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+# Master Database Viewer historical cleanup routes are registered from a
+# separate module so the existing management/database implementation remains
+# untouched.
+from services import master_database_cleanup  # noqa: E402,F401
