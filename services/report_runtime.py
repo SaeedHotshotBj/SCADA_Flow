@@ -75,22 +75,33 @@ class ReportRuntime:
             break
         return result
 
-    def _latest_values(self, company_id, tags):
+    def _latest_values(self, company_id, tags, plc_id=None):
         if not tags:
             return {}
         conn = get_connection()
         try:
             result = {}
             for tag in tags:
-                row = conn.execute(
-                    """
-                    SELECT TagName, Value, Timestamp
-                    FROM PLC_Data
-                    WHERE CompanyID = ? AND LOWER(TagName) = LOWER(?)
-                    ORDER BY ID DESC LIMIT 1
-                    """,
-                    (company_id, tag),
-                ).fetchone()
+                if plc_id is not None:
+                    row = conn.execute(
+                        """
+                        SELECT TagName, Value, Timestamp
+                        FROM TagHistory
+                        WHERE CompanyID = ? AND PLC_ID = ? AND LOWER(TagName) = LOWER(?)
+                        ORDER BY ID DESC LIMIT 1
+                        """,
+                        (company_id, int(plc_id), tag),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        """
+                        SELECT TagName, Value, Timestamp
+                        FROM PLC_Data
+                        WHERE CompanyID = ? AND LOWER(TagName) = LOWER(?)
+                        ORDER BY ID DESC LIMIT 1
+                        """,
+                        (company_id, tag),
+                    ).fetchone()
                 if row:
                     result[str(row["TagName"])] = {
                         "value": row["Value"],
@@ -100,7 +111,7 @@ class ReportRuntime:
         finally:
             conn.close()
 
-    def _management_context(self, company_id):
+    def _management_context(self, company_id, plc_id=None):
         result = {"ContractCode": None, "ProductCode": None}
         nodes = self._nodes(company_id)
         config = None
@@ -135,10 +146,18 @@ class ReportRuntime:
                         mapping_register = int(float(mapping.get("register")))
                     except (TypeError, ValueError):
                         continue
-                    if mapping_register == register_int:
-                        tag_name = str(mapping.get("name", "")).strip() or None
-                        if tag_name:
-                            break
+                    if mapping_register != register_int:
+                        continue
+                    mapping_plc = mapping.get("plc_id", mapping.get("PLC_ID"))
+                    try:
+                        mapping_plc = int(mapping_plc) if mapping_plc not in (None, "") else None
+                    except (TypeError, ValueError):
+                        mapping_plc = None
+                    if plc_id is not None and mapping_plc is not None and mapping_plc != int(plc_id):
+                        continue
+                    tag_name = str(mapping.get("name", "")).strip() or None
+                    if tag_name:
+                        break
                 if tag_name:
                     break
             if not tag_name:
@@ -146,14 +165,24 @@ class ReportRuntime:
 
             conn = get_connection()
             try:
-                row = conn.execute(
-                    """
-                    SELECT Value FROM PLC_Data
-                    WHERE CompanyID = ? AND LOWER(TagName) = LOWER(?)
-                    ORDER BY ID DESC LIMIT 1
-                    """,
-                    (company_id, tag_name),
-                ).fetchone()
+                if plc_id is not None:
+                    row = conn.execute(
+                        """
+                        SELECT Value FROM TagHistory
+                        WHERE CompanyID = ? AND PLC_ID = ? AND LOWER(TagName) = LOWER(?)
+                        ORDER BY ID DESC LIMIT 1
+                        """,
+                        (company_id, int(plc_id), tag_name),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        """
+                        SELECT Value FROM PLC_Data
+                        WHERE CompanyID = ? AND LOWER(TagName) = LOWER(?)
+                        ORDER BY ID DESC LIMIT 1
+                        """,
+                        (company_id, tag_name),
+                    ).fetchone()
                 return row["Value"] if row else None
             finally:
                 conn.close()
@@ -170,6 +199,12 @@ class ReportRuntime:
         company_id = int(row["CompanyID"])
         tag_name = str(row["TagName"] or "").strip()
         timestamp = row["Timestamp"]
+        plc_id = row["PLC_ID"]
+        if plc_id is not None:
+            try:
+                plc_id = int(plc_id)
+            except (TypeError, ValueError):
+                plc_id = None
         if not tag_name:
             return
 
@@ -196,7 +231,7 @@ class ReportRuntime:
                 continue
             incoming_mode = str(incoming_definition.get("storage", "TIME")).strip().upper()
 
-            latest = self._latest_values(company_id, tags)
+            latest = self._latest_values(company_id, tags, plc_id=plc_id)
             if len(latest) != len(tags):
                 continue
 
@@ -205,7 +240,7 @@ class ReportRuntime:
                     interval = float(incoming_definition.get("interval", 0) or 0)
                 except (TypeError, ValueError):
                     interval = 0.0
-                key = (company_id, config["node_id"], incoming_key)
+                key = (company_id, config["node_id"], incoming_key, plc_id)
                 now = time.monotonic()
                 last = self.last_time_snapshot.get(key, 0.0)
                 if interval > 0 and now - last < interval:
@@ -219,14 +254,15 @@ class ReportRuntime:
             snapshot_key = (
                 company_id,
                 config["node_id"],
+                plc_id,
                 tuple(sorted((str(name).lower(), str(item.get("timestamp"))) for name, item in latest.items())),
             )
-            report_key = (company_id, config["node_id"])
+            report_key = (company_id, config["node_id"], plc_id)
             if self.last_snapshot_key.get(report_key) == snapshot_key:
                 continue
 
             values = {name: item["value"] for name, item in latest.items()}
-            context = self._management_context(company_id)
+            context = self._management_context(company_id, plc_id=plc_id)
             if context.get("ContractCode") not in (None, ""):
                 values["ContractCode"] = context["ContractCode"]
             if context.get("ProductCode") not in (None, ""):
@@ -244,10 +280,10 @@ class ReportRuntime:
             ):
                 snapshot_products.append({"tag": "ProductCode", "name": "ProductCode", "context_role": "product_code"})
 
-            report_id = save_report_snapshot(company_id, values, snapshot_products, timestamp=timestamp)
+            report_id = save_report_snapshot(company_id, values, snapshot_products, timestamp=timestamp, plc_id=plc_id)
             if report_id is not None:
                 self.last_snapshot_key[report_key] = snapshot_key
-                print("REPORT RUNTIME SNAPSHOT:", "Company=", company_id, "ReportNode=", config["node_id"], "ReportID=", report_id, "TriggerTag=", tag_name, "Mode=", incoming_mode, "ContractCode=", context.get("ContractCode"), "ProductCode=", context.get("ProductCode"), "Tags=", tags)
+                print("REPORT RUNTIME SNAPSHOT:", "Company=", company_id, "PLC_ID=", plc_id, "ReportNode=", config["node_id"], "ReportID=", report_id, "TriggerTag=", tag_name, "Mode=", incoming_mode, "ContractCode=", context.get("ContractCode"), "ProductCode=", context.get("ProductCode"), "Tags=", tags)
 
     def run(self):
         while self.running:
@@ -256,8 +292,17 @@ class ReportRuntime:
                 try:
                     rows = conn.execute(
                         """
-                        SELECT ID, CompanyID, TagName, Timestamp
-                        FROM PLC_Data WHERE ID > ? ORDER BY ID ASC LIMIT 500
+                        SELECT p.ID, p.CompanyID, p.TagName, p.Timestamp,
+                               (SELECT th.PLC_ID
+                                  FROM TagHistory th
+                                 WHERE th.CompanyID=p.CompanyID
+                                   AND LOWER(th.TagName)=LOWER(p.TagName)
+                                   AND th.Timestamp=p.Timestamp
+                                 ORDER BY th.ID DESC LIMIT 1) AS PLC_ID
+                        FROM PLC_Data p
+                        WHERE p.ID > ?
+                        ORDER BY p.ID ASC
+                        LIMIT 500
                         """,
                         (self.last_id,),
                     ).fetchall()

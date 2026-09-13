@@ -51,6 +51,7 @@ def ensure_report_tables():
             if name not in cols:
                 conn.execute(f"ALTER TABLE ReportHistory ADD COLUMN {name} {typ}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_report_history_company_plc_time ON ReportHistory(CompanyID,PLC_ID,Timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_report_history_company_contract_product_time ON ReportHistory(CompanyID,ContractCode,ProductCode,Timestamp)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_report_values_report_tag ON ReportValues(ReportID,TagName)")
         conn.commit()
     finally:
@@ -155,7 +156,7 @@ def save_report_snapshot(company_id, tags, report_products, timestamp=None, trig
         conn.close()
 
 
-def get_report_data(company_id, start, end, plc_id=None):
+def get_report_data(company_id, start, end, plc_id=None, contract_code=None, product_code=None):
     products = [p for p in get_report_products(company_id) if not p.get("context_role")]
     if plc_id is not None:
         products = [p for p in products if p.get("plc_id") in (None, int(plc_id))]
@@ -178,12 +179,20 @@ def get_report_data(company_id, start, end, plc_id=None):
               AND datetime(h.Timestamp) <= datetime(?)
               AND LOWER(v.TagName) IN ({placeholders})
         """
-        params = [company_id, start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")]
+        params = [company_id, start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")] + keys
         if plc_id is not None:
             sql += " AND h.PLC_ID = ?"
             params.append(int(plc_id))
+        contract_code = str(contract_code or "").strip()
+        product_code = str(product_code or "").strip()
+        if contract_code:
+            sql += " AND LOWER(COALESCE(h.ContractCode,'')) = LOWER(?)"
+            params.append(contract_code)
+        if product_code:
+            sql += " AND LOWER(COALESCE(h.ProductCode,'')) = LOWER(?)"
+            params.append(product_code)
         sql += " ORDER BY datetime(h.Timestamp), h.ReportID, v.ReportValueID"
-        rows = conn.execute(sql, params + keys).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     finally:
         conn.close()
 
