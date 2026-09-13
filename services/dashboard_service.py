@@ -221,7 +221,12 @@ def get_dashboard_widgets(company_id):
                         if not isinstance(widget, dict):
                             continue
                         item = dict(widget)
+                        raw_tag = str(item.get("tag", "")).strip()
                         item["plc_id"] = _resolve_widget_plc_id(item, tag_plcs)
+                        if item["plc_id"] is not None:
+                            item["tag"] = _resolve_machine_tag(raw_tag, item["plc_id"], register_lookup)
+                        if not item.get("configured_tag"):
+                            item["configured_tag"] = raw_tag
                         widgets.append(item)
 
             elif node.get("name") == "MachineCard":
