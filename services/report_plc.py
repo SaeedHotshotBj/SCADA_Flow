@@ -41,18 +41,35 @@ def ensure_report_tables():
         CREATE TABLE IF NOT EXISTS ReportValues(
             ReportValueID INTEGER PRIMARY KEY AUTOINCREMENT,
             ReportID INTEGER NOT NULL,
+            PLC_ID INTEGER,
             TagName TEXT NOT NULL,
             Value REAL,
             FOREIGN KEY(ReportID) REFERENCES ReportHistory(ReportID) ON DELETE CASCADE
         );
         """)
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(ReportHistory)").fetchall()}
+        history_cols = {r["name"] for r in conn.execute("PRAGMA table_info(ReportHistory)").fetchall()}
         for name, typ in [("PLC_ID", "INTEGER"), ("TriggerTag", "TEXT"), ("TriggerRegister", "TEXT"), ("TriggerValue", "REAL"), ("ContractCode", "TEXT"), ("ProductCode", "TEXT")]:
-            if name not in cols:
+            if name not in history_cols:
                 conn.execute(f"ALTER TABLE ReportHistory ADD COLUMN {name} {typ}")
+
+        value_cols = {r["name"] for r in conn.execute("PRAGMA table_info(ReportValues)").fetchall()}
+        if "PLC_ID" not in value_cols:
+            conn.execute("ALTER TABLE ReportValues ADD COLUMN PLC_ID INTEGER")
+
+        conn.execute("""
+            UPDATE ReportValues
+               SET PLC_ID = (
+                   SELECT h.PLC_ID
+                     FROM ReportHistory h
+                    WHERE h.ReportID = ReportValues.ReportID
+               )
+             WHERE PLC_ID IS NULL
+        """)
+
         conn.execute("CREATE INDEX IF NOT EXISTS idx_report_history_company_plc_time ON ReportHistory(CompanyID,PLC_ID,Timestamp)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_report_history_company_contract_product_time ON ReportHistory(CompanyID,ContractCode,ProductCode,Timestamp)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_report_values_report_tag ON ReportValues(ReportID,TagName)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_report_values_company_plc_tag ON ReportValues(PLC_ID,TagName)")
         conn.commit()
     finally:
         conn.close()
@@ -132,7 +149,7 @@ def save_report_snapshot(company_id, tags, report_products, timestamp=None, trig
         if found is None or found[1] is None:
             continue
         try:
-            values.append((found[0], float(found[1])))
+            values.append((item_plc if item_plc is not None else plc_id, found[0], float(found[1])))
         except (TypeError, ValueError):
             pass
     if not values:
@@ -146,7 +163,7 @@ def save_report_snapshot(company_id, tags, report_products, timestamp=None, trig
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (company_id, plc_id, timestamp, trigger_tag, trigger_register, trigger_value, contract, product))
         report_id = cur.lastrowid
-        conn.executemany("INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)", [(report_id, n, v) for n, v in values])
+        conn.executemany("INSERT INTO ReportValues(ReportID,PLC_ID,TagName,Value) VALUES(?,?,?,?)", [(report_id, value_plc_id, n, v) for value_plc_id, n, v in values])
         conn.commit()
         return report_id
     except Exception:
@@ -171,7 +188,7 @@ def get_report_data(company_id, start, end, plc_id=None, contract_code=None, pro
     try:
         sql = f"""
             SELECT h.ReportID, h.Timestamp, h.ContractCode, h.ProductCode,
-                   h.PLC_ID, v.TagName, v.Value, v.ReportValueID
+                   h.PLC_ID, v.PLC_ID AS ValuePLC_ID, v.TagName, v.Value, v.ReportValueID
             FROM ReportHistory h
             JOIN ReportValues v ON v.ReportID = h.ReportID
             WHERE h.CompanyID = ?
@@ -181,8 +198,8 @@ def get_report_data(company_id, start, end, plc_id=None, contract_code=None, pro
         """
         params = [company_id, start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")] + keys
         if plc_id is not None:
-            sql += " AND h.PLC_ID = ?"
-            params.append(int(plc_id))
+            sql += " AND h.PLC_ID = ? AND (v.PLC_ID = ? OR v.PLC_ID IS NULL)"
+            params.extend([int(plc_id), int(plc_id)])
         contract_code = str(contract_code or "").strip()
         product_code = str(product_code or "").strip()
         if contract_code:
