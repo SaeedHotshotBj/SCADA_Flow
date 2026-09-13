@@ -16,6 +16,12 @@ from services.management_service import (
     save_product,
     get_products,
 )
+from services.management_production_service import get_production_management_data
+from services.production_context_service import (
+    get_production_context_definition,
+    get_contract_product_options,
+    write_production_context,
+)
 from services.management_migration import ensure_management_schema
 from services.management_crud import (
     get_contract_by_code,
@@ -258,6 +264,89 @@ def management_data():
         return jsonify(get_management_data(company_id, request.args.to_dict(flat=True)))
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@flow_company_bp.get("/management/production-data")
+def management_production_data():
+    company_id = _management_company_id()
+    if company_id is None or not _management_allowed(company_id):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+    try:
+        _prepare_management_db()
+        return jsonify(get_production_management_data(company_id, request.args.to_dict(flat=True)))
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@flow_company_bp.get("/management/production-context/options")
+def management_production_context_options():
+    company_id = _management_company_id()
+    if company_id is None or not _management_allowed(company_id):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+    try:
+        _prepare_management_db()
+        return jsonify({
+            "status": "ok",
+            "CompanyID": int(company_id),
+            "context": get_production_context_definition(company_id),
+            "items": get_contract_product_options(company_id),
+        })
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@flow_company_bp.post("/management/production-context/write")
+def management_production_context_write():
+    company_id = _management_company_id()
+    if company_id is None or not _management_allowed(company_id):
+        return jsonify({"status": "error", "message": "Access denied"}), 403
+    try:
+        payload = request.get_json(silent=True) or {}
+        contract_code = str(payload.get("ContractCode", payload.get("contract_code", ""))).strip()
+        product_code = str(payload.get("ProductCode", payload.get("product_code", ""))).strip()
+        _prepare_management_db()
+        result = write_production_context(company_id, contract_code, product_code)
+        return jsonify(result)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@flow_company_bp.after_app_request
+def _inject_production_ui_scripts(response):
+    """Load only the UI pieces belonging to the production-context change."""
+    try:
+        if request.method != "GET" or not response.is_streamed:
+            pass
+
+        if (
+            request.method != "GET"
+            or not response.mimetype
+            or response.mimetype.lower() != "text/html"
+            or request.path not in {"/report", "/management"}
+        ):
+            return response
+
+        script = ""
+        if request.path == "/report":
+            script = '<script src="/static/report_filters.js?v=20260913"></script>'
+        elif request.path == "/management":
+            script = '<script src="/static/management_production.js?v=20260913"></script>'
+
+        if not script:
+            return response
+        body = response.get_data(as_text=True)
+        if "</body>" in body:
+            response.set_data(body.replace("</body>", script + "</body>", 1))
+        else:
+            response.set_data(body + script)
+        return response
+    except Exception as exc:
+        print("PRODUCTION UI SCRIPT INJECTION ERROR:", exc)
+        return response
 
 
 # Master Database Viewer historical cleanup routes are registered from a
