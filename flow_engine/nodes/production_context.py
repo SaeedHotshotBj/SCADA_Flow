@@ -1,4 +1,5 @@
 from database import get_connection
+from services.management_service import ensure_management_tables
 
 
 class ProductionContext:
@@ -95,6 +96,7 @@ class ProductionContext:
 
     def execute(self, data=None):
         data = data or {}
+        ensure_management_tables()
         registers = data.get("Registers", {}) or data.get("registers", {}) or {}
         plc = data.get("PLC", {}) or {}
         runtime_plc_id = self._to_int(data.get("PLC_ID", plc.get("PLC_ID")))
