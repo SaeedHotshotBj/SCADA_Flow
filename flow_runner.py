@@ -1,6 +1,7 @@
 import copy
 import time
 import traceback
+from collections import deque
 
 from flow_engine.registry import get_node_class
 from flow_status import flow_status
@@ -61,6 +62,7 @@ class FlowRunner:
         home = self.flow_data.get("drawflow", {}).get("Home", {}).get("data", {})
         if not isinstance(home, dict):
             return
+
         for node_id, node in home.items():
             if not isinstance(node, dict):
                 continue
@@ -82,9 +84,11 @@ class FlowRunner:
             roles = self.get_node_config(node).get("roles", [])
             if isinstance(roles, list):
                 role_definitions.extend(
-                    role for role in roles
+                    role
+                    for role in roles
                     if isinstance(role, dict) and str(role.get("role", "")).strip()
                 )
+
         unique_roles = []
         seen_roles = set()
         for role in role_definitions:
@@ -92,6 +96,7 @@ class FlowRunner:
             if key and key not in seen_roles:
                 seen_roles.add(key)
                 unique_roles.append(role)
+
         for info in self.nodes.values():
             if info["type"] == "RolesEngaged":
                 info["config"]["roles"] = unique_roles
@@ -112,7 +117,8 @@ class FlowRunner:
     def get_start_nodes(self, realtime=False):
         ignored = {"Roles", "RolesEngaged"}
         all_nodes = {
-            node_id for node_id, node in self.nodes.items()
+            node_id
+            for node_id, node in self.nodes.items()
             if node["type"] not in ignored
             and not (realtime and node["type"] in REALTIME_SKIP_NODE_TYPES)
         }
@@ -158,17 +164,28 @@ class FlowRunner:
         info = self.nodes[node_id]
         if realtime and info["type"] in REALTIME_SKIP_NODE_TYPES:
             return data
+
         payload = self._prepare_payload(data)
         try:
             payload = self._execute_single(node_id, payload)
             flow_status.node_ok(node_id)
         except Exception as exc:
             flow_status.node_error(node_id, exc)
-            print("FLOW NODE ERROR:", "Node=", node_id, "Type=", info["type"], "Error=", repr(exc))
+            print(
+                "FLOW NODE ERROR:",
+                "Node=",
+                node_id,
+                "Type=",
+                info["type"],
+                "Error=",
+                repr(exc),
+            )
             return payload
+
         children = self.next_nodes(node_id)
         if not children:
             return payload
+
         branch_results = []
         for child in children:
             child_id = str(child)
@@ -184,6 +201,7 @@ class FlowRunner:
                 realtime=realtime,
             )
             branch_results.append({"node_id": child_id, "data": child_result})
+
         result = copy.deepcopy(payload)
         result["_BranchResults"] = branch_results
         return result
@@ -209,130 +227,167 @@ class FlowRunner:
                 stack.append(parent)
         return result
 
-    def _has_eligible_ancestor(self, node_id, eligible, reverse):
-        """Find any executable ancestor across passthrough nodes."""
-        stack = list(reverse.get(str(node_id), set()))
-        seen = set()
-        while stack:
-            current = str(stack.pop())
-            if current in seen:
+    @staticmethod
+    def _merge_production_payloads(payloads):
+        merged = {}
+        merged_tags = {}
+        merged_event = None
+        merged_branch_results = []
+
+        for payload in payloads:
+            if not isinstance(payload, dict):
                 continue
-            seen.add(current)
-            if current in eligible:
-                return True
-            stack.extend(reverse.get(current, set()))
-        return False
+            for key, value in payload.items():
+                if key == "Tags" and isinstance(value, dict):
+                    merged_tags.update(copy.deepcopy(value))
+                    continue
+                if key == "ProductionEvent" and merged_event is None:
+                    merged_event = copy.deepcopy(value)
+                    continue
+                if key == "_BranchResults":
+                    if isinstance(value, list):
+                        merged_branch_results.extend(copy.deepcopy(value))
+                    continue
+                if key not in merged:
+                    merged[key] = copy.deepcopy(value)
+                elif isinstance(merged[key], dict) and isinstance(value, dict):
+                    nested = copy.deepcopy(merged[key])
+                    nested.update(copy.deepcopy(value))
+                    merged[key] = nested
+                else:
+                    merged[key] = copy.deepcopy(value)
 
-    def _execute_production_branch(self, node_id, data, visited):
-        node_id = str(node_id)
-        if node_id in visited or node_id not in self.nodes:
-            return data
-        visited = set(visited)
-        visited.add(node_id)
-        info = self.nodes[node_id]
-        payload = self._prepare_payload(data)
-        if info["type"] == "ReportOutput":
-            payload["_CurrentReportNodeID"] = node_id
+        if merged_tags:
+            merged["Tags"] = merged_tags
+        if merged_event is not None:
+            merged["ProductionEvent"] = merged_event
+        if merged_branch_results:
+            merged["_BranchResults"] = merged_branch_results
+        return merged
 
-        if info["type"] in EVENT_PASSTHROUGH_NODE_TYPES:
-            result = payload
-        else:
-            try:
-                result = info["instance"].execute(payload)
-                if result is None:
-                    result = payload
-                if not isinstance(result, dict):
-                    raise TypeError(
-                        f"Node {node_id} ({info['type']}) must return a dict or None"
+    def _production_report_targets(self):
+        targets = []
+        for node_id, info in self.nodes.items():
+            if info["type"] != "ReportOutput":
+                continue
+            ancestors = self._ancestor_nodes(node_id)
+            if not ancestors:
+                continue
+            # ReportOutput is terminal. A report node must never be an
+            # upstream calculation/source for another production report.
+            if any(
+                self.nodes.get(ancestor, {}).get("type") == "ReportOutput"
+                for ancestor in ancestors
+            ):
+                continue
+            targets.append(str(node_id))
+        return sorted(targets)
+
+    def _execute_production_graph(self, target_reports, base_payload):
+        reverse = self._reverse_connections()
+        relevant = set(target_reports)
+        for report_id in target_reports:
+            relevant.update(self._ancestor_nodes(report_id))
+
+        # Production ReportOutput nodes are terminals. Exclude any report node
+        # that was not selected as a valid terminal target from the graph.
+        relevant = {
+            node_id
+            for node_id in relevant
+            if self.nodes.get(node_id, {}).get("type") != "ReportOutput"
+            or node_id in target_reports
+        }
+
+        indegree = {node_id: 0 for node_id in relevant}
+        children = {node_id: [] for node_id in relevant}
+        for source_id in relevant:
+            for child_id in self.next_nodes(source_id):
+                if child_id not in relevant:
+                    continue
+                # Never route a production event through a ReportOutput as an
+                # upstream node. Only the selected terminal target is executed.
+                if (
+                    self.nodes.get(child_id, {}).get("type") == "ReportOutput"
+                    and child_id not in target_reports
+                ):
+                    continue
+                children[source_id].append(child_id)
+                indegree[child_id] += 1
+
+        ready = deque(sorted(node_id for node_id, degree in indegree.items() if degree == 0))
+        pending = {}
+        results = []
+        processed = set()
+
+        while ready:
+            node_id = ready.popleft()
+            processed.add(node_id)
+            incoming = pending.pop(node_id, [])
+            payload = self._merge_production_payloads(incoming or [base_payload])
+            info = self.nodes[node_id]
+
+            if info["type"] == "ReportOutput":
+                payload["_CurrentReportNodeID"] = node_id
+
+            if info["type"] in EVENT_PASSTHROUGH_NODE_TYPES:
+                result = payload
+            else:
+                try:
+                    result = info["instance"].execute(payload)
+                    if result is None:
+                        result = payload
+                    if not isinstance(result, dict):
+                        raise TypeError(
+                            f"Node {node_id} ({info['type']}) must return a dict or None"
+                        )
+                    result.setdefault("CompanyID", self.company_id)
+                    flow_status.node_ok(node_id)
+                except Exception as exc:
+                    flow_status.node_error(node_id, exc)
+                    print(
+                        "PRODUCTION FLOW NODE ERROR:",
+                        "Node=",
+                        node_id,
+                        "Type=",
+                        info["type"],
+                        "Error=",
+                        repr(exc),
                     )
-                result.setdefault("CompanyID", self.company_id)
-                flow_status.node_ok(node_id)
-            except Exception as exc:
-                flow_status.node_error(node_id, exc)
-                print(
-                    "PRODUCTION FLOW NODE ERROR:",
-                    "Node=", node_id,
-                    "Type=", info["type"],
-                    "Error=", repr(exc),
-                )
-                return payload
+                    return None
 
-        # ReportOutput is the terminal persistence node for production events.
-        # Never continue through a ReportOutput into another branch or node.
-        if info["type"] in EVENT_TERMINAL_NODE_TYPES:
-            return copy.deepcopy(result)
+            if info["type"] in EVENT_TERMINAL_NODE_TYPES:
+                results.append(copy.deepcopy(result))
+                continue
 
-        branch_results = []
-        for child_id in self.next_nodes(node_id):
-            child_result = self._execute_production_branch(
-                child_id,
-                copy.deepcopy(result),
-                visited,
-            )
-            branch_results.append({"node_id": str(child_id), "data": child_result})
-        result = copy.deepcopy(result)
-        result["_BranchResults"] = branch_results
-        return result
+            for child_id in children.get(node_id, []):
+                pending.setdefault(child_id, []).append(copy.deepcopy(result))
+                indegree[child_id] -= 1
+                if indegree[child_id] == 0:
+                    ready.append(child_id)
+
+        if len(processed) != len(relevant):
+            raise ValueError("Production Flow contains a cycle or unresolved dependency")
+
+        return results
 
     def execute_production_event(self, event):
-        """Run a production event through connected ReportOutput branches."""
+        """Run a production event through the connected Flow graph exactly once."""
         if not isinstance(event, dict):
             return None
-        report_nodes = [
-            node_id
-            for node_id, info in self.nodes.items()
-            if info["type"] == "ReportOutput"
-        ]
+
+        report_nodes = self._production_report_targets()
         if not report_nodes:
             return None
 
-        event_tags = dict(event.get("tags") or {})
-        duration = float(event.get("duration_seconds", 0.0) or 0.0)
-        event_tags.setdefault("DurationSeconds", duration)
-        event_tags.setdefault("WorkTimeSeconds", duration)
-        event_tags.setdefault("WorkTimeMinutes", duration / 60.0)
-        event_tags.setdefault("WorkTimeHours", duration / 3600.0)
         payload = {
             "CompanyID": self.company_id,
             "PLC_ID": event.get("PLC_ID"),
-            "Tags": event_tags,
+            "Tags": dict(event.get("tags") or {}),
             "ProductionEvent": copy.deepcopy(event),
             "Timestamp": event.get("timestamp"),
         }
 
-        reverse = self._reverse_connections()
-        results = []
-        for report_node_id in report_nodes:
-            ancestors = self._ancestor_nodes(report_node_id)
-            if not ancestors:
-                # A root ReportOutput is not connected to the production event.
-                continue
-
-            # A ReportOutput is a terminal target, never an executable upstream
-            # source for another production report branch.
-            eligible = {
-                node_id
-                for node_id in ancestors
-                if self.nodes.get(node_id, {}).get("type") not in EVENT_PASSTHROUGH_NODE_TYPES
-                and self.nodes.get(node_id, {}).get("type") not in EVENT_TERMINAL_NODE_TYPES
-            }
-            starts = sorted(
-                node_id
-                for node_id in eligible
-                if not self._has_eligible_ancestor(node_id, eligible, reverse)
-            )
-            if not starts:
-                # Valid direct paths such as TagMapper -> ReportOutput contain
-                # only passthrough ancestors, so the event starts at ReportOutput.
-                starts = [str(report_node_id)]
-            for start_id in starts:
-                result = self._execute_production_branch(
-                    start_id,
-                    copy.deepcopy(payload),
-                    set(),
-                )
-                results.append(result)
-
+        results = self._execute_production_graph(report_nodes, payload)
         if not results:
             return None
         return results[0] if len(results) == 1 else {
@@ -348,6 +403,7 @@ class FlowRunner:
         if node_id in visited or node_id not in self.nodes:
             return None
         visited.add(node_id)
+
         payload = self._prepare_payload(data)
         info = self.nodes[node_id]
         try:
@@ -355,10 +411,20 @@ class FlowRunner:
             flow_status.node_ok(node_id)
         except Exception as exc:
             flow_status.node_error(node_id, exc)
-            print("TREND FLOW NODE ERROR:", "Node=", node_id, "Type=", info["type"], "Error=", repr(exc))
+            print(
+                "TREND FLOW NODE ERROR:",
+                "Node=",
+                node_id,
+                "Type=",
+                info["type"],
+                "Error=",
+                repr(exc),
+            )
             return None
+
         if isinstance(payload.get("ChartData"), dict):
             return payload
+
         for child in self.next_nodes(node_id):
             result = self.execute_trend_branch(child, copy.deepcopy(payload), visited.copy())
             if isinstance(result, dict) and isinstance(result.get("ChartData"), dict):
@@ -372,6 +438,7 @@ class FlowRunner:
             scan_interval = max(0.25, float(self.flow_data.get("scan_interval", 1)))
         except (TypeError, ValueError):
             scan_interval = 1.0
+
         while self.running:
             started = time.monotonic()
             previous_errors = flow_status.error_count
@@ -390,7 +457,16 @@ class FlowRunner:
     def execute_request(self, request):
         start_nodes = self.get_start_nodes(realtime=False)
         requested_tag = request.get("TrendRequest", {}).get("Tag") if isinstance(request, dict) else None
-        print("TREND FLOW START:", "Company=", self.company_id, "Tag=", requested_tag, "StartNodes=", start_nodes)
+        print(
+            "TREND FLOW START:",
+            "Company=",
+            self.company_id,
+            "Tag=",
+            requested_tag,
+            "StartNodes=",
+            start_nodes,
+        )
+
         for node_id in start_nodes:
             result = self.execute_trend_branch(node_id, copy.deepcopy(request), set())
             if not isinstance(result, dict):
