@@ -11,6 +11,12 @@ from datetime import datetime
 
 from database import get_connection
 from services import report_plc as _report_plc
+from services.edge_ingest_policy import install as _install_edge_ingest_policy
+
+# Edge trigger samples are part of the same Flow-defined production-event
+# pipeline. Install the ingestion policy as this runtime facade is loaded by
+# FlowRunner during application startup, before Store & Forward requests.
+_install_edge_ingest_policy()
 
 
 def safe_flow_eval(expression, variables):
