@@ -293,6 +293,9 @@ class FlowRunner:
         results = []
         for report_node_id in report_nodes:
             ancestors = self._ancestor_nodes(report_node_id)
+            if not ancestors:
+                # A root ReportOutput is not connected to the production event.
+                continue
             eligible = {
                 node_id
                 for node_id in ancestors
@@ -304,6 +307,8 @@ class FlowRunner:
                 if not self._has_eligible_ancestor(node_id, eligible, reverse)
             )
             if not starts:
+                # Valid direct paths such as TagMapper -> ReportOutput contain
+                # only passthrough ancestors, so the event starts at ReportOutput.
                 starts = [str(report_node_id)]
             for start_id in starts:
                 result = self._execute_production_branch(
@@ -313,6 +318,8 @@ class FlowRunner:
                 )
                 results.append(result)
 
+        if not results:
+            return None
         return results[0] if len(results) == 1 else {
             "CompanyID": self.company_id,
             "ProductionEvent": copy.deepcopy(event),
