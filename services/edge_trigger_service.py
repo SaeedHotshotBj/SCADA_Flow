@@ -31,6 +31,16 @@ def _nodes(company_id):
     return flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
 
 
+def _node_config(node):
+    data = node.get("data", {}) or {}
+    config = data.get("config", data)
+    if not isinstance(config, dict):
+        return {}
+    merged = dict(config)
+    merged.update({key: value for key, value in data.items() if key != "config"})
+    return merged
+
+
 def _trigger_registers(definitions):
     result = set()
     for item in definitions or []:
@@ -47,20 +57,26 @@ def _trigger_registers(definitions):
 
 def _all_tag_definitions(nodes, plc_id):
     result = []
+    target_plc = int(plc_id)
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
             continue
-        mappings = (node.get("data", {}) or {}).get("mappings", [])
-        for item in mappings if isinstance(mappings, list) else []:
-            if not isinstance(item, dict):
+        mappings = _node_config(node).get("mappings", [])
+        if not isinstance(mappings, list):
+            continue
+        for item in mappings:
+            if not isinstance(item, dict) or not str(item.get("name", "")).strip():
                 continue
-            try:
-                item_plc = int(item.get("plc_id", item.get("PLC_ID")))
-            except (TypeError, ValueError):
-                continue
-            if item_plc == int(plc_id) and str(item.get("name", "")).strip():
+            explicit = item.get("plc_id", item.get("PLC_ID"))
+            if explicit not in (None, ""):
+                try:
+                    item_plc = int(explicit)
+                except (TypeError, ValueError):
+                    continue
+            else:
+                item_plc = target_plc
+            if item_plc == target_plc:
                 result.append(item)
-        break
     return result
 
 
@@ -102,7 +118,7 @@ def _report_configs(nodes):
         )
         if not connected:
             continue
-        products = (node.get("data", {}) or {}).get("products", [])
+        products = _node_config(node).get("products", [])
         clean = [
             item for item in products
             if isinstance(item, dict) and str(item.get("tag", "")).strip()
@@ -128,8 +144,6 @@ def _write_event_reports(company_id, event):
     if event.get("end_timestamp"):
         tags["ProductionEndTimestamp"] = event["end_timestamp"]
 
-    # The completed event is the report boundary. The report engine stores
-    # configured tags plus Flow-defined ManagementPanel calculations.
     for node_id, products in configs:
         try:
             save_report_snapshot(
@@ -171,12 +185,8 @@ class EdgeTriggerService:
             return payload
 
         definitions = payload.get("TagDefinitions", [])
-        if not isinstance(definitions, list):
+        if not isinstance(definitions, list) or not definitions:
             definitions = _all_tag_definitions(_nodes(company_id), plc_id)
-
-        nodes = _nodes(company_id)
-        if not definitions:
-            definitions = _all_tag_definitions(nodes, plc_id)
 
         registers = _trigger_registers(definitions)
         if not registers:
@@ -189,11 +199,12 @@ class EdgeTriggerService:
             for register in registers:
                 signal_name = f"{SIGNAL_PREFIX}{register}"
                 rows = conn.execute(
-                    f"""
+                    """
                     SELECT ID, Value, Timestamp
                     FROM PLC_Data
                     WHERE CompanyID=? AND PLC_ID=?
-                      AND TagName=? AND StorageType='TRIGGER_SIGNAL'
+                      AND LOWER(TagName)=LOWER(?)
+                      AND StorageType='TRIGGER_SIGNAL'
                       AND ID > COALESCE(
                           (SELECT MIN(LastSignalID)
                            FROM FlowTriggerState
