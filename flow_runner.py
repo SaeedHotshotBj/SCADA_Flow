@@ -29,6 +29,10 @@ EVENT_PASSTHROUGH_NODE_TYPES = {
     "TrendOutput",
 }
 
+EVENT_TERMINAL_NODE_TYPES = {
+    "ReportOutput",
+}
+
 
 class FlowRunner:
     """Execute a Drawflow graph with isolated branch payloads."""
@@ -229,6 +233,7 @@ class FlowRunner:
         payload = self._prepare_payload(data)
         if info["type"] == "ReportOutput":
             payload["_CurrentReportNodeID"] = node_id
+
         if info["type"] in EVENT_PASSTHROUGH_NODE_TYPES:
             result = payload
         else:
@@ -251,6 +256,12 @@ class FlowRunner:
                     "Error=", repr(exc),
                 )
                 return payload
+
+        # ReportOutput is the terminal persistence node for production events.
+        # Never continue through a ReportOutput into another branch or node.
+        if info["type"] in EVENT_TERMINAL_NODE_TYPES:
+            return copy.deepcopy(result)
+
         branch_results = []
         for child_id in self.next_nodes(node_id):
             child_result = self._execute_production_branch(
@@ -296,10 +307,14 @@ class FlowRunner:
             if not ancestors:
                 # A root ReportOutput is not connected to the production event.
                 continue
+
+            # A ReportOutput is a terminal target, never an executable upstream
+            # source for another production report branch.
             eligible = {
                 node_id
                 for node_id in ancestors
                 if self.nodes.get(node_id, {}).get("type") not in EVENT_PASSTHROUGH_NODE_TYPES
+                and self.nodes.get(node_id, {}).get("type") not in EVENT_TERMINAL_NODE_TYPES
             }
             starts = sorted(
                 node_id
