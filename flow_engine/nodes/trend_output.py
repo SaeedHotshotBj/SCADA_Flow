@@ -95,6 +95,33 @@ class TrendOutput:
         return str(value or "").strip().lower()
 
     @staticmethod
+    def _roles(value):
+        if isinstance(value, (list, tuple, set)):
+            return {str(item).strip().lower() for item in value if str(item).strip()}
+        return {item.strip().lower() for item in str(value or "").replace(";", ",").split(",") if item.strip()}
+
+    def _series_config(self, tag):
+        series = self.config.get("series", [])
+        if not isinstance(series, list):
+            return None
+        wanted = self._normalize_tag(tag)
+        for item in series:
+            if not isinstance(item, dict):
+                continue
+            if self._normalize_tag(item.get("tag")) == wanted:
+                return item
+        return None
+
+    def _series_allowed(self, tag, user_role):
+        item = self._series_config(tag)
+        if not item:
+            return True
+        roles = self._roles(item.get("allowed_roles"))
+        if not roles:
+            return True
+        return str(user_role or "").strip().lower() in roles
+
+    @staticmethod
     def _stats_for_tag(stats, tag):
         if not isinstance(stats, dict):
             return {}
@@ -117,22 +144,27 @@ class TrendOutput:
         request = data.get("TrendRequest", {}) or {}
         selected_tag = request.get("Tag")
         selected_key = self._normalize_tag(selected_tag)
+        user_role = request.get("Role", data.get("UserRole"))
 
         grouped = {}
         for item in trend_data:
             tag = item.get("Tag")
-            if not tag:
+            if not tag or not self._series_allowed(tag, user_role):
                 continue
             point = self._point(item.get("Timestamp"), item.get("Value"))
             if point is None:
                 continue
             key = self._normalize_tag(tag)
-            grouped.setdefault(key, {
+            series_config = self._series_config(tag) or {}
+            group = grouped.setdefault(key, {
                 "tag": tag,
-                "title": tag,
+                "title": series_config.get("label") or tag,
+                "unit": series_config.get("unit", ""),
                 "data": [],
                 "stepped": "after",
-            })["data"].append(point)
+                "AllowedRoles": self._roles(series_config.get("allowed_roles")),
+            })
+            group["data"].append(point)
 
         for group in grouped.values():
             group["data"].sort(key=lambda p: p["x"])
@@ -167,6 +199,7 @@ class TrendOutput:
             "resolutions": resolutions,
             "multi": len(output) > 1,
             "selected": selected_tag,
+            "UserRole": user_role,
         }
 
         print(

@@ -16,6 +16,12 @@ def insert_alarm_safe(company_id, plc_id, tag, value, message):
         conn.close()
 
 
+def _roles(value):
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value or "").replace(";", ",").split(",") if item.strip()]
+
+
 class AlarmNode:
     def __init__(self, config=None):
         self.config = config or {}
@@ -24,8 +30,10 @@ class AlarmNode:
 
     @staticmethod
     def _plc_id(value):
-        try: return int(value)
-        except (TypeError,ValueError): return None
+        try:
+            return int(value)
+        except (TypeError,ValueError):
+            return None
 
     def execute(self, data=None):
         data=data or {}
@@ -34,6 +42,7 @@ class AlarmNode:
         runtime_plc=self._plc_id(data.get("PLC_ID", (data.get("PLC") or {}).get("PLC_ID")))
         if runtime_plc is None: return data
 
+        events = data.setdefault("AlarmEvents", [])
         for alarm in self.alarms:
             if not isinstance(alarm,dict): continue
             configured_plc=self._plc_id(alarm.get("plc_id",alarm.get("PLC_ID",runtime_plc)))
@@ -52,6 +61,17 @@ class AlarmNode:
             previous=self.memory.get(key,False)
             self.memory[key]=active
             if active and not previous:
+                allowed_roles = _roles(alarm.get("allowed_roles"))
+                event = {
+                    "CompanyID": company_id,
+                    "PLC_ID": runtime_plc,
+                    "TagName": tag,
+                    "Value": value,
+                    "Message": message,
+                    "AllowedRoles": allowed_roles,
+                    "Timestamp": datetime.now().isoformat(),
+                }
+                events.append(event)
                 try:
                     insert_alarm_safe(company_id,runtime_plc,tag,value,message)
                     print("ALARM:",message,"PLC_ID:",runtime_plc)
