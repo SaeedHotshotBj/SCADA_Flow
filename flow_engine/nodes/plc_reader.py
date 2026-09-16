@@ -111,7 +111,6 @@ class PLCReader:
                             trigger_registers.add(int(mapping.get("trigger_register")))
                         except (TypeError, ValueError):
                             pass
-                break
 
             for trigger_register in sorted(trigger_registers):
                 mappings.append({
