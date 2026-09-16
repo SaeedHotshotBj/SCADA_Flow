@@ -3,8 +3,16 @@
 # =====================================================
 
 from datetime import datetime
+
 import jdatetime
 from zoneinfo import ZoneInfo
+
+try:
+    from flask import has_request_context, session
+except Exception:
+    def has_request_context():
+        return False
+    session = {}
 
 
 SCADA_TIMEZONE = ZoneInfo("Asia/Tehran")
@@ -145,6 +153,8 @@ class TrendOutput:
         selected_tag = request.get("Tag")
         selected_key = self._normalize_tag(selected_tag)
         user_role = request.get("Role", data.get("UserRole"))
+        if user_role is None and has_request_context():
+            user_role = session.get("role")
 
         grouped = {}
         for item in trend_data:
@@ -162,7 +172,7 @@ class TrendOutput:
                 "unit": series_config.get("unit", ""),
                 "data": [],
                 "stepped": "after",
-                "AllowedRoles": self._roles(series_config.get("allowed_roles")),
+                "AllowedRoles": sorted(self._roles(series_config.get("allowed_roles"))),
             })
             group["data"].append(point)
 
