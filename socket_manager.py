@@ -5,7 +5,7 @@
 
 import json
 
-from flask import request, redirect, url_for
+from flask import request, redirect, url_for, session
 from flask_socketio import join_room
 from werkzeug.security import check_password_hash
 
@@ -15,6 +15,27 @@ from database import get_company_flow, get_connection
 socketio_instance = None
 _auth_guard_registered = False
 _socket_handlers_registered = False
+
+
+def _role_room(company_id, role):
+    try:
+        company_id = int(company_id)
+    except (TypeError, ValueError):
+        return None
+    normalized = str(role or "").strip().lower()
+    if not normalized or normalized == "master":
+        return None
+    return f"company:{company_id}:role:{normalized}"
+
+
+def _roles(value):
+    if isinstance(value, (list, tuple, set)):
+        return {str(item).strip().lower() for item in value if str(item).strip()}
+    return {
+        item.strip().lower()
+        for item in str(value or "").replace(";", ",").split(",")
+        if item.strip()
+    }
 
 
 # =====================================================
@@ -155,8 +176,6 @@ def _validate_flow_login(company_id, username, password):
 
     found_engaged, engaged_roles = _read_engaged_roles(nodes)
 
-    # There must be a RolesEngaged node and the user's role must
-    # explicitly be selected in it. No RolesEngaged = no company login.
     if not found_engaged:
         print("FLOW LOGIN REJECTED: NO ROLES ENGAGED", username)
         return None
@@ -283,7 +302,7 @@ def _install_authentication_guard(socketio):
 
 
 # =====================================================
-# SOCKET.IO COMPANY ISOLATION
+# SOCKET.IO COMPANY + ROLE ISOLATION
 # =====================================================
 
 def _install_socket_handlers(socketio):
@@ -294,28 +313,39 @@ def _install_socket_handlers(socketio):
 
     @socketio.on("connect")
     def _dashboard_socket_connect():
-        """Put each browser socket into its authenticated company room."""
-        company_id = request.args.get("company_id", type=int)
+        """Join authenticated company and, for normal users, role rooms."""
+        user_role = str(session.get("role", "")).strip().lower()
+        is_master = user_role == "master"
 
-        # The normal dashboard socket uses the authenticated Flask session.
-        if company_id is None:
-            try:
-                from flask import session
-                company_id = session.get("company_id")
-            except Exception:
-                company_id = None
+        session_company = session.get("company_id")
+        requested_company = request.args.get("company_id", type=int)
+
+        if is_master:
+            company_id = requested_company or session.get("selected_company_id")
+        else:
+            company_id = session_company
+
+        try:
+            company_id = int(company_id) if company_id is not None else None
+        except (TypeError, ValueError):
+            company_id = None
 
         if company_id is not None:
             room = f"company:{company_id}"
             join_room(room)
             print("SOCKET JOINED COMPANY ROOM:", room)
+
+            role_room = _role_room(company_id, user_role)
+            if role_room:
+                join_room(role_room)
+                print("SOCKET JOINED ROLE ROOM:", role_room)
         else:
             print("SOCKET CONNECTED WITHOUT COMPANY ID")
 
         return True
 
     _socket_handlers_registered = True
-    print("SOCKET COMPANY ROOM HANDLER REGISTERED")
+    print("SOCKET COMPANY + ROLE ROOM HANDLERS REGISTERED")
     return True
 
 
@@ -329,10 +359,6 @@ def init_socketio(socketio):
     _install_authentication_guard(socketio)
     _install_socket_handlers(socketio)
 
-    # The company blueprint is kept separate from app.py so all
-    # legacy company/report routes and the management panel remain together.
-    # socketio.init_app(app) has already run before this function is called,
-    # therefore socketio.app is the active Flask application here.
     try:
         flask_app = getattr(socketio, "app", None)
         if flask_app is not None:
@@ -348,28 +374,78 @@ def init_socketio(socketio):
 # SEND DASHBOARD DATA
 # =====================================================
 
+def _filtered_dashboard_payload(data, allowed_role=None):
+    """Return only Flow-authorized realtime dashboard fields for one role."""
+    if not isinstance(data, dict):
+        return data
+
+    result = dict(data)
+    tag_values = data.get("TagValues", [])
+    original_tags = data.get("Tags", {}) or {}
+
+    if not isinstance(tag_values, list):
+        return result
+
+    filtered = []
+    tags = {}
+    normalized_role = str(allowed_role or "").strip().lower()
+
+    for item in tag_values:
+        if not isinstance(item, dict):
+            continue
+        allowed = _roles(item.get("AllowedRoles"))
+        if allowed and normalized_role not in allowed and normalized_role != "master":
+            continue
+        clean = dict(item)
+        clean.pop("AllowedRoles", None)
+        filtered.append(clean)
+        tag = clean.get("TagName", clean.get("tag"))
+        if tag is not None:
+            tags[str(tag)] = clean.get("Value", clean.get("value"))
+
+    result["TagValues"] = filtered
+    result["Tags"] = tags if tag_values else original_tags
+    return result
+
+
 def send_dashboard_data(data):
     if socketio_instance is None:
         print("SOCKET.IO NOT INITIALIZED")
         return
 
     try:
-        tags = data.get("Tags", {}) if isinstance(data, dict) else {}
         company_id = data.get("CompanyID") if isinstance(data, dict) else None
         timestamp = data.get("Timestamp") if isinstance(data, dict) else None
-        room = f"company:{company_id}" if company_id is not None else None
-
-        # Never broadcast company-specific data to every logged-in dashboard.
-        # A CompanyID creates a private Socket.IO room for that company.
-        if room is not None:
-            socketio_instance.emit("tag_update", data, room=room)
-        else:
-            socketio_instance.emit("tag_update", data)
-
-        # Prefer the PLC-aware TagValues list when available so equal tag names
-        # from different PLCs cannot collide in the dashboard browser.
         tag_values = data.get("TagValues", []) if isinstance(data, dict) else []
+
         if isinstance(tag_values, list) and tag_values:
+            unrestricted = []
+            restricted_roles = set()
+            for item in tag_values:
+                if not isinstance(item, dict):
+                    continue
+                allowed = _roles(item.get("AllowedRoles"))
+                if allowed:
+                    restricted_roles.update(allowed)
+                else:
+                    unrestricted.append(item)
+
+            base_room = f"company:{company_id}" if company_id is not None else None
+
+            if base_room and unrestricted:
+                payload = _filtered_dashboard_payload(data, allowed_role=None)
+                socketio_instance.emit("tag_update", payload, room=base_room)
+
+            roles_to_emit = sorted(role for role in restricted_roles if role != "master")
+            for role in roles_to_emit:
+                role_room = _role_room(company_id, role) if company_id is not None else None
+                if not role_room:
+                    continue
+                payload = _filtered_dashboard_payload(data, allowed_role=role)
+                socketio_instance.emit("tag_update", payload, room=role_room)
+
+            # Preserve PLC-aware per-tag updates while enforcing exactly the
+            # same Flow-derived role policy as the aggregate payload.
             for item in tag_values:
                 if not isinstance(item, dict):
                     continue
@@ -377,6 +453,7 @@ def send_dashboard_data(data):
                 value = item.get("Value", item.get("value"))
                 if tag is None:
                     continue
+                allowed = _roles(item.get("AllowedRoles"))
                 payload = {
                     "CompanyID": company_id,
                     "PLC_ID": item.get("PLC_ID", item.get("plc_id")),
@@ -386,23 +463,37 @@ def send_dashboard_data(data):
                     "title": item.get("title", tag),
                     "unit": item.get("unit", ""),
                 }
-                if room is not None:
-                    socketio_instance.emit("tag_update", payload, room=room)
-                else:
-                    socketio_instance.emit("tag_update", payload)
-        elif isinstance(tags, dict):
-            for tag, value in tags.items():
-                payload = {
-                    "CompanyID": company_id,
-                    "PLC_ID": data.get("PLC_ID"),
-                    "Tag": tag,
-                    "Value": value,
-                    "Timestamp": timestamp,
-                }
-                if room is not None:
-                    socketio_instance.emit("tag_update", payload, room=room)
-                else:
-                    socketio_instance.emit("tag_update", payload)
+                if not allowed:
+                    if base_room:
+                        socketio_instance.emit("tag_update", payload, room=base_room)
+                    else:
+                        socketio_instance.emit("tag_update", payload)
+                    continue
+                for role in sorted(allowed):
+                    role_room = _role_room(company_id, role) if company_id is not None else None
+                    if role_room:
+                        socketio_instance.emit("tag_update", payload, room=role_room)
+
+        else:
+            tags = data.get("Tags", {}) if isinstance(data, dict) else {}
+            room = f"company:{company_id}" if company_id is not None else None
+            if room is not None:
+                socketio_instance.emit("tag_update", data, room=room)
+            else:
+                socketio_instance.emit("tag_update", data)
+            if isinstance(tags, dict):
+                for tag, value in tags.items():
+                    payload = {
+                        "CompanyID": company_id,
+                        "PLC_ID": data.get("PLC_ID"),
+                        "Tag": tag,
+                        "Value": value,
+                        "Timestamp": timestamp,
+                    }
+                    if room is not None:
+                        socketio_instance.emit("tag_update", payload, room=room)
+                    else:
+                        socketio_instance.emit("tag_update", payload)
 
         print("SOCKET DATA SENT", "COMPANY", company_id)
     except Exception as e:
@@ -419,3 +510,10 @@ def send_tag_data(tags, online=True, company_id=None):
         "Tags": tags,
         "CompanyID": company_id,
     })
+
+
+__all__ = [
+    "init_socketio",
+    "send_dashboard_data",
+    "send_tag_data",
+]

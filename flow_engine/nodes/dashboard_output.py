@@ -37,6 +37,12 @@ class DashboardOutput:
                 return plc_tags[key]
         return (data.get("Tags", {}) or {}).get(tag)
 
+    @staticmethod
+    def _allowed_roles(value):
+        if isinstance(value, (list, tuple, set)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return [item.strip() for item in str(value or "").replace(";", ",").split(",") if item.strip()]
+
     def execute(self, data=None):
         data = data or {}
         engaged_roles = data.get("EngagedRoles", [])
@@ -63,6 +69,7 @@ class DashboardOutput:
             value = self._value(data, plc_id, tag)
             if value is None:
                 continue
+            allowed_roles = self._allowed_roles(widget.get("allowed_roles"))
             output["Tags"][tag] = value
             output["TagValues"].append({
                 "PLC_ID": plc_id,
@@ -70,6 +77,7 @@ class DashboardOutput:
                 "Value": value,
                 "title": widget.get("title", tag),
                 "unit": widget.get("unit", ""),
+                "AllowedRoles": allowed_roles,
             })
 
         machine_cards = data.get("MachineCards", [])
@@ -84,6 +92,7 @@ class DashboardOutput:
                     "PLC_ID": data.get("PLC_ID"),
                     "TagName": tag,
                     "Value": value,
+                    "AllowedRoles": [],
                 })
 
         try:
