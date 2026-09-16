@@ -13,10 +13,6 @@ REALTIME_SKIP_NODE_TYPES = {
     "TrendOutput",
 }
 
-# Production events already contain the PLC/TagMapper snapshot. Those source
-# and side-effect nodes must not perform a second live read/write while a
-# report branch is being evaluated. The actual calculation/output nodes still
-# execute according to their Drawflow connections.
 EVENT_PASSTHROUGH_NODE_TYPES = {
     "PLCReader",
     "TagMapper",
@@ -61,7 +57,6 @@ class FlowRunner:
         home = self.flow_data.get("drawflow", {}).get("Home", {}).get("data", {})
         if not isinstance(home, dict):
             return
-
         for node_id, node in home.items():
             if not isinstance(node, dict):
                 continue
@@ -86,7 +81,6 @@ class FlowRunner:
                     role for role in roles
                     if isinstance(role, dict) and str(role.get("role", "")).strip()
                 )
-
         unique_roles = []
         seen_roles = set()
         for role in role_definitions:
@@ -94,8 +88,7 @@ class FlowRunner:
             if key and key not in seen_roles:
                 seen_roles.add(key)
                 unique_roles.append(role)
-
-        for node_id, info in self.nodes.items():
+        for info in self.nodes.values():
             if info["type"] == "RolesEngaged":
                 info["config"]["roles"] = unique_roles
                 info["instance"].roles = unique_roles
@@ -161,7 +154,6 @@ class FlowRunner:
         info = self.nodes[node_id]
         if realtime and info["type"] in REALTIME_SKIP_NODE_TYPES:
             return data
-
         payload = self._prepare_payload(data)
         try:
             payload = self._execute_single(node_id, payload)
@@ -170,11 +162,9 @@ class FlowRunner:
             flow_status.node_error(node_id, exc)
             print("FLOW NODE ERROR:", "Node=", node_id, "Type=", info["type"], "Error=", repr(exc))
             return payload
-
         children = self.next_nodes(node_id)
         if not children:
             return payload
-
         branch_results = []
         for child in children:
             child_id = str(child)
@@ -190,7 +180,6 @@ class FlowRunner:
                 realtime=realtime,
             )
             branch_results.append({"node_id": child_id, "data": child_result})
-
         result = copy.deepcopy(payload)
         result["_BranchResults"] = branch_results
         return result
@@ -216,6 +205,20 @@ class FlowRunner:
                 stack.append(parent)
         return result
 
+    def _has_eligible_ancestor(self, node_id, eligible, reverse):
+        """Find any executable ancestor across passthrough nodes."""
+        stack = list(reverse.get(str(node_id), set()))
+        seen = set()
+        while stack:
+            current = str(stack.pop())
+            if current in seen:
+                continue
+            seen.add(current)
+            if current in eligible:
+                return True
+            stack.extend(reverse.get(current, set()))
+        return False
+
     def _execute_production_branch(self, node_id, data, visited):
         node_id = str(node_id)
         if node_id in visited or node_id not in self.nodes:
@@ -224,10 +227,8 @@ class FlowRunner:
         visited.add(node_id)
         info = self.nodes[node_id]
         payload = self._prepare_payload(data)
-
         if info["type"] == "ReportOutput":
             payload["_CurrentReportNodeID"] = node_id
-
         if info["type"] in EVENT_PASSTHROUGH_NODE_TYPES:
             result = payload
         else:
@@ -250,7 +251,6 @@ class FlowRunner:
                     "Error=", repr(exc),
                 )
                 return payload
-
         branch_results = []
         for child_id in self.next_nodes(node_id):
             child_result = self._execute_production_branch(
@@ -259,16 +259,14 @@ class FlowRunner:
                 visited,
             )
             branch_results.append({"node_id": str(child_id), "data": child_result})
-
         result = copy.deepcopy(result)
         result["_BranchResults"] = branch_results
         return result
 
     def execute_production_event(self, event):
-        """Run a production event through the Flow-connected ReportOutput branches."""
+        """Run a production event through connected ReportOutput branches."""
         if not isinstance(event, dict):
             return None
-
         report_nodes = [
             node_id
             for node_id, info in self.nodes.items()
@@ -283,7 +281,6 @@ class FlowRunner:
         event_tags.setdefault("WorkTimeSeconds", duration)
         event_tags.setdefault("WorkTimeMinutes", duration / 60.0)
         event_tags.setdefault("WorkTimeHours", duration / 3600.0)
-
         payload = {
             "CompanyID": self.company_id,
             "PLC_ID": event.get("PLC_ID"),
@@ -294,7 +291,6 @@ class FlowRunner:
 
         reverse = self._reverse_connections()
         results = []
-
         for report_node_id in report_nodes:
             ancestors = self._ancestor_nodes(report_node_id)
             eligible = {
@@ -305,11 +301,10 @@ class FlowRunner:
             starts = sorted(
                 node_id
                 for node_id in eligible
-                if not (reverse.get(node_id, set()) & eligible)
+                if not self._has_eligible_ancestor(node_id, eligible, reverse)
             )
             if not starts:
                 starts = [str(report_node_id)]
-
             for start_id in starts:
                 result = self._execute_production_branch(
                     start_id,
@@ -331,7 +326,6 @@ class FlowRunner:
         if node_id in visited or node_id not in self.nodes:
             return None
         visited.add(node_id)
-
         payload = self._prepare_payload(data)
         info = self.nodes[node_id]
         try:
@@ -341,10 +335,8 @@ class FlowRunner:
             flow_status.node_error(node_id, exc)
             print("TREND FLOW NODE ERROR:", "Node=", node_id, "Type=", info["type"], "Error=", repr(exc))
             return None
-
         if isinstance(payload.get("ChartData"), dict):
             return payload
-
         for child in self.next_nodes(node_id):
             result = self.execute_trend_branch(child, copy.deepcopy(payload), visited.copy())
             if isinstance(result, dict) and isinstance(result.get("ChartData"), dict):
@@ -358,7 +350,6 @@ class FlowRunner:
             scan_interval = max(0.25, float(self.flow_data.get("scan_interval", 1)))
         except (TypeError, ValueError):
             scan_interval = 1.0
-
         while self.running:
             started = time.monotonic()
             previous_errors = flow_status.error_count
@@ -378,7 +369,6 @@ class FlowRunner:
         start_nodes = self.get_start_nodes(realtime=False)
         requested_tag = request.get("TrendRequest", {}).get("Tag") if isinstance(request, dict) else None
         print("TREND FLOW START:", "Company=", self.company_id, "Tag=", requested_tag, "StartNodes=", start_nodes)
-
         for node_id in start_nodes:
             result = self.execute_trend_branch(node_id, copy.deepcopy(request), set())
             if not isinstance(result, dict):
