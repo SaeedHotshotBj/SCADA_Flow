@@ -77,6 +77,34 @@ jobs:
           print("FLOW CALCULATION NODES OK")
           PY
 
+      - name: Verify TagMapper PLC identity inference
+        run: |
+          python - <<'PY'
+          from flow_engine.nodes.tag_mapper import TagMapper
+
+          node = TagMapper({
+              "mappings": [
+                  {"register": 100, "name": "Batch"},
+                  {"register": 101, "name": "Voltage", "plc_id": 2},
+              ]
+          })
+          payload = node.execute({
+              "CompanyID": 7,
+              "PLC_ID": 1,
+              "Registers": {"100": 55, "101": 400},
+          })
+          assert payload["Tags"] == {"Batch": 55.0}, payload
+          assert payload["TagDefinitions"][0]["plc_id"] == 1
+
+          payload = node.execute({
+              "CompanyID": 7,
+              "PLC_ID": 2,
+              "Registers": {"100": 66, "101": 415},
+          })
+          assert payload["Tags"] == {"Batch": 66.0, "Voltage": 415.0}, payload
+          print("TAG MAPPER PLC INFERENCE OK")
+          PY
+
       - name: Verify production events traverse the connected Flow only
         run: |
           python - <<'PY'
@@ -112,6 +140,9 @@ jobs:
               "5": node("ReportOutput", {
                   "products": [{"name": "Energy", "tag": "Energy", "plc_id": 1}]
               }),
+              "6": node("ReportOutput", {
+                  "products": [{"name": "Energy", "tag": "Energy", "plc_id": 1}]
+              }, {"output_1": {"connections": [{"node": "3"}]}}),
           }}}}}
 
           runner = FlowRunner(flow, 7)
@@ -130,6 +161,36 @@ jobs:
           assert saved[0]["tags"]["Energy"] == 4000.0
           assert saved[0]["report_node_id"] == "4"
           print("CONNECTED PRODUCTION FLOW OK")
+          PY
+
+      - name: Verify trigger edge definitions
+        run: |
+          python - <<'PY'
+          from services.production_event_service import trigger_definitions
+
+          definitions = [
+              {"name": "Start", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1, "trigger_edge": "rise"},
+              {"name": "Stop", "storage": "TRIGGER", "trigger_register": 119, "trigger_value": 0, "trigger_edge": "fall"},
+              {"name": "Ignored", "storage": "TIME", "trigger_register": 118, "trigger_value": 1},
+          ]
+          assert trigger_definitions(definitions, 118)[0][1] == "rise"
+          assert trigger_definitions(definitions, 119)[0][1] == "fall"
+          assert trigger_definitions(definitions, 120) == []
+          print("TRIGGER EDGE DEFINITION OK")
+          PY
+
+      - name: Verify report persistence has no calculation evaluator
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path("services/report_plc.py").read_text(encoding="utf-8")
+          assert "def _safe_eval" not in text
+          assert "_all_management_calculations" not in text
+          assert "eval(" not in text
+          text = Path("services/report_snapshot_runtime.py").read_text(encoding="utf-8")
+          assert "save_report_snapshot" in text
+          assert "_report_plc._safe_eval" not in text
+          print("REPORT PERSISTENCE IS FLOW-PAYLOAD ONLY")
           PY
 
       - name: Verify Pulse runtime validation
