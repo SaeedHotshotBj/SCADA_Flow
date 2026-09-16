@@ -48,9 +48,8 @@ class ExpressionNode:
         return value
 
     @staticmethod
-    def _variables(tags):
-        variables = {}
-        for name, value in (tags or {}).items():
+    def _add_numeric(values, variables):
+        for name, value in (values or {}).items():
             try:
                 number = float(value)
             except (TypeError, ValueError):
@@ -61,17 +60,29 @@ class ExpressionNode:
             if not key:
                 continue
             variables[key] = number
-            alias = "".join(char if (char.isalnum() or char == "_") else "_" for char in key)
+            alias = "".join(
+                char if (char.isalnum() or char == "_") else "_"
+                for char in key
+            )
             if alias and alias[0].isdigit():
                 alias = "_" + alias
             if alias:
                 variables.setdefault(alias, number)
+
+    @classmethod
+    def _variables(cls, tags, event_context=None):
+        variables = {}
+        # Event metadata is context, not a synthetic TagMapper namespace.
+        # Flow expressions may reference numeric event fields directly.
+        cls._add_numeric(event_context, variables)
+        cls._add_numeric(tags, variables)
         return variables
 
     def execute(self, data=None):
         data = data or {}
         tags = dict(data.get("Tags", {}) or {})
-        variables = self._variables(tags)
+        event_context = data.get("ProductionEvent", {}) or {}
+        variables = self._variables(tags, event_context)
 
         for item in self.expressions:
             if not isinstance(item, dict):
