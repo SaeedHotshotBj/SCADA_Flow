@@ -1,7 +1,8 @@
-"""Runtime report snapshot writer used by the Flow report service.
+"""Runtime report snapshot writer used by the Flow ReportOutput node.
 
-This module keeps report persistence event-driven while fixing the expression
-AST validation and ReportValues foreign-key binding used by ProductionEvents.
+Persistence is intentionally dumb: ReportOutput/preceding Flow nodes decide
+which values exist and which columns are requested. This module does not read
+ManagementPanel/ReportOutput configuration to invent calculations.
 """
 
 import ast
@@ -11,12 +12,6 @@ from datetime import datetime
 
 from database import get_connection
 from services import report_plc as _report_plc
-from services.edge_ingest_policy import install as _install_edge_ingest_policy
-
-# Edge trigger samples are part of the same Flow-defined production-event
-# pipeline. Install the ingestion policy as this runtime facade is loaded by
-# FlowRunner during application startup, before Store & Forward requests.
-_install_edge_ingest_policy()
 
 
 def safe_flow_eval(expression, variables):
@@ -57,10 +52,6 @@ def safe_flow_eval(expression, variables):
     return value
 
 
-# Keep every caller that reaches report_plc internals on the corrected
-# evaluator and writer. The public report service already imports this module;
-# replacing both attributes here also prevents a stale direct import from
-# falling back to the old implementation after this runtime has initialized.
 _report_plc._safe_eval = safe_flow_eval
 
 
@@ -97,7 +88,6 @@ def save_report_snapshot(
 
     _report_plc.ensure_report_tables()
     all_products = [item for item in (report_products or []) if isinstance(item, dict)]
-    calculation_definitions = _report_plc._all_management_calculations(company_id)
 
     if trigger_event_id and report_node_id:
         conn = get_connection()
@@ -117,52 +107,29 @@ def save_report_snapshot(
     contract, product = _snapshot_context(all_products, tags)
     lookup = {str(key).strip().lower(): (key, value) for key, value in tags.items()}
     values = []
+    used_names = set()
 
+    # Every persisted value must be explicitly supplied by the Flow payload.
+    # ReportOutput configuration merely chooses which values are columns.
     for item in all_products:
-        tag = str(item.get("tag", "")).strip()
+        tag = str(item.get("tag", "") or item.get("name", "")).strip()
+        name = str(item.get("name", tag)).strip() or tag
         role = str(item.get("context_role", item.get("context", ""))).strip().lower()
-        source = item.get("source")
         item_plc = _plc_id(item.get("plc_id", item.get("PLC_ID", plc_id)))
-        if role or source == "management_calculation" or not tag:
+        if role or not tag:
             continue
         if item_plc is not None and plc_id is not None and item_plc != plc_id:
             continue
+
         found = lookup.get(tag.lower())
         if found is None or found[1] is None:
             continue
         try:
-            values.append((str(item.get("name", tag)).strip() or tag, float(found[1])))
+            if name.lower() not in used_names:
+                values.append((name, float(found[1])))
+                used_names.add(name.lower())
         except (TypeError, ValueError):
-            pass
-
-    variables = _report_plc._formula_variables(tags, duration)
-    for calculation in calculation_definitions:
-        try:
-            result = safe_flow_eval(calculation["expression"], variables)
-            values.append((calculation["name"], result))
-            variables[calculation["name"]] = result
-            alias = "".join(
-                char if (char.isalnum() or char == "_") else "_"
-                for char in calculation["name"]
-            )
-            if alias:
-                variables[alias] = result
-        except Exception as exc:
-            print(
-                "REPORT CALCULATION ERROR:",
-                calculation["name"],
-                calculation["expression"],
-                exc,
-            )
-
-    existing_names = {key.lower() for key, _ in values}
-    for name, value in (
-        ("WorkTimeSeconds", duration),
-        ("WorkTimeMinutes", duration / 60.0),
-        ("WorkTimeHours", duration / 3600.0),
-    ):
-        if name.lower() not in existing_names:
-            values.append((name, value))
+            continue
 
     if not values:
         return None
@@ -199,7 +166,7 @@ def save_report_snapshot(
         report_id = cur.lastrowid
         conn.executemany(
             "INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",
-            [(report_id, name, value) for name, value in values],
+            [(name, value) for name, value in values],
         )
         conn.commit()
         return int(report_id)
@@ -219,8 +186,6 @@ def save_report_snapshot(
         conn.close()
 
 
-# Make the compatibility import path use the same corrected event-driven
-# implementation once this runtime has loaded.
 _report_plc.save_report_snapshot = save_report_snapshot
 
 
