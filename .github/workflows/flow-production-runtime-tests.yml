@@ -1,0 +1,28 @@
+name: Flow production runtime tests
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  production-flow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Compile production Flow runtime test
+        run: python -m py_compile tests/flow_production_runtime_smoke.py
+
+      - name: Run production Flow runtime simulation
+        run: python tests/flow_production_runtime_smoke.py
