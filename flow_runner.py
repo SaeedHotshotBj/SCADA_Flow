@@ -13,6 +13,26 @@ REALTIME_SKIP_NODE_TYPES = {
     "TrendOutput",
 }
 
+# Production events already contain the PLC/TagMapper snapshot. Those source
+# and side-effect nodes must not perform a second live read/write while a
+# report branch is being evaluated. The actual calculation/output nodes still
+# execute according to their Drawflow connections.
+EVENT_PASSTHROUGH_NODE_TYPES = {
+    "PLCReader",
+    "TagMapper",
+    "SQLWriter",
+    "DashboardOutput",
+    "AlarmNode",
+    "MachineCard",
+    "Pulse",
+    "EdgeTimeout",
+    "Roles",
+    "RolesEngaged",
+    "TrendReader",
+    "TrendDatabaseReader",
+    "TrendOutput",
+}
+
 
 class FlowRunner:
     """Execute a Drawflow graph with isolated branch payloads."""
@@ -172,6 +192,137 @@ class FlowRunner:
         result = copy.deepcopy(payload)
         result["_BranchResults"] = branch_results
         return result
+
+    def _reverse_connections(self):
+        reverse = {node_id: set() for node_id in self.nodes}
+        for source_id, children in self.connections.items():
+            for child_id in children:
+                if child_id in reverse and source_id in self.nodes:
+                    reverse[child_id].add(str(source_id))
+        return reverse
+
+    def _ancestor_nodes(self, node_id):
+        reverse = self._reverse_connections()
+        result = set()
+        stack = [str(node_id)]
+        while stack:
+            current = stack.pop()
+            for parent in reverse.get(current, set()):
+                if parent in result:
+                    continue
+                result.add(parent)
+                stack.append(parent)
+        return result
+
+    def _execute_production_branch(self, node_id, data, visited):
+        node_id = str(node_id)
+        if node_id in visited or node_id not in self.nodes:
+            return data
+        visited = set(visited)
+        visited.add(node_id)
+        info = self.nodes[node_id]
+        payload = self._prepare_payload(data)
+
+        if info["type"] in EVENT_PASSTHROUGH_NODE_TYPES:
+            result = payload
+        else:
+            try:
+                result = info["instance"].execute(payload)
+                if result is None:
+                    result = payload
+                if not isinstance(result, dict):
+                    raise TypeError(
+                        f"Node {node_id} ({info['type']}) must return a dict or None"
+                    )
+                result.setdefault("CompanyID", self.company_id)
+                flow_status.node_ok(node_id)
+            except Exception as exc:
+                flow_status.node_error(node_id, exc)
+                print(
+                    "PRODUCTION FLOW NODE ERROR:",
+                    "Node=", node_id,
+                    "Type=", info["type"],
+                    "Error=", repr(exc),
+                )
+                return payload
+
+        branch_results = []
+        for child_id in self.next_nodes(node_id):
+            child_result = self._execute_production_branch(
+                child_id,
+                copy.deepcopy(result),
+                visited,
+            )
+            branch_results.append({"node_id": str(child_id), "data": child_result})
+
+        result = copy.deepcopy(result)
+        result["_BranchResults"] = branch_results
+        return result
+
+    def execute_production_event(self, event):
+        """Run a production event through the Flow-connected ReportOutput branches.
+
+        PLCReader/TagMapper/SQLWriter are pass-through nodes for this event,
+        because the event already carries the exact trigger-time snapshot.
+        Calculation nodes and ReportOutput execute according to Drawflow.
+        """
+        if not isinstance(event, dict):
+            return None
+
+        report_nodes = [
+            node_id
+            for node_id, info in self.nodes.items()
+            if info["type"] == "ReportOutput"
+        ]
+        if not report_nodes:
+            return None
+
+        event_tags = dict(event.get("tags") or {})
+        duration = float(event.get("duration_seconds", 0.0) or 0.0)
+        event_tags.setdefault("DurationSeconds", duration)
+        event_tags.setdefault("WorkTimeSeconds", duration)
+        event_tags.setdefault("WorkTimeMinutes", duration / 60.0)
+        event_tags.setdefault("WorkTimeHours", duration / 3600.0)
+
+        payload = {
+            "CompanyID": self.company_id,
+            "PLC_ID": event.get("PLC_ID"),
+            "Tags": event_tags,
+            "ProductionEvent": copy.deepcopy(event),
+            "Timestamp": event.get("timestamp"),
+        }
+
+        reverse = self._reverse_connections()
+        results = []
+
+        for report_node_id in report_nodes:
+            ancestors = self._ancestor_nodes(report_node_id)
+            eligible = {
+                node_id
+                for node_id in ancestors
+                if self.nodes.get(node_id, {}).get("type") not in EVENT_PASSTHROUGH_NODE_TYPES
+            }
+            starts = sorted(
+                node_id
+                for node_id in eligible
+                if not (reverse.get(node_id, set()) & eligible)
+            )
+            if not starts:
+                starts = [str(report_node_id)]
+
+            for start_id in starts:
+                result = self._execute_production_branch(
+                    start_id,
+                    copy.deepcopy(payload),
+                    set(),
+                )
+                results.append(result)
+
+        return results[0] if len(results) == 1 else {
+            "CompanyID": self.company_id,
+            "ProductionEvent": copy.deepcopy(event),
+            "_BranchResults": results,
+        }
 
     def execute_trend_branch(self, node_id, data, visited=None):
         if visited is None:
