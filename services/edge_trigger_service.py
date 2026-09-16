@@ -1,113 +1,169 @@
-"""Authoritative Edge TRIGGER event detector.
+"""Flow-driven trigger edge detector.
 
-The service converts fresh EDGE historian rows for TRIGGER tags into durable,
-de-duplicated runtime events. It does not create reports and it does not
-monkey-patch PLCReader or SQLWriter.
+The Edge sends a synthetic signal tag for every configured trigger register.
+This service consumes those ordered signals, maintains persistent state, and
+creates ProductionEvents. TIME tags remain historian samples; TRIGGER tags are
+sampled while their cycle is active and are therefore available for the full
+production window.
 """
 
-from datetime import datetime
+import json
 
-from database import get_connection
+from database import get_connection, get_company_flow
+from services.production_event_service import (
+    ensure_production_event_schema,
+    process_trigger_signal,
+)
+from services.report_service import save_report_snapshot
 
-STATE_TABLE = "FlowEdgeTriggerEventState"
-SETTLE_SECONDS = 1.5
-
-
-def _timestamp_age(value):
-    try:
-        text = str(value or "").strip().replace("T", " ").rstrip("Z")
-        dt = datetime.fromisoformat(text)
-        return max(0.0, (datetime.now() - dt).total_seconds())
-    except Exception:
-        return SETTLE_SECONDS + 1.0
+SIGNAL_PREFIX = "__TRIGGER_REGISTER_"
 
 
-def _row_key(row):
-    return (str(row["Timestamp"] or ""), int(row["ID"] or 0))
+def _nodes(company_id):
+    flow = get_company_flow(company_id)
+    if not flow:
+        return {}
+    if isinstance(flow, str):
+        try:
+            flow = json.loads(flow)
+        except Exception:
+            return {}
+    return flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
 
 
-def _ensure_state_table(conn):
-    conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {STATE_TABLE} (
-            CompanyID INTEGER NOT NULL,
-            TriggerRegister TEXT NOT NULL,
-            LastTimestamp TEXT,
-            LastID INTEGER,
-            PRIMARY KEY (CompanyID, TriggerRegister)
-        )
-    """)
-    conn.commit()
-
-
-def _latest_rows(conn, company_id, definitions):
-    groups = {}
-    for definition in definitions or []:
-        if not isinstance(definition, dict):
+def _trigger_registers(definitions):
+    result = set()
+    for item in definitions or []:
+        if not isinstance(item, dict):
             continue
-        if str(definition.get("storage", "TIME")).strip().upper() != "TRIGGER":
+        if str(item.get("storage", "TIME")).strip().upper() != "TRIGGER":
             continue
-        name = str(definition.get("name", "")).strip()
-        register = definition.get("trigger_register")
-        if not name or register in (None, ""):
+        try:
+            result.add(int(item.get("trigger_register")))
+        except (TypeError, ValueError):
             continue
-        groups.setdefault(str(register), []).append(name)
+    return sorted(result)
 
-    result = {}
-    for register, names in groups.items():
-        rows = {}
-        for name in names:
-            row = conn.execute("""
-                SELECT ID, TagName, Value, Timestamp
-                FROM PLC_Data
-                WHERE CompanyID = ?
-                  AND LOWER(TagName) = LOWER(?)
-                  AND UPPER(COALESCE(StorageType, '')) = 'EDGE'
-                ORDER BY ID DESC
-                LIMIT 1
-            """, (int(company_id), name)).fetchone()
-            if row is not None:
-                rows[name] = row
-        if rows:
-            result[register] = rows
+
+def _all_tag_definitions(nodes, plc_id):
+    result = []
+    for node in nodes.values():
+        if not isinstance(node, dict) or node.get("name") != "TagMapper":
+            continue
+        mappings = (node.get("data", {}) or {}).get("mappings", [])
+        for item in mappings if isinstance(mappings, list) else []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                item_plc = int(item.get("plc_id", item.get("PLC_ID")))
+            except (TypeError, ValueError):
+                continue
+            if item_plc == int(plc_id) and str(item.get("name", "")).strip():
+                result.append(item)
+        break
     return result
 
 
-def _claim_event(conn, company_id, register, event_key):
-    conn.execute("BEGIN IMMEDIATE")
-    row = conn.execute(f"""
-        SELECT LastTimestamp, LastID
-        FROM {STATE_TABLE}
-        WHERE CompanyID = ? AND TriggerRegister = ?
-    """, (int(company_id), str(register))).fetchone()
+def _latest_snapshot(conn, company_id, plc_id, definitions, at_id):
+    snapshot = {}
+    names = []
+    for item in definitions or []:
+        name = str(item.get("name", "")).strip()
+        if name and name.lower() not in {x.lower() for x in names}:
+            names.append(name)
 
-    current_key = (str(event_key[0]), int(event_key[1]))
-    if row is None:
-        conn.execute(f"""
-            INSERT INTO {STATE_TABLE}
-            (CompanyID, TriggerRegister, LastTimestamp, LastID)
-            VALUES (?, ?, ?, ?)
-        """, (int(company_id), str(register), current_key[0], current_key[1]))
-        conn.commit()
-        return False
+    for name in names:
+        row = conn.execute(
+            """
+            SELECT TagName, Value
+            FROM PLC_Data
+            WHERE CompanyID=? AND PLC_ID=?
+              AND LOWER(TagName)=LOWER(?)
+              AND ID <= ?
+            ORDER BY ID DESC
+            LIMIT 1
+            """,
+            (int(company_id), int(plc_id), name, int(at_id)),
+        ).fetchone()
+        if row is not None:
+            snapshot[str(row["TagName"])] = row["Value"]
+    return snapshot
 
-    previous_key = (str(row["LastTimestamp"] or ""), int(row["LastID"] or 0))
-    if current_key <= previous_key:
-        conn.rollback()
-        return False
 
-    conn.execute(f"""
-        UPDATE {STATE_TABLE}
-        SET LastTimestamp = ?, LastID = ?
-        WHERE CompanyID = ? AND TriggerRegister = ?
-    """, (current_key[0], current_key[1], int(company_id), str(register)))
-    conn.commit()
-    return True
+def _report_configs(nodes):
+    configs = []
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("name") != "ReportOutput":
+            continue
+        inputs = node.get("inputs", {}) or {}
+        connected = any(
+            isinstance(item, dict) and bool(item.get("connections", []))
+            for item in inputs.values()
+        )
+        if not connected:
+            continue
+        products = (node.get("data", {}) or {}).get("products", [])
+        clean = [
+            item for item in products
+            if isinstance(item, dict) and str(item.get("tag", "")).strip()
+        ]
+        if clean:
+            configs.append((str(node_id), clean))
+    return configs
+
+
+def _write_event_reports(company_id, event):
+    nodes = _nodes(company_id)
+    configs = _report_configs(nodes)
+    if not configs:
+        return
+
+    tags = dict(event.get("tags") or {})
+    tags["WorkTimeSeconds"] = event.get("duration_seconds", 0.0)
+    tags["DurationSeconds"] = event.get("duration_seconds", 0.0)
+    tags["WorkTimeMinutes"] = float(event.get("duration_seconds", 0.0) or 0.0) / 60.0
+    tags["WorkTimeHours"] = float(event.get("duration_seconds", 0.0) or 0.0) / 3600.0
+    if event.get("start_timestamp"):
+        tags["ProductionStartTimestamp"] = event["start_timestamp"]
+    if event.get("end_timestamp"):
+        tags["ProductionEndTimestamp"] = event["end_timestamp"]
+
+    # The completed event is the report boundary. The report engine stores
+    # configured tags plus Flow-defined ManagementPanel calculations.
+    for node_id, products in configs:
+        try:
+            save_report_snapshot(
+                company_id,
+                tags,
+                products,
+                timestamp=event.get("timestamp"),
+                trigger_tag=f"{SIGNAL_PREFIX}{event.get('register')}",
+                trigger_register=event.get("register"),
+                trigger_value=event.get("trigger_value"),
+                plc_id=event.get("PLC_ID"),
+                trigger_edge=event.get("edge"),
+                start_timestamp=event.get("start_timestamp"),
+                end_timestamp=event.get("end_timestamp"),
+                duration_seconds=event.get("duration_seconds", 0),
+                start_complete=event.get("start_complete", 1),
+                trigger_event_id=event.get("event_id"),
+                report_node_id=node_id,
+            )
+        except Exception as exc:
+            print(
+                "PRODUCTION REPORT ERROR:",
+                "CompanyID=", company_id,
+                "ReportNode=", node_id,
+                "EventID=", event.get("event_id"),
+                "Reason=", exc,
+            )
 
 
 class EdgeTriggerService:
     def enrich(self, payload):
         if not isinstance(payload, dict):
             return payload
+
         try:
             company_id = int(payload.get("CompanyID") or payload.get("company_id"))
             plc_id = int(payload.get("PLC_ID"))
@@ -116,45 +172,76 @@ class EdgeTriggerService:
 
         definitions = payload.get("TagDefinitions", [])
         if not isinstance(definitions, list):
+            definitions = _all_tag_definitions(_nodes(company_id), plc_id)
+
+        nodes = _nodes(company_id)
+        if not definitions:
+            definitions = _all_tag_definitions(nodes, plc_id)
+
+        registers = _trigger_registers(definitions)
+        if not registers:
             return payload
 
+        ensure_production_event_schema()
+        emitted = []
         conn = get_connection()
         try:
-            _ensure_state_table(conn)
-            groups = _latest_rows(conn, company_id, definitions)
-            if not groups:
-                return payload
+            for register in registers:
+                signal_name = f"{SIGNAL_PREFIX}{register}"
+                rows = conn.execute(
+                    f"""
+                    SELECT ID, Value, Timestamp
+                    FROM PLC_Data
+                    WHERE CompanyID=? AND PLC_ID=?
+                      AND TagName=? AND StorageType='TRIGGER_SIGNAL'
+                      AND ID > COALESCE(
+                          (SELECT MIN(LastSignalID)
+                           FROM FlowTriggerState
+                           WHERE CompanyID=? AND PLC_ID=? AND TriggerRegister=?),
+                          0
+                      )
+                    ORDER BY ID ASC
+                    LIMIT 500
+                    """,
+                    (
+                        company_id,
+                        plc_id,
+                        signal_name,
+                        company_id,
+                        plc_id,
+                        register,
+                    ),
+                ).fetchall()
 
-            tags = payload.setdefault("Tags", {})
-            events = []
-            for register, rows in groups.items():
-                newest = max(rows.values(), key=_row_key)
-                for row in rows.values():
-                    tags[str(row["TagName"])] = row["Value"]
-
-                if _timestamp_age(newest["Timestamp"]) < SETTLE_SECONDS:
-                    continue
-                if not _claim_event(conn, company_id, register, _row_key(newest)):
-                    continue
-
-                event_tags = {
-                    str(row["TagName"]): row["Value"]
-                    for row in rows.values()
-                    if row["Value"] is not None
-                }
-                events.append({
-                    "company_id": company_id,
-                    "PLC_ID": plc_id,
-                    "register": register,
-                    "timestamp": str(newest["Timestamp"]),
-                    "tags": event_tags,
-                })
-
-            if events:
-                payload["EdgeTriggerEvents"] = events
-            return payload
+                for row in rows:
+                    snapshot = _latest_snapshot(
+                        conn,
+                        company_id,
+                        plc_id,
+                        definitions,
+                        row["ID"],
+                    )
+                    events = process_trigger_signal(
+                        company_id,
+                        plc_id,
+                        register,
+                        row["Value"],
+                        row["Timestamp"],
+                        row["ID"],
+                        definitions,
+                        snapshot,
+                    )
+                    for event in events:
+                        event["timestamp"] = event.get("timestamp") or row["Timestamp"]
+                        _write_event_reports(company_id, event)
+                        emitted.append(event)
         finally:
             conn.close()
+
+        if emitted:
+            payload.setdefault("EdgeTriggerEvents", []).extend(emitted)
+
+        return payload
 
 
 __all__ = ["EdgeTriggerService"]
