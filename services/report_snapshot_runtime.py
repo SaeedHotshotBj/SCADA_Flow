@@ -58,7 +58,9 @@ def safe_flow_eval(expression, variables):
 
 
 # Keep every caller that reaches report_plc internals on the corrected
-# evaluator as well. The public facade below uses the corrected writer.
+# evaluator and writer. The public report service already imports this module;
+# replacing both attributes here also prevents a stale direct import from
+# falling back to the old implementation after this runtime has initialized.
 _report_plc._safe_eval = safe_flow_eval
 
 
@@ -215,6 +217,11 @@ def save_report_snapshot(
         raise
     finally:
         conn.close()
+
+
+# Make the compatibility import path use the same corrected event-driven
+# implementation once this runtime has loaded.
+_report_plc.save_report_snapshot = save_report_snapshot
 
 
 __all__ = ["safe_flow_eval", "save_report_snapshot"]
