@@ -48,11 +48,13 @@ class FlowRunner:
         self.edge_trigger_service = EdgeTriggerService()
         self.load_flow()
 
-    def get_node_config(self, node):
+    def get_node_config(self, node, node_id=None):
         data = node.get("data", {}) or {}
         raw = data.get("config", data)
         config = dict(raw) if isinstance(raw, dict) else {}
         config["company_id"] = self.company_id
+        if node_id is not None:
+            config["node_id"] = str(node_id)
         return config
 
     def load_flow(self):
@@ -67,7 +69,7 @@ class FlowRunner:
             node_class = get_node_class(node_type)
             if not node_class:
                 continue
-            config = self.get_node_config(node)
+            config = self.get_node_config(node, node_id)
             self.nodes[str(node_id)] = {
                 "instance": node_class(config),
                 "type": node_type,
@@ -223,6 +225,9 @@ class FlowRunner:
         info = self.nodes[node_id]
         payload = self._prepare_payload(data)
 
+        if info["type"] == "ReportOutput":
+            payload["_CurrentReportNodeID"] = node_id
+
         if info["type"] in EVENT_PASSTHROUGH_NODE_TYPES:
             result = payload
         else:
@@ -260,12 +265,7 @@ class FlowRunner:
         return result
 
     def execute_production_event(self, event):
-        """Run a production event through the Flow-connected ReportOutput branches.
-
-        PLCReader/TagMapper/SQLWriter are pass-through nodes for this event,
-        because the event already carries the exact trigger-time snapshot.
-        Calculation nodes and ReportOutput execute according to Drawflow.
-        """
+        """Run a production event through the Flow-connected ReportOutput branches."""
         if not isinstance(event, dict):
             return None
 
