@@ -7,6 +7,7 @@ from flow_engine.node_registry import NODE_REGISTRY
 from flow_engine.nodes.plc_reader import PLCReader
 from flow_engine.nodes.tag_mapper import TagMapper
 from flow_engine.nodes.expression_node import ExpressionNode
+from flow_engine.nodes.management_panel import ManagementPanel
 from services.management_sql_writer import ManagementSQLWriter
 from flow_engine.nodes.dashboard_output import DashboardOutput
 from flow_engine.nodes.machine_card import MachineCard
@@ -25,6 +26,7 @@ NODE_CLASSES = {
     "PLCReader": PLCReader,
     "TagMapper": TagMapper,
     "ExpressionNode": ExpressionNode,
+    "ManagementPanel": ManagementPanel,
     "SQLWriter": ManagementSQLWriter,
     "DashboardOutput": DashboardOutput,
     "MachineCard": MachineCard,
