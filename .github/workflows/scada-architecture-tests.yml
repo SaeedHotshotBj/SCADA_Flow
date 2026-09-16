@@ -143,7 +143,7 @@ jobs:
               "6": node("ReportOutput", {
                   "products": [{"name": "Energy", "tag": "Energy", "plc_id": 1}]
               }, {"output_1": {"connections": [{"node": "3"}]}}),
-          }}}}}
+          }}}}
 
           runner = FlowRunner(flow, 7)
           result = runner.execute_production_event({
@@ -188,8 +188,8 @@ jobs:
           assert "_all_management_calculations" not in text
           assert "eval(" not in text
           text = Path("services/report_snapshot_runtime.py").read_text(encoding="utf-8")
-          assert "save_report_snapshot" in text
-          assert "_report_plc._safe_eval" not in text
+          assert "def safe_flow_eval" not in text
+          assert "eval(" not in text
           print("REPORT PERSISTENCE IS FLOW-PAYLOAD ONLY")
           PY
 
