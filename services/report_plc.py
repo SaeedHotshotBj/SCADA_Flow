@@ -41,15 +41,44 @@ def _allowed(item, user_role):
     return str(user_role or "").strip().lower() in configured
 
 
-def _management_calculations(company_id, user_role=None):
-    """Read Flow metadata for report column discovery only.
+def _reverse_connections(nodes):
+    reverse = {str(node_id): set() for node_id in nodes if isinstance(nodes.get(node_id), dict)}
+    for source_id, node in nodes.items():
+        if not isinstance(node, dict):
+            continue
+        for output in (node.get("outputs", {}) or {}).values():
+            if not isinstance(output, dict):
+                continue
+            for connection in output.get("connections", []) or []:
+                if not isinstance(connection, dict):
+                    continue
+                target = str(connection.get("node", ""))
+                if target in reverse:
+                    reverse[target].add(str(source_id))
+    return reverse
 
-    This helper never evaluates an expression. Production values are calculated
-    exclusively by executable Flow nodes and arrive here through ReportOutput.
-    """
+
+def _ancestor_nodes(reverse, node_id):
+    result = set()
+    stack = [str(node_id)]
+    while stack:
+        current = stack.pop()
+        for parent in reverse.get(current, set()):
+            if parent in result:
+                continue
+            result.add(parent)
+            stack.append(parent)
+    return result
+
+
+def _management_calculations(company_id, user_role=None, node_ids=None):
+    """Read connected ManagementPanel metadata for report column discovery only."""
     result = []
     seen = set()
-    for node in _flow_nodes(company_id).values():
+    allowed_nodes = None if node_ids is None else {str(item) for item in node_ids}
+    for node_id, node in _flow_nodes(company_id).items():
+        if allowed_nodes is not None and str(node_id) not in allowed_nodes:
+            continue
         if not isinstance(node, dict) or node.get("name") != "ManagementPanel":
             continue
         data = node.get("data", {}) or {}
@@ -145,35 +174,46 @@ def get_report_products(company_id, user_role=None):
     products = []
     seen = set()
     try:
-        for node_id, node in _flow_nodes(company_id).items():
+        nodes = _flow_nodes(company_id)
+        reverse = _reverse_connections(nodes)
+        connected_management_nodes = set()
+
+        for node_id, node in nodes.items():
             if not isinstance(node, dict) or node.get("name") != "ReportOutput":
                 continue
             data = node.get("data", {}) or {}
             config = data.get("config", data) or {}
             configured = config.get("products", []) if isinstance(config, dict) else []
-            if not isinstance(configured, list):
-                continue
-            for item in configured:
-                if not isinstance(item, dict):
-                    continue
-                tag = str(item.get("tag", "")).strip()
-                if not tag or not _allowed(item, user_role):
-                    continue
-                result = {
-                    "name": str(item.get("name", tag)).strip() or tag,
-                    "tag": tag,
-                    "plc_id": _plc_id(item.get("plc_id", item.get("PLC_ID"))),
-                    "unit": str(item.get("unit", "")).strip(),
-                    "context_role": str(item.get("context_role", item.get("context", ""))).strip().lower(),
-                    "allowed_roles": item.get("allowed_roles", ""),
-                    "report_node_id": str(node_id),
-                }
-                key = (tag.lower(), result["plc_id"], result["context_role"])
-                if key not in seen:
-                    seen.add(key)
-                    products.append(result)
+            if isinstance(configured, list):
+                for item in configured:
+                    if not isinstance(item, dict):
+                        continue
+                    tag = str(item.get("tag", "")).strip()
+                    if not tag or not _allowed(item, user_role):
+                        continue
+                    result = {
+                        "name": str(item.get("name", tag)).strip() or tag,
+                        "tag": tag,
+                        "plc_id": _plc_id(item.get("plc_id", item.get("PLC_ID"))),
+                        "unit": str(item.get("unit", "")).strip(),
+                        "context_role": str(item.get("context_role", item.get("context", ""))).strip().lower(),
+                        "allowed_roles": item.get("allowed_roles", ""),
+                        "report_node_id": str(node_id),
+                    }
+                    key = (tag.lower(), result["plc_id"], result["context_role"])
+                    if key not in seen:
+                        seen.add(key)
+                        products.append(result)
 
-        for calculation in _management_calculations(company_id, user_role):
+            for ancestor_id in _ancestor_nodes(reverse, node_id):
+                if nodes.get(ancestor_id, {}).get("name") == "ManagementPanel":
+                    connected_management_nodes.add(ancestor_id)
+
+        for calculation in _management_calculations(
+            company_id,
+            user_role,
+            node_ids=connected_management_nodes,
+        ):
             key = (calculation["name"].lower(), None, "")
             if key in seen:
                 continue
@@ -240,9 +280,8 @@ def save_report_snapshot(
     contract, product = _context(all_products, tags)
     lookup = {str(key).strip().lower(): (key, value) for key, value in tags.items()}
     values = []
+    seen_value_names = set()
 
-    # ReportOutput has already executed every upstream Flow calculation.
-    # Persist only the values explicitly selected by this ReportOutput node.
     for item in all_products:
         tag = str(item.get("tag", "")).strip()
         role = str(item.get("context_role", item.get("context", ""))).strip().lower()
@@ -254,8 +293,12 @@ def save_report_snapshot(
         found = lookup.get(tag.lower())
         if found is None or found[1] is None:
             continue
+        name = str(item.get("name", tag)).strip() or tag
+        if name.lower() in seen_value_names:
+            continue
         try:
-            values.append((str(item.get("name", tag)).strip() or tag, float(found[1])))
+            values.append((name, float(found[1])))
+            seen_value_names.add(name.lower())
         except (TypeError, ValueError):
             pass
 
