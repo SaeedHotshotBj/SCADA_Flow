@@ -1,0 +1,755 @@
+name: Apply production traceability changes
+
+on:
+  push:
+    branches: [feature/production-traceability]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/production-traceability
+          fetch-depth: 0
+
+      - name: Apply feature changes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          ROOT = Path('.')
+
+          def replace_once(path, old, new):
+              p = ROOT / path
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'PATCH TARGET NOT FOUND: {path}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # ---------------- NODE REGISTRY ----------------
+          replace_once(
+              'flow_engine/node_registry.py',
+              '{"name": "trigger_value", "label": "Trigger Value", "type": "number"}',
+              '{"name": "trigger_value", "label": "Trigger Value", "type": "number"}, {"name": "trigger_edge", "label": "Trigger Edge", "type": "select", "options": ["rise", "fall"], "default": "rise"}'
+          )
+          replace_once(
+              'flow_engine/node_registry.py',
+              '{"name": "context_role", "label": "Context Role", "type": "select", "options": ["", "contract_code", "product_code"]}',
+              '{"name": "context_role", "label": "Context Role", "type": "select", "options": ["", "contract_code", "product_code"]}, {"name": "allowed_roles", "label": "Allowed Roles", "type": "text"}'
+          )
+          replace_once(
+              'flow_engine/node_registry.py',
+              '{"name": "unit", "label": "Unit", "type": "text"}]}]},\n    "DateConverter"',
+              '{"name": "unit", "label": "Unit", "type": "text"}, {"name": "allowed_roles", "label": "Allowed Roles", "type": "text"}]}]},\n    "DateConverter"'
+          )
+
+          # ---------------- PRODUCTION EVENT SERVICE ----------------
+          (ROOT / 'services/production_event_service.py').write_text(textwrap.dedent(r'''
+          """Flow-driven production cycle state machine for Rise/Fall triggers."""
+          import json
+          import math
+          import sqlite3
+          import uuid
+          from datetime import datetime
+          from database import get_connection
+
+          STATE_TABLE = "FlowTriggerState"
+          EVENT_TABLE = "ProductionEvents"
+
+          def _ts(value):
+              if value is None or str(value).strip() == "":
+                  return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
+              text = str(value).strip().replace("T", " ")
+              try:
+                  dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                  if dt.tzinfo is not None:
+                      from zoneinfo import ZoneInfo
+                      dt = dt.astimezone(ZoneInfo("Asia/Tehran")).replace(tzinfo=None)
+                  return dt.strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
+              except Exception:
+                  return text
+
+          def _seconds(start, end):
+              try:
+                  a = datetime.fromisoformat(str(start).replace("T", " "))
+                  b = datetime.fromisoformat(str(end).replace("T", " "))
+                  return max(0.0, (b - a).total_seconds())
+              except Exception:
+                  return 0.0
+
+          def _same(a, b):
+              try:
+                  return math.isclose(float(a), float(b), rel_tol=0.0, abs_tol=1e-9)
+              except Exception:
+                  return str(a) == str(b)
+
+          def _jsonable(values):
+              result = {}
+              for key, value in (values or {}).items():
+                  if value is None:
+                      continue
+                  try:
+                      if isinstance(value, bool):
+                          result[str(key)] = int(value)
+                      else:
+                          number = float(value)
+                          if math.isfinite(number):
+                              result[str(key)] = number
+                  except Exception:
+                      continue
+              return result
+
+          def ensure_production_event_schema():
+              conn = get_connection()
+              try:
+                  conn.executescript(f"""
+                  CREATE TABLE IF NOT EXISTS {STATE_TABLE} (
+                      CompanyID INTEGER NOT NULL,
+                      PLC_ID INTEGER NOT NULL,
+                      TriggerRegister INTEGER NOT NULL,
+                      ExpectedValue TEXT NOT NULL,
+                      Active INTEGER NOT NULL DEFAULT 0,
+                      StartTimestamp TEXT,
+                      StartSnapshotJSON TEXT,
+                      LastSignalID INTEGER,
+                      LastSignalTimestamp TEXT,
+                      LastSignalValue REAL,
+                      PRIMARY KEY (CompanyID, PLC_ID, TriggerRegister, ExpectedValue)
+                  );
+                  CREATE TABLE IF NOT EXISTS {EVENT_TABLE} (
+                      EventID TEXT PRIMARY KEY,
+                      CompanyID INTEGER NOT NULL,
+                      PLC_ID INTEGER NOT NULL,
+                      TriggerRegister INTEGER NOT NULL,
+                      ExpectedValue REAL,
+                      TriggerValue REAL,
+                      Edge TEXT NOT NULL,
+                      TriggerTimestamp TEXT NOT NULL,
+                      StartTimestamp TEXT,
+                      EndTimestamp TEXT,
+                      DurationSeconds REAL NOT NULL DEFAULT 0,
+                      StartComplete INTEGER NOT NULL DEFAULT 1,
+                      TagsJSON TEXT,
+                      StartTagsJSON TEXT,
+                      CreatedAt TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+                  );
+                  CREATE INDEX IF NOT EXISTS idx_production_events_company_time
+                  ON {EVENT_TABLE}(CompanyID, PLC_ID, TriggerTimestamp);
+                  CREATE INDEX IF NOT EXISTS idx_trigger_state_company_plc
+                  ON {STATE_TABLE}(CompanyID, PLC_ID, TriggerRegister);
+                  """)
+                  conn.commit()
+              finally:
+                  conn.close()
+
+          def _definitions_for(definitions, register):
+              result = []
+              for item in definitions or []:
+                  if not isinstance(item, dict):
+                      continue
+                  if str(item.get("storage", "TIME")).upper() != "TRIGGER":
+                      continue
+                  try:
+                      if int(item.get("trigger_register")) != int(register):
+                          continue
+                  except (TypeError, ValueError):
+                      continue
+                  edge = str(item.get("trigger_edge", "rise")).strip().lower()
+                  if edge not in {"rise", "fall"}:
+                      edge = "rise"
+                  result.append((item, edge))
+              return result
+
+          def process_trigger_signal(company_id, plc_id, register, value, signal_timestamp, signal_id, definitions, snapshot_tags=None):
+              ensure_production_event_schema()
+              register = int(register)
+              timestamp = _ts(signal_timestamp)
+              signal_id = int(signal_id)
+              snapshot = _jsonable(snapshot_tags)
+              emitted = []
+              conn = get_connection()
+              try:
+                  conn.execute("BEGIN IMMEDIATE")
+                  for definition, configured_edge in _definitions_for(definitions, register):
+                      try:
+                          expected = float(definition.get("trigger_value", 0))
+                      except (TypeError, ValueError):
+                          expected = 0.0
+                      expected_key = str(expected)
+                      row = conn.execute(
+                          f"SELECT * FROM {STATE_TABLE} WHERE CompanyID=? AND PLC_ID=? AND TriggerRegister=? AND ExpectedValue=?",
+                          (int(company_id), int(plc_id), register, expected_key),
+                      ).fetchone()
+                      active = _same(value, expected)
+                      if row is not None and row["LastSignalID"] is not None and signal_id <= int(row["LastSignalID"]):
+                          continue
+
+                      if row is None:
+                          conn.execute(
+                              f"INSERT INTO {STATE_TABLE}(CompanyID,PLC_ID,TriggerRegister,ExpectedValue,Active,StartTimestamp,StartSnapshotJSON,LastSignalID,LastSignalTimestamp,LastSignalValue) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                              (int(company_id), int(plc_id), register, expected_key, int(active), timestamp if active else None, json.dumps(snapshot, ensure_ascii=False), signal_id, timestamp, float(value)),
+                          )
+                          continue
+
+                      previous = bool(row["Active"])
+                      start_timestamp = row["StartTimestamp"]
+                      start_snapshot = {}
+                      try:
+                          start_snapshot = json.loads(row["StartSnapshotJSON"] or "{}")
+                      except Exception:
+                          start_snapshot = {}
+
+                      if not previous and active:
+                          conn.execute(
+                              f"UPDATE {STATE_TABLE} SET Active=1,StartTimestamp=?,StartSnapshotJSON=?,LastSignalID=?,LastSignalTimestamp=?,LastSignalValue=? WHERE CompanyID=? AND PLC_ID=? AND TriggerRegister=? AND ExpectedValue=?",
+                              (timestamp, json.dumps(snapshot, ensure_ascii=False), signal_id, timestamp, float(value), int(company_id), int(plc_id), register, expected_key),
+                          )
+                          if configured_edge == "rise":
+                              event_id = uuid.uuid4().hex
+                              conn.execute(
+                                  f"INSERT INTO {EVENT_TABLE}(EventID,CompanyID,PLC_ID,TriggerRegister,ExpectedValue,TriggerValue,Edge,TriggerTimestamp,StartTimestamp,EndTimestamp,DurationSeconds,StartComplete,TagsJSON,StartTagsJSON) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                  (event_id, int(company_id), int(plc_id), register, expected, float(value), "rise", timestamp, timestamp, None, 0.0, 1, json.dumps(snapshot, ensure_ascii=False), json.dumps(snapshot, ensure_ascii=False)),
+                              )
+                              emitted.append({"event_id": event_id, "company_id": int(company_id), "PLC_ID": int(plc_id), "register": register, "trigger_value": float(value), "edge": "rise", "timestamp": timestamp, "start_timestamp": timestamp, "end_timestamp": None, "duration_seconds": 0.0, "start_complete": 1, "tags": snapshot, "start_tags": snapshot})
+                          continue
+
+                      if previous and not active:
+                          end_timestamp = timestamp
+                          duration = _seconds(start_timestamp, end_timestamp) if start_timestamp else 0.0
+                          conn.execute(
+                              f"UPDATE {STATE_TABLE} SET Active=0,StartTimestamp=NULL,StartSnapshotJSON=NULL,LastSignalID=?,LastSignalTimestamp=?,LastSignalValue=? WHERE CompanyID=? AND PLC_ID=? AND TriggerRegister=? AND ExpectedValue=?",
+                              (signal_id, timestamp, float(value), int(company_id), int(plc_id), register, expected_key),
+                          )
+                          if configured_edge == "fall":
+                              event_id = uuid.uuid4().hex
+                              conn.execute(
+                                  f"INSERT INTO {EVENT_TABLE}(EventID,CompanyID,PLC_ID,TriggerRegister,ExpectedValue,TriggerValue,Edge,TriggerTimestamp,StartTimestamp,EndTimestamp,DurationSeconds,StartComplete,TagsJSON,StartTagsJSON) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                  (event_id, int(company_id), int(plc_id), register, expected, float(value), "fall", end_timestamp, start_timestamp, end_timestamp, duration, 1 if start_timestamp else 0, json.dumps(snapshot, ensure_ascii=False), json.dumps(start_snapshot, ensure_ascii=False)),
+                              )
+                              emitted.append({"event_id": event_id, "company_id": int(company_id), "PLC_ID": int(plc_id), "register": register, "trigger_value": float(value), "edge": "fall", "timestamp": end_timestamp, "start_timestamp": start_timestamp, "end_timestamp": end_timestamp, "duration_seconds": duration, "start_complete": 1 if start_timestamp else 0, "tags": snapshot, "start_tags": start_snapshot})
+                          continue
+
+                      conn.execute(
+                          f"UPDATE {STATE_TABLE} SET LastSignalID=?,LastSignalTimestamp=?,LastSignalValue=? WHERE CompanyID=? AND PLC_ID=? AND TriggerRegister=? AND ExpectedValue=?",
+                          (signal_id, timestamp, float(value), int(company_id), int(plc_id), register, expected_key),
+                      )
+                  conn.commit()
+              except Exception:
+                  conn.rollback()
+                  raise
+              finally:
+                  conn.close()
+              return emitted
+          
+          __all__ = ["ensure_production_event_schema", "process_trigger_signal", "STATE_TABLE", "EVENT_TABLE"]
+          ''').lstrip(), encoding='utf-8')
+
+          # ---------------- TRIGGER DETECTOR ----------------
+          (ROOT / 'services/edge_trigger_service.py').write_text(textwrap.dedent(r'''
+          """Flow-driven trigger edge detector backed by a persistent state machine."""
+          from database import get_connection
+          from services.production_event_service import ensure_production_event_schema, process_trigger_signal
+
+          SIGNAL_PREFIX = "__TRIGGER_REGISTER_"
+
+          def _trigger_registers(definitions):
+              result = set()
+              for item in definitions or []:
+                  if not isinstance(item, dict) or str(item.get("storage", "TIME")).upper() != "TRIGGER":
+                      continue
+                  try:
+                      result.add(int(item.get("trigger_register")))
+                  except (TypeError, ValueError):
+                      continue
+              return sorted(result)
+
+          def _snapshot_tags(conn, company_id, plc_id, definitions, at_id=None):
+              tags = {}
+              names = []
+              for item in definitions or []:
+                  if not isinstance(item, dict):
+                      continue
+                  name = str(item.get("name", "")).strip()
+                  if name and name.lower() not in {x.lower() for x in names}:
+                      names.append(name)
+              for name in names:
+                  sql = "SELECT TagName,Value FROM PLC_Data WHERE CompanyID=? AND PLC_ID=? AND LOWER(TagName)=LOWER(?)"
+                  params = [int(company_id), int(plc_id), name]
+                  if at_id is not None:
+                      sql += " AND ID <= ?"
+                      params.append(int(at_id))
+                  sql += " ORDER BY ID DESC LIMIT 1"
+                  row = conn.execute(sql, params).fetchone()
+                  if row is not None:
+                      tags[str(row["TagName"])] = row["Value"]
+              return tags
+
+          class EdgeTriggerService:
+              def enrich(self, payload):
+                  if not isinstance(payload, dict):
+                      return payload
+                  try:
+                      company_id = int(payload.get("CompanyID") or payload.get("company_id"))
+                      plc_id = int(payload.get("PLC_ID"))
+                  except (TypeError, ValueError):
+                      return payload
+                  definitions = payload.get("TagDefinitions", [])
+                  if not isinstance(definitions, list):
+                      return payload
+                  registers = _trigger_registers(definitions)
+                  if not registers:
+                      return payload
+                  ensure_production_event_schema()
+                  events = []
+                  conn = get_connection()
+                  try:
+                      for register in registers:
+                          prefix = f"{SIGNAL_PREFIX}{register}"
+                          rows = conn.execute("""
+                              SELECT ID,TagName,Value,Timestamp
+                              FROM PLC_Data
+                              WHERE CompanyID=? AND PLC_ID=? AND TagName=? AND StorageType='TRIGGER_SIGNAL'
+                                AND ID > COALESCE((SELECT MIN(LastSignalID) FROM FlowTriggerState WHERE CompanyID=? AND PLC_ID=? AND TriggerRegister=?),0)
+                              ORDER BY ID ASC LIMIT 500
+                          """, (company_id, plc_id, prefix, company_id, plc_id, register)).fetchall()
+                          for row in rows:
+                              snapshot = _snapshot_tags(conn, company_id, plc_id, definitions, row["ID"])
+                              events.extend(process_trigger_signal(company_id, plc_id, register, row["Value"], row["Timestamp"], row["ID"], definitions, snapshot))
+                  finally:
+                      conn.close()
+                  if events:
+                      payload.setdefault("EdgeTriggerEvents", []).extend(events)
+                  return payload
+
+          __all__ = ["EdgeTriggerService"]
+          ''').lstrip(), encoding='utf-8')
+
+          # ---------------- REPORT SERVICE ----------------
+          (ROOT / 'services/report_plc.py').write_text(textwrap.dedent(r'''
+          import ast
+          import json
+          import math
+          from datetime import datetime
+          from database import get_connection, get_company_flow
+
+          _CONTEXT_CONTRACT_ROLES = {"contract", "contract_code", "contractid", "contract_id"}
+          _CONTEXT_PRODUCT_ROLES = {"product", "product_code", "productid", "product_id"}
+
+          def _flow_nodes(company_id):
+              flow = get_company_flow(company_id)
+              if not flow:
+                  return {}
+              if isinstance(flow, str):
+                  try: flow = json.loads(flow)
+                  except Exception: return {}
+              return flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
+
+          def _plc_id(value):
+              try: return int(value)
+              except (TypeError, ValueError): return None
+
+          def _roles(value):
+              if isinstance(value, (list,tuple,set)):
+                  return {str(x).strip().lower() for x in value if str(x).strip()}
+              return {x.strip().lower() for x in str(value or "").replace(";",",").replace("\n",",").split(",") if x.strip()}
+
+          def _allowed(item, user_role):
+              configured = _roles(item.get("allowed_roles"))
+              if not configured: return True
+              return str(user_role or "").strip().lower() in configured
+
+          def _management_calculations(company_id, user_role=None):
+              result=[]; seen=set()
+              for node in _flow_nodes(company_id).values():
+                  if not isinstance(node,dict) or node.get("name")!="ManagementPanel": continue
+                  data=node.get("data",{}) or {}; cfg=data.get("config",data) or {}
+                  for item in cfg.get("calculations",[]) if isinstance(cfg,dict) else []:
+                      if not isinstance(item,dict): continue
+                      name=str(item.get("name",item.get("result_name",""))).strip(); expr=str(item.get("expression","" )).strip()
+                      if not name or not expr or name.lower() in seen or not _allowed(item,user_role): continue
+                      seen.add(name.lower())
+                      result.append({"name":name,"label":str(item.get("label",name)).strip() or name,"expression":expr,"unit":str(item.get("unit","")).strip(),"allowed_roles":item.get("allowed_roles"),"source":"management_calculation"})
+              return result
+
+          def _safe_eval(expression, variables):
+              tree=ast.parse(expression,mode="eval")
+              allowed=(ast.Expression,ast.Constant,ast.Name,ast.BinOp,ast.UnaryOp,ast.Add,ast.Sub,ast.Mult,ast.Div,ast.Mod,ast.Pow,ast.USub,ast.UAdd)
+              for node in ast.walk(tree):
+                  if not isinstance(node,allowed): raise ValueError("Unsupported expression")
+                  if isinstance(node,ast.Constant) and not isinstance(node.value,(int,float)): raise ValueError("Expression must be numeric")
+                  if isinstance(node,ast.Name) and node.id not in variables: raise ValueError(f"Unknown variable: {node.id}")
+              value=eval(compile(tree,"<flow-report-expression>","eval"),{"__builtins__":{}},variables)
+              value=float(value)
+              if not math.isfinite(value): raise ValueError("Expression result is not finite")
+              return value
+
+          def ensure_report_tables():
+              conn=get_connection()
+              try:
+                  conn.executescript("""
+                  CREATE TABLE IF NOT EXISTS ReportHistory(ReportID INTEGER PRIMARY KEY AUTOINCREMENT,CompanyID INTEGER,PLC_ID INTEGER,Timestamp TEXT NOT NULL,TriggerTag TEXT,TriggerRegister TEXT,TriggerValue REAL,TriggerEdge TEXT,StartTimestamp TEXT,EndTimestamp TEXT,DurationSeconds REAL,StartComplete INTEGER,TriggerEventID TEXT,ReportNodeID TEXT,ContractCode TEXT,ProductCode TEXT,FOREIGN KEY(CompanyID) REFERENCES Companies(CompanyID));
+                  CREATE TABLE IF NOT EXISTS ReportValues(ReportValueID INTEGER PRIMARY KEY AUTOINCREMENT,ReportID INTEGER NOT NULL,TagName TEXT NOT NULL,Value REAL,FOREIGN KEY(ReportID) REFERENCES ReportHistory(ReportID) ON DELETE CASCADE);
+                  """)
+                  cols={r["name"] for r in conn.execute("PRAGMA table_info(ReportHistory)").fetchall()}
+                  for name,typ in [("TriggerEdge","TEXT"),("StartTimestamp","TEXT"),("EndTimestamp","TEXT"),("DurationSeconds","REAL"),("StartComplete","INTEGER"),("TriggerEventID","TEXT"),("ReportNodeID","TEXT")]:
+                      if name not in cols: conn.execute(f"ALTER TABLE ReportHistory ADD COLUMN {name} {typ}")
+                  conn.execute("CREATE INDEX IF NOT EXISTS idx_report_history_company_plc_time ON ReportHistory(CompanyID,PLC_ID,Timestamp)")
+                  conn.execute("CREATE INDEX IF NOT EXISTS idx_report_values_report_tag ON ReportValues(ReportID,TagName)")
+                  conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_report_event_node ON ReportHistory(TriggerEventID,ReportNodeID) WHERE TriggerEventID IS NOT NULL AND ReportNodeID IS NOT NULL")
+                  conn.commit()
+              finally: conn.close()
+
+          def get_report_products(company_id,user_role=None):
+              products=[]; seen=set()
+              try:
+                  for node_id,node in _flow_nodes(company_id).items():
+                      if not isinstance(node,dict) or node.get("name")!="ReportOutput": continue
+                      data=node.get("data",{}) or {}; cfg=data.get("config",data) or {}
+                      for item in cfg.get("products",[]) if isinstance(cfg,dict) else []:
+                          if not isinstance(item,dict): continue
+                          tag=str(item.get("tag","")).strip()
+                          if not tag or not _allowed(item,user_role): continue
+                          obj={"name":str(item.get("name",tag)).strip() or tag,"tag":tag,"plc_id":_plc_id(item.get("plc_id",item.get("PLC_ID"))),"unit":str(item.get("unit","")).strip(),"context_role":str(item.get("context_role",item.get("context",""))).strip().lower(),"allowed_roles":item.get("allowed_roles"),"report_node_id":str(node_id)}
+                          key=(tag.lower(),obj["plc_id"],obj["context_role"])
+                          if key not in seen: seen.add(key); products.append(obj)
+                  calc=_management_calculations(company_id,user_role)
+                  calc_seen={p["name"].lower() for p in products}
+                  for item in calc:
+                      if item["name"].lower() not in calc_seen: products.append(item); calc_seen.add(item["name"].lower())
+                  return products
+              except Exception as exc:
+                  print("REPORT CONFIG ERROR:",exc); return []
+
+          def _context(products,tags):
+              lookup={str(k).strip().lower():v for k,v in (tags or {}).items()}; contract=product=None
+              for item in products:
+                  role=str(item.get("context_role",item.get("context",""))).strip().lower(); tag=str(item.get("tag","")).strip().lower()
+                  if role in _CONTEXT_CONTRACT_ROLES and lookup.get(tag) not in (None,""): contract=str(lookup[tag]).strip()
+                  if role in _CONTEXT_PRODUCT_ROLES and lookup.get(tag) not in (None,""): product=str(lookup[tag]).strip()
+              return contract,product
+
+          def save_report_snapshot(company_id,tags,report_products,timestamp=None,trigger_tag=None,trigger_register=None,trigger_value=None,plc_id=None,trigger_edge=None,start_timestamp=None,end_timestamp=None,duration_seconds=0,start_complete=1,trigger_event_id=None,report_node_id=None):
+              if company_id is None or not isinstance(tags,dict): return None
+              ensure_report_tables()
+              all_products=list(report_products or [])
+              existing={(str(x.get("name",x.get("tag",""))).strip().lower(),x.get("source")) for x in all_products if isinstance(x,dict)}
+              for calc in _management_calculations(company_id,None):
+                  key=(calc["name"].lower(),"management_calculation")
+                  if key not in existing: all_products.append(calc); existing.add(key)
+              if trigger_event_id and report_node_id:
+                  conn=get_connection()
+                  try:
+                      row=conn.execute("SELECT ReportID FROM ReportHistory WHERE TriggerEventID=? AND ReportNodeID=? LIMIT 1",(str(trigger_event_id),str(report_node_id))).fetchone()
+                      if row: return int(row["ReportID"])
+                  finally: conn.close()
+              timestamp=timestamp or end_timestamp or start_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+              plc_id=_plc_id(plc_id); contract,product=_context(all_products,tags)
+              lookup={str(k).strip().lower():v for k,v in tags.items()}
+              duration=float(duration_seconds or 0)
+              variables={}
+              for name,value in lookup.items():
+                  try:
+                      number=float(value)
+                      if math.isfinite(number): variables[name]=number
+                  except Exception: pass
+              variables["DurationSeconds"]=duration; variables["WorkTimeSeconds"]=duration; variables["WorkTimeMinutes"]=duration/60.0; variables["WorkTimeHours"]=duration/3600.0; variables["ProductionTimeSeconds"]=duration
+              values=[]; seen=set()
+              for item in all_products:
+                  if not isinstance(item,dict): continue
+                  source=item.get("source"); name=str(item.get("name",item.get("tag",""))).strip(); tag=str(item.get("tag","")).strip(); role=str(item.get("context_role",item.get("context",""))).strip().lower()
+                  item_plc=_plc_id(item.get("plc_id",item.get("PLC_ID",plc_id)))
+                  if role or source=="management_calculation" or not tag or tag.lower() in seen: continue
+                  if item_plc is not None and plc_id is not None and item_plc!=plc_id: continue
+                  if tag.lower() in lookup and lookup[tag.lower()] is not None:
+                      try: values.append((name,float(lookup[tag.lower()]))); seen.add(tag.lower())
+                      except (TypeError,ValueError): pass
+              for calc in _management_calculations(company_id,None):
+                  name=calc["name"]
+                  try:
+                      result=_safe_eval(calc["expression"],variables); values.append((name,result))
+                  except Exception as exc: print("REPORT CALCULATION ERROR:",name,calc["expression"],exc)
+              conn=get_connection()
+              try:
+                  cur=conn.execute("INSERT INTO ReportHistory(CompanyID,PLC_ID,Timestamp,TriggerTag,TriggerRegister,TriggerValue,TriggerEdge,StartTimestamp,EndTimestamp,DurationSeconds,StartComplete,TriggerEventID,ReportNodeID,ContractCode,ProductCode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(company_id,plc_id,timestamp,trigger_tag,trigger_register,trigger_value,trigger_edge,start_timestamp,end_timestamp,duration,int(bool(start_complete)),str(trigger_event_id) if trigger_event_id else None,str(report_node_id) if report_node_id else None,contract,product))
+                  report_id=cur.lastrowid
+                  conn.executemany("INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",[(n,v) for n,v in values])
+                  conn.commit(); return report_id
+              except sqlite3.IntegrityError:
+                  conn.rollback()
+                  if trigger_event_id and report_node_id:
+                      row=conn.execute("SELECT ReportID FROM ReportHistory WHERE TriggerEventID=? AND ReportNodeID=? LIMIT 1",(str(trigger_event_id),str(report_node_id))).fetchone()
+                      return int(row["ReportID"]) if row else None
+                  raise
+              finally: conn.close()
+
+          def get_report_data(company_id,start,end,plc_id=None,user_role=None):
+              products=[p for p in get_report_products(company_id,user_role) if not p.get("context_role")]
+              if plc_id is not None: products=[p for p in products if p.get("plc_id") in (None,int(plc_id))]
+              result={"columns":products,"rows":[],"totals":[0.0 for _ in products],"grand_total":0.0}
+              if company_id is None or not start or not end: return result
+              ensure_report_tables(); keys=[str(p.get("name",p.get("tag",""))).strip().lower() for p in products]
+              conn=get_connection()
+              try:
+                  sql="SELECT h.ReportID,h.Timestamp,h.ContractCode,h.ProductCode,h.PLC_ID,h.TriggerTag,h.TriggerRegister,h.TriggerValue,h.TriggerEdge,h.StartTimestamp,h.EndTimestamp,h.DurationSeconds,h.StartComplete,h.TriggerEventID,v.TagName,v.Value FROM ReportHistory h LEFT JOIN ReportValues v ON v.ReportID=h.ReportID"
+                  params=[company_id,start.strftime("%Y-%m-%d %H:%M:%S"),end.strftime("%Y-%m-%d %H:%M:%S")]
+                  sql += " WHERE h.CompanyID=? AND datetime(h.Timestamp)>=datetime(?) AND datetime(h.Timestamp)<=datetime(?)"
+                  if plc_id is not None: sql += " AND h.PLC_ID=?"; params.append(int(plc_id))
+                  sql += " ORDER BY datetime(h.Timestamp),h.ReportID,COALESCE(v.ReportValueID,0)"
+                  rows=conn.execute(sql,params).fetchall()
+              finally: conn.close()
+              grouped={}
+              index={key:i for i,key in enumerate(keys)}
+              for row in rows:
+                  item=grouped.setdefault(row["ReportID"],{"timestamp":str(row["Timestamp"]),"PLC_ID":row["PLC_ID"],"contract_code":row["ContractCode"],"product_code":row["ProductCode"],"trigger_tag":row["TriggerTag"],"trigger_register":row["TriggerRegister"],"trigger_value":row["TriggerValue"],"trigger_edge":row["TriggerEdge"],"start_timestamp":row["StartTimestamp"],"end_timestamp":row["EndTimestamp"],"duration_seconds":row["DurationSeconds"],"start_complete":row["StartComplete"],"trigger_event_id":row["TriggerEventID"],"values":[None]*len(products)})
+                  tag=str(row["TagName"] or "").strip().lower()
+                  if tag not in index: continue
+                  try: item["values"][index[tag]]=float(row["Value"])
+                  except (TypeError,ValueError): pass
+              totals=[0.0]*len(products)
+              for item in grouped.values():
+                  row_total=0.0
+                  for i,value in enumerate(item["values"]):
+                      if value is not None: totals[i]+=value; row_total+=value
+                  item["row_total"]=row_total; result["rows"].append(item)
+              result["totals"]=[round(v,3) for v in totals]; result["grand_total"]=round(sum(totals),3)
+              return result
+          ''').lstrip(), encoding='utf-8')
+
+          # ---------------- REPORT RUNTIME ----------------
+          (ROOT / 'services/report_runtime.py').write_text(textwrap.dedent(r'''
+          """Persist completed Flow-defined ProductionEvents into report snapshots."""
+          import json
+          import threading
+          import time
+          from database import get_connection, get_company_flow
+          from services.report_service import save_report_snapshot
+
+          POLL_SECONDS=0.5
+          _START_LOCK=threading.Lock(); _WORKER=None
+
+          class ReportRuntime:
+              def __init__(self): self.running=True; self.last_event_id=0
+              def _nodes(self,company_id):
+                  flow=get_company_flow(company_id)
+                  if not flow: return {}
+                  if isinstance(flow,str):
+                      try: flow=json.loads(flow)
+                      except Exception: return {}
+                  return flow.get("drawflow",{}).get("Home",{}).get("data",{}) or {}
+              def _configs(self,company_id):
+                  out=[]
+                  for node_id,node in self._nodes(company_id).items():
+                      if not isinstance(node,dict) or node.get("name")!="ReportOutput": continue
+                      products=(node.get("data",{}) or {}).get("products",[])
+                      inputs=node.get("inputs",{}) or {}
+                      connected=any(isinstance(x,dict) and x.get("connections") for x in inputs.values())
+                      clean=[p for p in products if isinstance(p,dict) and str(p.get("tag","")).strip()]
+                      if clean and connected: out.append((str(node_id),clean))
+                  return out
+              def _save_event(self,event):
+                  company_id=int(event["CompanyID"]); configs=self._configs(company_id)
+                  if not configs: return
+                  try: tags=json.loads(event["TagsJSON"] or "{}")
+                  except Exception: tags={}
+                  try: start_tags=json.loads(event["StartTagsJSON"] or "{}")
+                  except Exception: start_tags={}
+                  tags=dict(tags or {}); tags["__START_SNAPSHOT__"]=start_tags
+                  for node_id,products in configs:
+                      save_report_snapshot(company_id,tags,products,timestamp=event["TriggerTimestamp"],trigger_tag=f"__TRIGGER_REGISTER_{event['TriggerRegister']}",trigger_register=event["TriggerRegister"],trigger_value=event["TriggerValue"],plc_id=event["PLC_ID"],trigger_edge=event["Edge"],start_timestamp=event["StartTimestamp"],end_timestamp=event["EndTimestamp"],duration_seconds=event["DurationSeconds"],start_complete=event["StartComplete"],trigger_event_id=event["EventID"],report_node_id=node_id)
+              def run(self):
+                  while self.running:
+                      try:
+                          conn=get_connection()
+                          try:
+                              rows=conn.execute("SELECT rowid,EventID,CompanyID,PLC_ID,TriggerRegister,TriggerValue,Edge,TriggerTimestamp,StartTimestamp,EndTimestamp,DurationSeconds,StartComplete,TagsJSON,StartTagsJSON FROM ProductionEvents WHERE rowid>? ORDER BY rowid ASC LIMIT 200",(self.last_event_id,)).fetchall()
+                          finally: conn.close()
+                          for row in rows:
+                              self.last_event_id=int(row["rowid"]); self._save_event(row)
+                      except Exception as exc:
+                          print("REPORT RUNTIME LOOP ERROR:",exc); time.sleep(1.0)
+                      time.sleep(POLL_SECONDS)
+              def stop(self): self.running=False
+
+          def start():
+              global _WORKER
+              with _START_LOCK:
+                  if _WORKER is not None and _WORKER.running: return _WORKER
+                  _WORKER=ReportRuntime(); threading.Thread(target=_WORKER.run,name="SCADA-Report-Runtime",daemon=True).start(); print("REPORT RUNTIME WORKER STARTED"); return _WORKER
+          ''').lstrip(), encoding='utf-8')
+
+          # ---------------- REPORT OUTPUT ----------------
+          (ROOT / 'flow_engine/nodes/report_output.py').write_text(textwrap.dedent(r'''
+          import jdatetime
+          from datetime import datetime
+          from services.report_service import get_report_data, ensure_report_tables
+          
+          try:
+              from flask import has_request_context, session
+          except Exception:
+              def has_request_context(): return False
+              session={}
+
+          class ReportOutput:
+              def __init__(self, config=None):
+                  self.config=config or {}; self.company_id=self.config.get("company_id"); self.date_picker=self.config.get("DatePicker","JalaliPicker"); self.products=self.config.get("products",[])
+              @staticmethod
+              def _plc_id(value):
+                  try: return int(value)
+                  except (TypeError,ValueError): return None
+              @staticmethod
+              def normalize_date(value,calendar):
+                  if not value: return None
+                  text=str(value).strip().replace("T"," ").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹","0123456789"))
+                  if calendar=="Jalali":
+                      text=text.replace("-","/")
+                      for fmt in ("%Y/%m/%d %H:%M:%S","%Y/%m/%d %H:%M"):
+                          try: return jdatetime.datetime.strptime(text,fmt).togregorian()
+                          except Exception: pass
+                      return None
+                  for fmt in ("%Y-%m-%d %H:%M:%S","%Y-%m-%d %H:%M"):
+                      try: return datetime.strptime(text,fmt)
+                      except Exception: pass
+                  return None
+              def execute(self,data=None):
+                  data=data or {}; request=data.get("ReportRequest",{}) or {}
+                  if not request:
+                      data["Report_Written"]=0
+                      return data
+                  company_id=request.get("CompanyID",self.company_id); self.company_id=company_id
+                  calendar=request.get("Calendar") or ("Jalali" if self.date_picker=="JalaliPicker" else "Gregorian")
+                  start=self.normalize_date(request.get("Start"),calendar); end=self.normalize_date(request.get("End"),calendar)
+                  plc_id=self._plc_id(request.get("PLC_ID",request.get("plc_id")))
+                  role=request.get("Role")
+                  if role is None and has_request_context(): role=session.get("role")
+                  ensure_report_tables()
+                  report=get_report_data(company_id,start,end,plc_id=plc_id,user_role=role) if company_id is not None and start is not None and end is not None and end>=start else {"columns":[],"rows":[],"totals":[],"grand_total":0.0}
+                  data["ReportData"]=report
+                  data["ChartData"]={"type":"bar","calendar":calendar,"date_picker":self.date_picker,"PLC_ID":plc_id,"report":report,"labels":[item.get("name",item.get("tag","")) for item in report.get("columns",[])],"datasets":[{"label":"مجموع گزارش","data":report.get("totals",[])}]}
+                  return data
+          ''').lstrip(), encoding='utf-8')
+
+          # ---------------- TRIGGER SIGNAL INTERCEPTOR ----------------
+          (ROOT / 'services/trigger_signal_interceptor.py').write_text(textwrap.dedent(r'''
+          import json
+          import math
+          import uuid
+          from datetime import datetime
+          from flask import request, jsonify
+          from database import get_connection, get_company_flow
+          from services.edge_ingest import ensure_edge_event_schema, ingest_items
+
+          PREFIX="__TRIGGER_REGISTER_"
+
+          def _ts(value):
+              text=str(value or datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")).strip().replace("T"," ")
+              try:
+                  dt=datetime.fromisoformat(text.replace("Z","+00:00"))
+                  if dt.tzinfo is not None:
+                      from zoneinfo import ZoneInfo
+                      dt=dt.astimezone(ZoneInfo("Asia/Tehran")).replace(tzinfo=None)
+                  return dt.strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
+              except Exception: return text
+
+          def _allowed_registers(company_id):
+              flow=get_company_flow(company_id)
+              if isinstance(flow,str):
+                  try: flow=json.loads(flow)
+                  except Exception: flow={}
+              nodes=(flow or {}).get("drawflow",{}).get("Home",{}).get("data",{}) or {}
+              result=set()
+              for node in nodes.values():
+                  if not isinstance(node,dict) or node.get("name")!="TagMapper": continue
+                  for item in (node.get("data",{}) or {}).get("mappings",[]) or []:
+                      if not isinstance(item,dict) or str(item.get("storage","TIME")).upper()!="TRIGGER": continue
+                      try: result.add(int(item.get("trigger_register")))
+                      except (TypeError,ValueError): pass
+              return result
+
+          def _store_trigger_items(items):
+              ensure_edge_event_schema(); acks=[]; errors=[]; conn=get_connection()
+              try:
+                  conn.execute("BEGIN IMMEDIATE")
+                  for item in items:
+                      event_id=str(item.get("EventID","")).strip(); tag=str(item.get("TagName","")).strip()
+                      try: register=int(tag[len(PREFIX):]) if tag.startswith(PREFIX) else None
+                      except Exception: register=None
+                      if not event_id or register is None or register not in _allowed_registers_for_item(item,conn):
+                          errors.append({"EventID":event_id,"Error":"Invalid Flow trigger signal"}); continue
+                      try:
+                          plc_id=int(item.get("PLC_ID")); value=float(item.get("Value")); timestamp=_ts(item.get("Timestamp"))
+                          if not math.isfinite(value): raise ValueError("Value must be finite")
+                      except Exception as exc:
+                          errors.append({"EventID":event_id,"Error":str(exc)}); continue
+                      existing=conn.execute("SELECT ID FROM PLC_Data WHERE EventID=? LIMIT 1",(event_id,)).fetchone()
+                      if existing is not None: acks.append(event_id); continue
+                      plc=conn.execute("SELECT CompanyID FROM PLCs WHERE PLC_ID=?",(plc_id,)).fetchone()
+                      if plc is None or register not in _allowed_registers_for_company(int(plc["CompanyID"])):
+                          errors.append({"EventID":event_id,"Error":"PLC/Flow trigger mismatch"}); continue
+                      conn.execute("INSERT INTO PLC_Data(CompanyID,PLC_ID,TagName,Value,StorageType,Timestamp,EventID) VALUES(?,?,?,?,?,?,?)",(int(plc["CompanyID"]),plc_id,tag,value,"TRIGGER_SIGNAL",timestamp,event_id))
+                      conn.execute("INSERT OR IGNORE INTO TagHistory(CompanyID,PLC_ID,TagName,Value,Timestamp,EventID) VALUES(?,?,?,?,?,?)",(int(plc["CompanyID"]),plc_id,tag,value,timestamp,event_id))
+                      acks.append(event_id)
+                  conn.commit()
+              except Exception:
+                  conn.rollback(); raise
+              finally: conn.close()
+              return acks,errors
+
+          def _allowed_registers_for_company(company_id): return _allowed_registers(company_id)
+          def _allowed_registers_for_item(item,conn):
+              try:
+                  plc_id=int(item.get("PLC_ID")); row=conn.execute("SELECT CompanyID FROM PLCs WHERE PLC_ID=?",(plc_id,)).fetchone(); return int(item.get("TagName")[len(PREFIX):]) if row else None in _allowed_registers(int(row["CompanyID"]))
+              except Exception: return False
+
+          def install_trigger_signal_interceptor(app):
+              if getattr(app,"_trigger_signal_interceptor_installed",False): return
+              @app.before_request
+              def _trigger_signal_intercept():
+                  if request.path!="/api/store_forward" or request.method!="POST": return None
+                  payload=request.get_json(silent=True) or {}; items=payload.get("items",[]) or []
+                  trigger=[x for x in items if isinstance(x,dict) and str(x.get("TagName","")).startswith(PREFIX)]
+                  if not trigger: return None
+                  normal=[x for x in items if x not in trigger]
+                  normal_result=ingest_items(normal) if normal else {"acks":[],"errors":[]}
+                  acks,errors=_store_trigger_items(trigger)
+                  return jsonify({"status":"ok","acks":normal_result.get("acks",[])+acks,"errors":normal_result.get("errors",[])+errors})
+              app._trigger_signal_interceptor_installed=True
+          ''').lstrip(), encoding='utf-8')
+
+          # fix a small helper typo by replacing the generated function with a clearer version
+          replace_once('services/trigger_signal_interceptor.py',
+                       'def _allowed_registers_for_item(item,conn):\n              try:\n                  plc_id=int(item.get("PLC_ID")); row=conn.execute("SELECT CompanyID FROM PLCs WHERE PLC_ID=?",(plc_id,)).fetchone(); return int(item.get("TagName")[len(PREFIX):]) if row else None in _allowed_registers(int(row["CompanyID"]))\n              except Exception: return False',
+                       'def _allowed_registers_for_item(item,conn):\n              try:\n                  plc_id=int(item.get("PLC_ID")); row=conn.execute("SELECT CompanyID FROM PLCs WHERE PLC_ID=?",(plc_id,)).fetchone()\n                  if row is None: return False\n                  register=int(str(item.get("TagName"))[len(PREFIX):])\n                  return register in _allowed_registers(int(row["CompanyID"]))\n              except Exception: return False')
+
+          # ---------------- BOOTSTRAP HOOK ----------------
+          replace_once(
+              'services/runtime_bootstrap.py',
+              'def bootstrap(app):\n    install_save_flow_sync(app)\n    install_flow_json_guard(app)',
+              'def bootstrap(app):\n    from services.trigger_signal_interceptor import install_trigger_signal_interceptor\n    install_trigger_signal_interceptor(app)\n    install_save_flow_sync(app)\n    install_flow_json_guard(app)'
+          )
+
+          # ---------------- BASIC VALIDATION ----------------
+          import py_compile
+          for path in [
+              'flow_engine/node_registry.py','services/production_event_service.py','services/edge_trigger_service.py',
+              'services/report_plc.py','services/report_runtime.py','flow_engine/nodes/report_output.py',
+              'services/trigger_signal_interceptor.py','services/runtime_bootstrap.py']:
+              py_compile.compile(str(ROOT/path),doraise=True)
+
+          workflow=ROOT/'.github/workflows/apply-production-traceability.yml'
+          workflow.unlink(missing_ok=True)
+          
+          PY
+
+      - name: Commit feature changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add flow-driven production traceability and trigger lifecycle" || exit 0
+          git push origin feature/production-traceability
