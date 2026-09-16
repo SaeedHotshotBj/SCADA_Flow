@@ -58,20 +58,37 @@ class ReportOutput:
         return None
 
     def _event_products(self, data):
-        products = [item for item in self.products if isinstance(item, dict)]
+        products = []
+        seen = set()
+
+        def append_product(item):
+            if not isinstance(item, dict):
+                return
+            tag = str(item.get("tag", item.get("name", ""))).strip()
+            name = str(item.get("name", tag)).strip() or tag
+            if not tag:
+                return
+            plc_id = self._plc_id(item.get("plc_id", item.get("PLC_ID")))
+            key = (tag.lower(), plc_id)
+            if key in seen:
+                return
+            seen.add(key)
+            products.append(item)
+
+        for item in self.products:
+            append_product(item)
+
         for item in data.get("ReportCalculations", []) or []:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name", item.get("tag", ""))).strip()
-            if not name:
-                continue
-            products.append({
-                "name": name,
-                "tag": str(item.get("tag", name)).strip() or name,
+            append_product({
+                "name": str(item.get("name", item.get("tag", ""))).strip(),
+                "tag": str(item.get("tag", item.get("name", ""))).strip(),
                 "unit": str(item.get("unit", "")).strip(),
                 "allowed_roles": item.get("allowed_roles", ""),
                 "source": "management_calculation",
             })
+
         return products
 
     def _execute_production_event(self, data, event):
