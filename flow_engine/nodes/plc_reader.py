@@ -77,7 +77,7 @@ class PLCReader:
             trigger_registers = set()
 
             for node in nodes.values():
-                if node.get("name") != "TagMapper":
+                if not isinstance(node, dict) or node.get("name") != "TagMapper":
                     continue
                 node_data = node.get("data", {}) or {}
                 mapper_config = node_data.get("config", node_data) or {}
@@ -88,11 +88,14 @@ class PLCReader:
                 for mapping in node_mappings:
                     if not isinstance(mapping, dict):
                         continue
-                    mapping_plc_id = mapping.get("plc_id", mapping.get("PLC_ID"))
-                    try:
-                        mapping_plc_id = int(mapping_plc_id)
-                    except (TypeError, ValueError):
-                        continue
+                    explicit_plc_id = mapping.get("plc_id", mapping.get("PLC_ID"))
+                    if explicit_plc_id in (None, ""):
+                        mapping_plc_id = plc_id
+                    else:
+                        try:
+                            mapping_plc_id = int(explicit_plc_id)
+                        except (TypeError, ValueError):
+                            continue
                     if mapping_plc_id != plc_id:
                         continue
 
