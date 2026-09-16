@@ -14,20 +14,24 @@ from services.production_event_service import (
     ensure_production_event_schema,
     process_trigger_signal,
 )
-from services.report_service import save_report_snapshot
 
 SIGNAL_PREFIX = "__TRIGGER_REGISTER_"
 
 
-def _nodes(company_id):
-    flow = get_company_flow(company_id)
-    if not flow:
+def _flow(company_id):
+    raw = get_company_flow(company_id)
+    if not raw:
         return {}
-    if isinstance(flow, str):
+    if isinstance(raw, str):
         try:
-            flow = json.loads(flow)
+            raw = json.loads(raw)
         except Exception:
             return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _nodes(company_id):
+    flow = _flow(company_id)
     return flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
 
 
@@ -83,9 +87,12 @@ def _all_tag_definitions(nodes, plc_id):
 def _latest_snapshot(conn, company_id, plc_id, definitions, at_id):
     snapshot = {}
     names = []
+    seen = set()
     for item in definitions or []:
         name = str(item.get("name", "")).strip()
-        if name and name.lower() not in {x.lower() for x in names}:
+        key = name.lower()
+        if name and key not in seen:
+            seen.add(key)
             names.append(name)
 
     for name in names:
@@ -106,71 +113,27 @@ def _latest_snapshot(conn, company_id, plc_id, definitions, at_id):
     return snapshot
 
 
-def _report_configs(nodes):
-    configs = []
-    for node_id, node in nodes.items():
-        if not isinstance(node, dict) or node.get("name") != "ReportOutput":
-            continue
-        inputs = node.get("inputs", {}) or {}
-        connected = any(
-            isinstance(item, dict) and bool(item.get("connections", []))
-            for item in inputs.values()
-        )
-        if not connected:
-            continue
-        products = _node_config(node).get("products", [])
-        clean = [
-            item for item in products
-            if isinstance(item, dict) and str(item.get("tag", "")).strip()
-        ]
-        if clean:
-            configs.append((str(node_id), clean))
-    return configs
-
-
 def _write_event_reports(company_id, event):
-    nodes = _nodes(company_id)
-    configs = _report_configs(nodes)
-    if not configs:
+    """Send the production event through the actual company Drawflow.
+
+    No ReportOutput configuration is queried or evaluated here. The Flow
+    graph itself decides whether a ReportOutput exists and which nodes execute
+    before it.
+    """
+    flow = _flow(company_id)
+    if not flow:
         return
 
-    tags = dict(event.get("tags") or {})
-    tags["WorkTimeSeconds"] = event.get("duration_seconds", 0.0)
-    tags["DurationSeconds"] = event.get("duration_seconds", 0.0)
-    tags["WorkTimeMinutes"] = float(event.get("duration_seconds", 0.0) or 0.0) / 60.0
-    tags["WorkTimeHours"] = float(event.get("duration_seconds", 0.0) or 0.0) / 3600.0
-    if event.get("start_timestamp"):
-        tags["ProductionStartTimestamp"] = event["start_timestamp"]
-    if event.get("end_timestamp"):
-        tags["ProductionEndTimestamp"] = event["end_timestamp"]
-
-    for node_id, products in configs:
-        try:
-            save_report_snapshot(
-                company_id,
-                tags,
-                products,
-                timestamp=event.get("timestamp"),
-                trigger_tag=f"{SIGNAL_PREFIX}{event.get('register')}",
-                trigger_register=event.get("register"),
-                trigger_value=event.get("trigger_value"),
-                plc_id=event.get("PLC_ID"),
-                trigger_edge=event.get("edge"),
-                start_timestamp=event.get("start_timestamp"),
-                end_timestamp=event.get("end_timestamp"),
-                duration_seconds=event.get("duration_seconds", 0),
-                start_complete=event.get("start_complete", 1),
-                trigger_event_id=event.get("event_id"),
-                report_node_id=node_id,
-            )
-        except Exception as exc:
-            print(
-                "PRODUCTION REPORT ERROR:",
-                "CompanyID=", company_id,
-                "ReportNode=", node_id,
-                "EventID=", event.get("event_id"),
-                "Reason=", exc,
-            )
+    try:
+        from flow_runner import FlowRunner
+        FlowRunner(flow, company_id).execute_production_event(event)
+    except Exception as exc:
+        print(
+            "PRODUCTION FLOW REPORT ERROR:",
+            "CompanyID=", company_id,
+            "EventID=", event.get("event_id"),
+            "Reason=", exc,
+        )
 
 
 class EdgeTriggerService:
