@@ -1,6 +1,4 @@
-import ast
 import json
-import math
 import sqlite3
 from datetime import datetime
 
@@ -44,6 +42,11 @@ def _allowed(item, user_role):
 
 
 def _management_calculations(company_id, user_role=None):
+    """Read Flow metadata for report column discovery only.
+
+    This helper never evaluates an expression. Production values are calculated
+    exclusively by executable Flow nodes and arrive here through ReportOutput.
+    """
     result = []
     seen = set()
     for node in _flow_nodes(company_id).values():
@@ -73,71 +76,6 @@ def _management_calculations(company_id, user_role=None):
                 "source": "management_calculation",
             })
     return result
-
-
-def _all_management_calculations(company_id):
-    return _management_calculations(company_id, None)
-
-
-def _safe_eval(expression, variables):
-    tree = ast.parse(expression, mode="eval")
-    allowed_nodes = {
-        ast.Expression,
-        ast.Constant,
-        ast.Name,
-        ast.BinOp,
-        ast.UnaryOp,
-        ast.Add,
-        ast.Sub,
-        ast.Mult,
-        ast.Div,
-        ast.Mod,
-        ast.Pow,
-        ast.USub,
-        ast.UAdd,
-        ast.FloorDiv,
-    }
-    for node in ast.walk(tree):
-        if not isinstance(node, tuple(allowed_nodes)):
-            raise ValueError("Unsupported expression operation")
-        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
-            raise ValueError("Expression must contain numeric constants only")
-        if isinstance(node, ast.Name) and node.id not in variables:
-            raise ValueError(f"Unknown variable: {node.id}")
-    value = eval(compile(tree, "<flow-report-expression>", "eval"), {"__builtins__": {}}, variables)
-    value = float(value)
-    if not math.isfinite(value):
-        raise ValueError("Expression result is not finite")
-    return value
-
-
-def _formula_variables(tags, duration_seconds=0.0):
-    variables = {}
-    for name, value in (tags or {}).items():
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(number):
-            continue
-        key = str(name).strip()
-        if not key:
-            continue
-        variables[key] = number
-        alias = "".join(char if (char.isalnum() or char == "_") else "_" for char in key)
-        if alias and alias[0].isdigit():
-            alias = "_" + alias
-        if alias:
-            variables.setdefault(alias, number)
-    duration = float(duration_seconds or 0.0)
-    variables.update({
-        "DurationSeconds": duration,
-        "WorkTimeSeconds": duration,
-        "WorkTimeMinutes": duration / 60.0,
-        "WorkTimeHours": duration / 3600.0,
-        "ProductionTimeSeconds": duration,
-    })
-    return variables
 
 
 def ensure_report_tables():
@@ -283,7 +221,6 @@ def save_report_snapshot(
 
     ensure_report_tables()
     all_products = [item for item in (report_products or []) if isinstance(item, dict)]
-    calculation_definitions = _all_management_calculations(company_id)
 
     if trigger_event_id and report_node_id:
         conn = get_connection()
@@ -303,16 +240,15 @@ def save_report_snapshot(
     contract, product = _context(all_products, tags)
     lookup = {str(key).strip().lower(): (key, value) for key, value in tags.items()}
     values = []
-    used_names = set()
 
-    # Normal ReportOutput columns.
+    # ReportOutput has already executed every upstream Flow calculation.
+    # Persist only the values explicitly selected by this ReportOutput node.
     for item in all_products:
         tag = str(item.get("tag", "")).strip()
         role = str(item.get("context_role", item.get("context", ""))).strip().lower()
-        source = item.get("source")
-        item_plc = _plc_id(item.get("plc_id", item.get("PLC_ID", plc_id)))
-        if role or source == "management_calculation" or not tag:
+        if not tag or role:
             continue
+        item_plc = _plc_id(item.get("plc_id", item.get("PLC_ID", plc_id)))
         if item_plc is not None and plc_id is not None and item_plc != plc_id:
             continue
         found = lookup.get(tag.lower())
@@ -320,38 +256,8 @@ def save_report_snapshot(
             continue
         try:
             values.append((str(item.get("name", tag)).strip() or tag, float(found[1])))
-            used_names.add(tag.lower())
         except (TypeError, ValueError):
             pass
-
-    # Flow-designed ManagementPanel calculations become persisted report columns.
-    variables = _formula_variables(tags, duration)
-    for calculation in calculation_definitions:
-        try:
-            result = _safe_eval(calculation["expression"], variables)
-            values.append((calculation["name"], result))
-            variables[calculation["name"]] = result
-            alias = "".join(char if (char.isalnum() or char == "_") else "_" for char in calculation["name"])
-            if alias:
-                variables[alias] = result
-        except Exception as exc:
-            print(
-                "REPORT CALCULATION ERROR:",
-                calculation["name"],
-                calculation["expression"],
-                exc,
-            )
-
-    # Persist common lifecycle values as report values too, so they are
-    # available to older report layouts even when not explicitly configured.
-    lifecycle_values = {
-        "WorkTimeSeconds": duration,
-        "WorkTimeMinutes": duration / 60.0,
-        "WorkTimeHours": duration / 3600.0,
-    }
-    for name, value in lifecycle_values.items():
-        if name.lower() not in {key.lower() for key, _ in values}:
-            values.append((name, value))
 
     if not values:
         return None
