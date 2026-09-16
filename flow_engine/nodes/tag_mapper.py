@@ -34,10 +34,18 @@ class TagMapper:
             if not isinstance(item, dict):
                 continue
 
-            mapping_plc_id = self._to_int(item.get("plc_id", item.get("PLC_ID")))
+            explicit_plc_id = item.get("plc_id", item.get("PLC_ID"))
+            mapping_plc_id = self._to_int(explicit_plc_id)
+
+            # A mapping without an explicit PLC_ID belongs to the PLC that
+            # reaches this TagMapper through the current runtime branch.
+            # This is the same inference policy used by edge ingestion and
+            # PLCReader's Flow-derived mapping lookup.
             if runtime_plc_id is not None:
-                if mapping_plc_id != runtime_plc_id:
+                if explicit_plc_id not in (None, "") and mapping_plc_id != runtime_plc_id:
                     continue
+                if mapping_plc_id is None:
+                    mapping_plc_id = runtime_plc_id
             elif mapping_plc_id is not None:
                 continue
 
@@ -82,9 +90,7 @@ class TagMapper:
         data["PLC_Tags"] = plc_tags
         data["TagDefinitions"] = active_definitions
 
-        print()
-        print("TAG MAPPER: PLC_ID=", runtime_plc_id)
-        print(tags)
-        print()
-
         return data
+
+
+__all__ = ["TagMapper"]
