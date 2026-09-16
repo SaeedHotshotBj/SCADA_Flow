@@ -396,6 +396,11 @@ def bootstrap(app):
         ensure_edge_event_schema()
     except Exception as exc:
         print("EDGE EVENT SCHEMA BOOTSTRAP ERROR:", exc)
+    try:
+        from services.edge_ingest_policy import install as install_edge_ingest_policy
+        install_edge_ingest_policy()
+    except Exception as exc:
+        print("EDGE INGEST POLICY BOOTSTRAP ERROR:", exc)
     sync_all_saved_flows()
     load_master_logs()
     start_edge_timeout_worker()
