@@ -1,25 +1,17 @@
 # =====================================================
 # SCADA_FLOW HISTORIAN SERVICE
-# PLC-aware time + trigger + report storage.
+# Flow-defined TIME/TRIGGER historian storage only.
 # =====================================================
 
 import time
-from datetime import datetime
 
-from database import get_connection
 from services.plc_identity import ensure_plc_identity_schema, insert_plc_data, get_latest_tag_values
-from services.report_service import save_report_snapshot
 
 ZERO_DEBOUNCE_SECONDS = 2.0
 
 
 class HistorianService:
-
     def __init__(self):
-        # PLC identity schema migration is performed once during application
-        # bootstrap. Do not run a write-heavy schema migration every time a
-        # FlowRunner creates a SQLWriter node; doing so can contend with the
-        # historian and edge-ingest writers and lock SQLite.
         self.time_memory = {}
         self.trigger_memory = {}
         self.zero_memory = {}
@@ -43,28 +35,29 @@ class HistorianService:
         if trigger_register is None:
             return False
 
-        if str(trigger_register) in registers:
-            current = registers[str(trigger_register)]
-        elif trigger_register in registers:
-            current = registers[trigger_register]
-        else:
+        current = registers.get(str(trigger_register))
+        if current is None:
+            current = registers.get(trigger_register)
+        if current is None:
             return False
 
-        name = str(definition.get("name", "")).strip().lower()
-        memory_key = (int(company_id), int(plc_id), "TRIGGER", name)
-        previous = self.trigger_memory.get(memory_key)
-        self.trigger_memory[memory_key] = current
+        key = (int(company_id), int(plc_id), str(trigger_register))
+        previous = self.trigger_memory.get(key)
+        self.trigger_memory[key] = current
 
         try:
-            target = float(trigger_value)
             current_number = float(current)
+            target = float(trigger_value)
             previous_number = None if previous is None else float(previous)
+            edge = str(definition.get("trigger_edge", "rise")).strip().lower()
+            if edge == "fall":
+                return previous_number == target and current_number != target
+            return previous_number != target and current_number == target
         except (TypeError, ValueError):
-            target = trigger_value
-            current_number = current
-            previous_number = previous
-
-        return previous_number == 0 and current_number == target
+            edge = str(definition.get("trigger_edge", "rise")).strip().lower()
+            if edge == "fall":
+                return previous == trigger_value and current != trigger_value
+            return previous != trigger_value and current == trigger_value
 
     def _value_changed(self, company_id, plc_id, name, value):
         try:
@@ -81,7 +74,8 @@ class HistorianService:
             print("HISTORIAN CHANGE CHECK ERROR:", name, exc)
             return True
 
-    def _is_zero(self, value):
+    @staticmethod
+    def _is_zero(value):
         try:
             return float(value) == 0.0
         except (TypeError, ValueError):
@@ -111,67 +105,42 @@ class HistorianService:
         return True
 
     def process(self, company_id, plc_id, tags, definitions, registers, report_tags=None):
+        ensure_plc_identity_schema()
         written = 0
-        report_keys = set(str(tag).strip().lower() for tag in (report_tags or []))
+        report_keys = {str(tag).strip().lower() for tag in (report_tags or [])}
 
-        for definition in definitions:
-            name = definition.get("name")
+        for definition in definitions or []:
+            if not isinstance(definition, dict):
+                continue
+            name = str(definition.get("name", "")).strip()
             if not name or name not in tags:
                 continue
-            if str(name).strip().lower() in report_keys:
+            if name.lower() in report_keys:
                 continue
+
             value = tags[name]
             if value is None:
                 continue
-            mode = str(definition.get("storage", "TIME")).upper()
-            save = (
-                self.check_time(company_id, plc_id, definition)
-                if mode == "TIME"
-                else self.check_trigger(company_id, plc_id, definition, registers)
-                if mode == "TRIGGER"
-                else False
-            )
-            if save and self._insert_changed(company_id, plc_id, name, value, mode):
+
+            mode = str(definition.get("storage", "TIME")).strip().upper()
+            if mode == "TIME":
+                save = self.check_time(company_id, plc_id, definition)
+            elif mode == "TRIGGER":
+                save = self.check_trigger(company_id, plc_id, definition, registers)
+            else:
+                save = False
+
+            if save and self._insert_changed(
+                company_id,
+                plc_id,
+                name,
+                value,
+                mode,
+                timestamp=None,
+            ):
                 written += 1
-        return written
 
-    def process_report_group(self, company_id, plc_id, tags, definitions, registers, report_products):
-        if not report_products:
-            return 0
-        report_tags = []
-        seen = set()
-        for product in report_products:
-            if not isinstance(product, dict):
-                continue
-            tag = str(product.get("tag", "")).strip()
-            if tag and tag.lower() not in seen:
-                seen.add(tag.lower())
-                report_tags.append(tag)
-        if not report_tags:
-            return 0
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        tag_lookup = {str(name).strip().lower(): (name, value) for name, value in tags.items()}
-        snapshot_tags = {}
-        for tag in report_tags:
-            item = tag_lookup.get(tag.lower())
-            if item and item[1] is not None:
-                snapshot_tags[item[0]] = item[1]
-        if not snapshot_tags:
-            return 0
-        snapshot_id = save_report_snapshot(company_id, snapshot_tags, report_products, timestamp=timestamp, plc_id=plc_id)
-        if snapshot_id is None:
-            return 0
-        written = 0
-        for tag in report_tags:
-            item = tag_lookup.get(tag.lower())
-            if item and item[1] is not None:
-                if self._insert_changed(company_id, plc_id, item[0], item[1], "REPORT_TRIGGER", timestamp):
-                    written += 1
         return written
 
 
-try:
-    from services.report_runtime import start as _start_report_runtime
-    _start_report_runtime()
-except Exception as _report_runtime_exc:
-    print("REPORT RUNTIME START ERROR:", _report_runtime_exc)
+__all__ = ["HistorianService"]
