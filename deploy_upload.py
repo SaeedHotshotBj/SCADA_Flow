@@ -1,9 +1,9 @@
 import os
 import paramiko
 
-SERVER_IP = os.environ.get("SCADA_VPS_HOST", "")
-USERNAME = os.environ.get("SCADA_VPS_USER", "root")
-PASSWORD = os.environ.get("SCADA_VPS_PASSWORD", "")
+SERVER_IP = "77.104.95.230"
+USERNAME = "root"
+PASSWORD = "I4Ql50K7KKIkZnhG"
 REMOTE_PATH = "/var/www/scada"
 LOCAL_PATH = os.path.dirname(os.path.abspath(__file__))
 
