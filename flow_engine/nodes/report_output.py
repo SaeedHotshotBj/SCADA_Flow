@@ -88,7 +88,10 @@ class ReportOutput:
             tags,
             products,
             timestamp=event.get("timestamp"),
-            trigger_tag=event.get("trigger_tag"),
+            trigger_tag=event.get("trigger_tag") or (
+                f"__TRIGGER_REGISTER_{event.get('register')}"
+                if event.get("register") is not None else None
+            ),
             trigger_register=event.get("register"),
             trigger_value=event.get("trigger_value"),
             plc_id=plc_id,
@@ -109,9 +112,6 @@ class ReportOutput:
 
         production_event = data.get("ProductionEvent")
         if isinstance(production_event, dict):
-            # FlowRunner injects this identifier before entering the output
-            # node so the same event can feed multiple ReportOutput nodes
-            # without cross-node deduplication.
             return self._execute_production_event(data, production_event)
 
         request = data.get("ReportRequest", {}) or {}
