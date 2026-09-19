@@ -197,6 +197,22 @@ def test_trigger_edge_configuration():
     assert trigger_definitions(definitions, 119)[0][1] == "fall"
 
 
+def test_converging_calculation_outputs_are_preserved():
+    merged = FlowRunner._merge_production_payloads([
+        {
+            "Tags": {"Voltage": 400, "Hour": 10},
+            "ReportCalculations": [{"name": "Energy", "tag": "Energy", "unit": "kWh"}],
+        },
+        {
+            "Tags": {"Power": 50},
+            "ReportCalculations": [{"name": "Cost", "tag": "Cost", "unit": "USD"}],
+        },
+    ])
+
+    assert merged["Tags"] == {"Voltage": 400, "Hour": 10, "Power": 50}
+    assert [item["tag"] for item in merged["ReportCalculations"]] == ["Energy", "Cost"]
+
+
 def test_shared_trigger_register_stores_all_tags():
     import services.historian_service as historian_module
 
@@ -253,6 +269,7 @@ def run():
         test_tag_mapper_plc_inference,
         test_shared_dag_executes_once_and_reaches_two_reports,
         test_disconnected_report_is_not_executed,
+        test_converging_calculation_outputs_are_preserved,
         test_shared_trigger_register_stores_all_tags,
         test_trigger_edge_configuration,
         test_report_persistence_contains_no_calculation_engine,
