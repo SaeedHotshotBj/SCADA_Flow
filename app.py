@@ -36,6 +36,7 @@ from flow_engine.node_registry import NODE_REGISTRY
 from socket_manager import init_socketio
 
 from services.dashboard_service import get_dashboard_widgets
+from services.edge_ingest import ingest_items
 from services.runtime_bootstrap import bootstrap as bootstrap_services
 
 from database import (
@@ -1407,6 +1408,64 @@ def dashboard():
         "dashboard.html",
         widgets=widgets
     )
+
+
+# =====================================================
+# EDGE STORE & FORWARD RECEIVER
+# =====================================================
+
+@app.route("/api/store_forward", methods=["POST"])
+def receive_store_forward():
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items")
+
+    if not isinstance(items, list):
+        return jsonify({
+            "status": "error",
+            "message": "items must be a list",
+        }), 400
+
+    try:
+        result = ingest_items(items)
+    except Exception as exc:
+        print("STORE & FORWARD INGEST ERROR:", exc)
+        return jsonify({
+            "status": "error",
+            "message": str(exc),
+        }), 500
+
+    acks = result.get("acks", []) if isinstance(result, dict) else []
+    errors = result.get("errors", []) if isinstance(result, dict) else []
+    ack_set = {str(event_id) for event_id in acks}
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        event_id = str(item.get("EventID", "")).strip()
+        if not event_id or event_id not in ack_set:
+            continue
+        try:
+            plc_id = int(item.get("PLC_ID"))
+        except (TypeError, ValueError):
+            plc_id = item.get("PLC_ID")
+        socketio.emit(
+            "tag_update",
+            {
+                "Online": True,
+                "CompanyID": None,
+                "PLC_ID": plc_id,
+                "Tag": str(item.get("TagName", "")).strip(),
+                "Value": item.get("Value"),
+                "Timestamp": item.get("Timestamp"),
+            }
+        )
+
+    return jsonify({
+        "status": "ok",
+        "acks": acks,
+        "errors": errors,
+        "inserted": result.get("inserted", 0) if isinstance(result, dict) else 0,
+    }), 200
 
 
 # =====================================================
