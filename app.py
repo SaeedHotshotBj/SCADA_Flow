@@ -1438,6 +1438,29 @@ def receive_store_forward():
     errors = result.get("errors", []) if isinstance(result, dict) else []
     ack_set = {str(event_id) for event_id in acks}
     company_cache = {}
+    plc_ids = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            plc_ids.add(int(item.get("PLC_ID")))
+        except (TypeError, ValueError):
+            continue
+
+    if plc_ids:
+        conn = get_connection()
+        try:
+            placeholders = ",".join("?" for _ in plc_ids)
+            rows = conn.execute(
+                f"SELECT PLC_ID, CompanyID FROM PLCs WHERE PLC_ID IN ({placeholders})",
+                sorted(plc_ids),
+            ).fetchall()
+            company_cache = {
+                int(row["PLC_ID"]): row["CompanyID"]
+                for row in rows
+            }
+        finally:
+            conn.close()
 
     for item in items:
         if not isinstance(item, dict):
@@ -1449,13 +1472,6 @@ def receive_store_forward():
             plc_id = int(item.get("PLC_ID"))
         except (TypeError, ValueError):
             plc_id = item.get("PLC_ID")
-        if plc_id not in company_cache:
-            row = get_connection().execute(
-                "SELECT CompanyID FROM PLCs WHERE PLC_ID=? LIMIT 1",
-                (plc_id,),
-            ).fetchone()
-            company_cache[plc_id] = row["CompanyID"] if row else None
-
         socketio.emit(
             "tag_update",
             {
