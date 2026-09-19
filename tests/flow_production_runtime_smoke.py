@@ -197,6 +197,46 @@ def test_trigger_edge_configuration():
     assert trigger_definitions(definitions, 119)[0][1] == "fall"
 
 
+def test_shared_trigger_register_stores_all_tags():
+    import services.historian_service as historian_module
+
+    saved = []
+    original_schema = historian_module.ensure_plc_identity_schema
+
+    historian_module.ensure_plc_identity_schema = lambda: None
+    try:
+        historian = historian_module.HistorianService()
+        historian.trigger_memory[(7, 1, "118")] = 0
+
+        def fake_insert(company_id, plc_id, name, value, storage_type, timestamp=None):
+            saved.append((name, value, storage_type))
+            return True
+
+        historian._insert_changed = fake_insert
+        definitions = [
+            {"name": "B1", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1},
+            {"name": "B2", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1},
+            {"name": "ContractCode", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1},
+        ]
+
+        written = historian.process(
+            7,
+            1,
+            {"B1": 10, "B2": 20, "ContractCode": 30},
+            definitions,
+            {"118": 1},
+        )
+
+        assert written == 3, saved
+        assert saved == [
+            ("B1", 10, "TRIGGER"),
+            ("B2", 20, "TRIGGER"),
+            ("ContractCode", 30, "TRIGGER"),
+        ], saved
+    finally:
+        historian_module.ensure_plc_identity_schema = original_schema
+
+
 def test_report_persistence_contains_no_calculation_engine():
     report_plc = Path("services/report_plc.py").read_text(encoding="utf-8")
     snapshot_runtime = Path("services/report_snapshot_runtime.py").read_text(encoding="utf-8")
@@ -213,6 +253,7 @@ def run():
         test_tag_mapper_plc_inference,
         test_shared_dag_executes_once_and_reaches_two_reports,
         test_disconnected_report_is_not_executed,
+        test_shared_trigger_register_stores_all_tags,
         test_trigger_edge_configuration,
         test_report_persistence_contains_no_calculation_engine,
     ]
