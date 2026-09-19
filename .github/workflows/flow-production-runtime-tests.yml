@@ -27,4 +27,4 @@ jobs:
         run: python -m py_compile tests/flow_production_runtime_smoke.py
 
       - name: Run production Flow runtime simulation
-        run: python tests/flow_production_runtime_smoke.py
+        run: PYTHONPATH=. python tests/flow_production_runtime_smoke.py
