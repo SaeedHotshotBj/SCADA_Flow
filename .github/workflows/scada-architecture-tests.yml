@@ -142,7 +142,7 @@ jobs:
               }),
               "6": node("ReportOutput", {
                   "products": [{"name": "Energy", "tag": "Energy", "plc_id": 1}]
-              }, {"output_1": {"connections": [{"node": "3"}]}}),
+              }),
           }}}}
 
           runner = FlowRunner(flow, 7)
