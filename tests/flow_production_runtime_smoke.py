@@ -262,6 +262,8 @@ def test_report_persistence_contains_no_calculation_engine():
     assert "def safe_flow_eval" not in snapshot_runtime
     assert "eval(" not in snapshot_runtime
 
+    assert "[(report_id, name, value) for name, value in values]" in report_plc
+
 
 def run():
     tests = [
