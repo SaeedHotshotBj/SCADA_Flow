@@ -2,6 +2,8 @@ name: Flow production runtime tests
 
 on:
   pull_request:
+  push:
+    branches: ["fix/flow-production-runtime"]
 
 permissions:
   contents: read
