@@ -1,6 +1,4 @@
-import ast
 import json
-import math
 import sqlite3
 from datetime import datetime
 
@@ -43,10 +41,44 @@ def _allowed(item, user_role):
     return str(user_role or "").strip().lower() in configured
 
 
-def _management_calculations(company_id, user_role=None):
+def _reverse_connections(nodes):
+    reverse = {str(node_id): set() for node_id in nodes if isinstance(nodes.get(node_id), dict)}
+    for source_id, node in nodes.items():
+        if not isinstance(node, dict):
+            continue
+        for output in (node.get("outputs", {}) or {}).values():
+            if not isinstance(output, dict):
+                continue
+            for connection in output.get("connections", []) or []:
+                if not isinstance(connection, dict):
+                    continue
+                target = str(connection.get("node", ""))
+                if target in reverse:
+                    reverse[target].add(str(source_id))
+    return reverse
+
+
+def _ancestor_nodes(reverse, node_id):
+    result = set()
+    stack = [str(node_id)]
+    while stack:
+        current = stack.pop()
+        for parent in reverse.get(current, set()):
+            if parent in result:
+                continue
+            result.add(parent)
+            stack.append(parent)
+    return result
+
+
+def _management_calculations(company_id, user_role=None, node_ids=None):
+    """Read connected ManagementPanel metadata for report column discovery only."""
     result = []
     seen = set()
-    for node in _flow_nodes(company_id).values():
+    allowed_nodes = None if node_ids is None else {str(item) for item in node_ids}
+    for node_id, node in _flow_nodes(company_id).items():
+        if allowed_nodes is not None and str(node_id) not in allowed_nodes:
+            continue
         if not isinstance(node, dict) or node.get("name") != "ManagementPanel":
             continue
         data = node.get("data", {}) or {}
@@ -73,71 +105,6 @@ def _management_calculations(company_id, user_role=None):
                 "source": "management_calculation",
             })
     return result
-
-
-def _all_management_calculations(company_id):
-    return _management_calculations(company_id, None)
-
-
-def _safe_eval(expression, variables):
-    tree = ast.parse(expression, mode="eval")
-    allowed_nodes = {
-        ast.Expression,
-        ast.Constant,
-        ast.Name,
-        ast.BinOp,
-        ast.UnaryOp,
-        ast.Add,
-        ast.Sub,
-        ast.Mult,
-        ast.Div,
-        ast.Mod,
-        ast.Pow,
-        ast.USub,
-        ast.UAdd,
-        ast.FloorDiv,
-    }
-    for node in ast.walk(tree):
-        if not isinstance(node, tuple(allowed_nodes)):
-            raise ValueError("Unsupported expression operation")
-        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
-            raise ValueError("Expression must contain numeric constants only")
-        if isinstance(node, ast.Name) and node.id not in variables:
-            raise ValueError(f"Unknown variable: {node.id}")
-    value = eval(compile(tree, "<flow-report-expression>", "eval"), {"__builtins__": {}}, variables)
-    value = float(value)
-    if not math.isfinite(value):
-        raise ValueError("Expression result is not finite")
-    return value
-
-
-def _formula_variables(tags, duration_seconds=0.0):
-    variables = {}
-    for name, value in (tags or {}).items():
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(number):
-            continue
-        key = str(name).strip()
-        if not key:
-            continue
-        variables[key] = number
-        alias = "".join(char if (char.isalnum() or char == "_") else "_" for char in key)
-        if alias and alias[0].isdigit():
-            alias = "_" + alias
-        if alias:
-            variables.setdefault(alias, number)
-    duration = float(duration_seconds or 0.0)
-    variables.update({
-        "DurationSeconds": duration,
-        "WorkTimeSeconds": duration,
-        "WorkTimeMinutes": duration / 60.0,
-        "WorkTimeHours": duration / 3600.0,
-        "ProductionTimeSeconds": duration,
-    })
-    return variables
 
 
 def ensure_report_tables():
@@ -207,35 +174,46 @@ def get_report_products(company_id, user_role=None):
     products = []
     seen = set()
     try:
-        for node_id, node in _flow_nodes(company_id).items():
+        nodes = _flow_nodes(company_id)
+        reverse = _reverse_connections(nodes)
+        connected_management_nodes = set()
+
+        for node_id, node in nodes.items():
             if not isinstance(node, dict) or node.get("name") != "ReportOutput":
                 continue
             data = node.get("data", {}) or {}
             config = data.get("config", data) or {}
             configured = config.get("products", []) if isinstance(config, dict) else []
-            if not isinstance(configured, list):
-                continue
-            for item in configured:
-                if not isinstance(item, dict):
-                    continue
-                tag = str(item.get("tag", "")).strip()
-                if not tag or not _allowed(item, user_role):
-                    continue
-                result = {
-                    "name": str(item.get("name", tag)).strip() or tag,
-                    "tag": tag,
-                    "plc_id": _plc_id(item.get("plc_id", item.get("PLC_ID"))),
-                    "unit": str(item.get("unit", "")).strip(),
-                    "context_role": str(item.get("context_role", item.get("context", ""))).strip().lower(),
-                    "allowed_roles": item.get("allowed_roles", ""),
-                    "report_node_id": str(node_id),
-                }
-                key = (tag.lower(), result["plc_id"], result["context_role"])
-                if key not in seen:
-                    seen.add(key)
-                    products.append(result)
+            if isinstance(configured, list):
+                for item in configured:
+                    if not isinstance(item, dict):
+                        continue
+                    tag = str(item.get("tag", "")).strip()
+                    if not tag or not _allowed(item, user_role):
+                        continue
+                    result = {
+                        "name": str(item.get("name", tag)).strip() or tag,
+                        "tag": tag,
+                        "plc_id": _plc_id(item.get("plc_id", item.get("PLC_ID"))),
+                        "unit": str(item.get("unit", "")).strip(),
+                        "context_role": str(item.get("context_role", item.get("context", ""))).strip().lower(),
+                        "allowed_roles": item.get("allowed_roles", ""),
+                        "report_node_id": str(node_id),
+                    }
+                    key = (tag.lower(), result["plc_id"], result["context_role"])
+                    if key not in seen:
+                        seen.add(key)
+                        products.append(result)
 
-        for calculation in _management_calculations(company_id, user_role):
+            for ancestor_id in _ancestor_nodes(reverse, node_id):
+                if nodes.get(ancestor_id, {}).get("name") == "ManagementPanel":
+                    connected_management_nodes.add(ancestor_id)
+
+        for calculation in _management_calculations(
+            company_id,
+            user_role,
+            node_ids=connected_management_nodes,
+        ):
             key = (calculation["name"].lower(), None, "")
             if key in seen:
                 continue
@@ -283,7 +261,6 @@ def save_report_snapshot(
 
     ensure_report_tables()
     all_products = [item for item in (report_products or []) if isinstance(item, dict)]
-    calculation_definitions = _all_management_calculations(company_id)
 
     if trigger_event_id and report_node_id:
         conn = get_connection()
@@ -303,55 +280,27 @@ def save_report_snapshot(
     contract, product = _context(all_products, tags)
     lookup = {str(key).strip().lower(): (key, value) for key, value in tags.items()}
     values = []
-    used_names = set()
+    seen_value_names = set()
 
-    # Normal ReportOutput columns.
     for item in all_products:
         tag = str(item.get("tag", "")).strip()
         role = str(item.get("context_role", item.get("context", ""))).strip().lower()
-        source = item.get("source")
-        item_plc = _plc_id(item.get("plc_id", item.get("PLC_ID", plc_id)))
-        if role or source == "management_calculation" or not tag:
+        if not tag or role:
             continue
+        item_plc = _plc_id(item.get("plc_id", item.get("PLC_ID", plc_id)))
         if item_plc is not None and plc_id is not None and item_plc != plc_id:
             continue
         found = lookup.get(tag.lower())
         if found is None or found[1] is None:
             continue
+        name = str(item.get("name", tag)).strip() or tag
+        if name.lower() in seen_value_names:
+            continue
         try:
-            values.append((str(item.get("name", tag)).strip() or tag, float(found[1])))
-            used_names.add(tag.lower())
+            values.append((name, float(found[1])))
+            seen_value_names.add(name.lower())
         except (TypeError, ValueError):
             pass
-
-    # Flow-designed ManagementPanel calculations become persisted report columns.
-    variables = _formula_variables(tags, duration)
-    for calculation in calculation_definitions:
-        try:
-            result = _safe_eval(calculation["expression"], variables)
-            values.append((calculation["name"], result))
-            variables[calculation["name"]] = result
-            alias = "".join(char if (char.isalnum() or char == "_") else "_" for char in calculation["name"])
-            if alias:
-                variables[alias] = result
-        except Exception as exc:
-            print(
-                "REPORT CALCULATION ERROR:",
-                calculation["name"],
-                calculation["expression"],
-                exc,
-            )
-
-    # Persist common lifecycle values as report values too, so they are
-    # available to older report layouts even when not explicitly configured.
-    lifecycle_values = {
-        "WorkTimeSeconds": duration,
-        "WorkTimeMinutes": duration / 60.0,
-        "WorkTimeHours": duration / 3600.0,
-    }
-    for name, value in lifecycle_values.items():
-        if name.lower() not in {key.lower() for key, _ in values}:
-            values.append((name, value))
 
     if not values:
         return None
@@ -388,7 +337,7 @@ def save_report_snapshot(
         report_id = cur.lastrowid
         conn.executemany(
             "INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",
-            [(name, value) for name, value in values],
+            [(report_id, name, value) for name, value in values],
         )
         conn.commit()
         return report_id

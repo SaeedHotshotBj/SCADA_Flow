@@ -1,13 +1,17 @@
 # =====================================================
 # SCADA_FLOW REPORT OUTPUT NODE
-# Flow-defined report query and field-level role filtering
+# Flow-defined report query and production-event persistence
 # =====================================================
 
 from datetime import datetime
 
 import jdatetime
 
-from services.report_service import get_report_data, ensure_report_tables
+from services.report_service import (
+    ensure_report_tables,
+    get_report_data,
+    save_report_snapshot,
+)
 
 try:
     from flask import has_request_context, session
@@ -53,8 +57,80 @@ class ReportOutput:
                 pass
         return None
 
+    def _event_products(self, data):
+        products = []
+        seen = set()
+
+        def append_product(item):
+            if not isinstance(item, dict):
+                return
+            tag = str(item.get("tag", item.get("name", ""))).strip()
+            name = str(item.get("name", tag)).strip() or tag
+            if not tag:
+                return
+            plc_id = self._plc_id(item.get("plc_id", item.get("PLC_ID")))
+            key = (tag.lower(), plc_id)
+            if key in seen:
+                return
+            seen.add(key)
+            products.append(item)
+
+        for item in self.products:
+            append_product(item)
+
+        for item in data.get("ReportCalculations", []) or []:
+            if not isinstance(item, dict):
+                continue
+            append_product({
+                "name": str(item.get("name", item.get("tag", ""))).strip(),
+                "tag": str(item.get("tag", item.get("name", ""))).strip(),
+                "unit": str(item.get("unit", "")).strip(),
+                "allowed_roles": item.get("allowed_roles", ""),
+                "source": "management_calculation",
+            })
+
+        return products
+
+    def _execute_production_event(self, data, event):
+        company_id = data.get("CompanyID", self.company_id)
+        tags = dict(data.get("Tags", {}) or {})
+        plc_id = self._plc_id(data.get("PLC_ID", event.get("PLC_ID")))
+        products = self._event_products(data)
+        if company_id is None or plc_id is None or not products:
+            data["Report_Written"] = 0
+            return data
+
+        report_id = save_report_snapshot(
+            company_id,
+            tags,
+            products,
+            timestamp=event.get("timestamp"),
+            trigger_tag=event.get("trigger_tag") or (
+                f"__TRIGGER_REGISTER_{event.get('register')}"
+                if event.get("register") is not None else None
+            ),
+            trigger_register=event.get("register"),
+            trigger_value=event.get("trigger_value"),
+            plc_id=plc_id,
+            trigger_edge=event.get("edge"),
+            start_timestamp=event.get("start_timestamp"),
+            end_timestamp=event.get("end_timestamp"),
+            duration_seconds=event.get("duration_seconds", 0),
+            start_complete=event.get("start_complete", 1),
+            trigger_event_id=event.get("event_id"),
+            report_node_id=str(data.get("_CurrentReportNodeID", self.config.get("node_id", ""))) or None,
+        )
+        data["ReportID"] = report_id
+        data["Report_Written"] = 1 if report_id is not None else 0
+        return data
+
     def execute(self, data=None):
         data = data or {}
+
+        production_event = data.get("ProductionEvent")
+        if isinstance(production_event, dict):
+            return self._execute_production_event(data, production_event)
+
         request = data.get("ReportRequest", {}) or {}
         if not request:
             data["Report_Written"] = 0

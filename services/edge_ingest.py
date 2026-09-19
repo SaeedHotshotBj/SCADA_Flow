@@ -227,6 +227,25 @@ def _flow_tag_storage(company_id):
     return allowed
 
 
+def _ordered_ingest_items(items):
+    """Persist ordinary samples before synthetic trigger-register samples.
+
+    Edge emits a trigger signal and its dependent TRIGGER tags in the same
+    batch. Production snapshots are bounded by the signal row ID, so the
+    dependent values must be inserted first to belong to that event snapshot.
+    The ordering is stable for all other records.
+    """
+    indexed = list(enumerate(items))
+    indexed.sort(
+        key=lambda pair: (
+            isinstance(pair[1], dict)
+            and str(pair[1].get("TagName", "")).strip().startswith("__TRIGGER_REGISTER_"),
+            pair[0],
+        )
+    )
+    return [item for _, item in indexed]
+
+
 def _insert_or_ack_existing(conn, event_id, company_id, plc_id, tag, value, timestamp, storage_type):
     try:
         conn.execute(
@@ -279,7 +298,7 @@ def ingest_items(items):
         conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("BEGIN IMMEDIATE")
 
-        for item in items:
+        for item in _ordered_ingest_items(items):
             if not isinstance(item, dict):
                 continue
 
@@ -425,4 +444,4 @@ def ingest_items(items):
         conn.close()
 
 
-__all__ = ["ensure_edge_event_schema", "ingest_items"]
+__all__ = ["ensure_edge_event_schema", "ingest_items", "_ordered_ingest_items"]

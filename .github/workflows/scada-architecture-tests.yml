@@ -45,7 +45,7 @@ jobs:
           print("RUNTIME KEYS:", sorted(runtime_registry.NODE_CLASSES.keys()))
           assert runtime_registry.NODE_REGISTRY is NODE_REGISTRY
           required = {
-              "PLCReader", "TagMapper", "ExpressionNode", "SQLWriter",
+              "PLCReader", "TagMapper", "ExpressionNode", "ManagementPanel", "SQLWriter",
               "DashboardOutput", "MachineCard", "AlarmNode", "EdgeTimeout",
               "Roles", "RolesEngaged", "Pulse", "TrendReader",
               "TrendDatabaseReader", "TrendOutput", "ReportOutput", "DateConverter",
@@ -53,6 +53,144 @@ jobs:
           missing = required.difference(runtime_registry.NODE_CLASSES)
           assert not missing, missing
           print("RUNTIME REGISTRY IMPORT OK")
+          PY
+
+      - name: Verify Flow calculation nodes
+        run: |
+          python - <<'PY'
+          from flow_engine.nodes.expression_node import ExpressionNode
+          from flow_engine.nodes.management_panel import ManagementPanel
+
+          payload = {"Tags": {"H": 30, "Voltage": 400}}
+          payload = ExpressionNode({"expressions": [{"name": "Hour", "expression": "40-H"}]}).execute(payload)
+          assert payload["Tags"]["Hour"] == 10
+
+          payload = ManagementPanel({
+              "calculations": [{"name": "Energy", "expression": "Voltage * 2"}]
+          }).execute(payload)
+          assert payload["Tags"]["Energy"] == 800
+
+          try:
+              ExpressionNode({"expressions": [{"name": "Bad", "expression": "__import__('os').system('x')"}]}).execute({"Tags": {}})
+          except Exception:
+              pass
+          print("FLOW CALCULATION NODES OK")
+          PY
+
+      - name: Verify TagMapper PLC identity inference
+        run: |
+          python - <<'PY'
+          from flow_engine.nodes.tag_mapper import TagMapper
+
+          node = TagMapper({
+              "mappings": [
+                  {"register": 100, "name": "Batch"},
+                  {"register": 101, "name": "Voltage", "plc_id": 2},
+              ]
+          })
+          payload = node.execute({
+              "CompanyID": 7,
+              "PLC_ID": 1,
+              "Registers": {"100": 55, "101": 400},
+          })
+          assert payload["Tags"] == {"Batch": 55.0}, payload
+          assert payload["TagDefinitions"][0]["plc_id"] == 1
+
+          payload = node.execute({
+              "CompanyID": 7,
+              "PLC_ID": 2,
+              "Registers": {"100": 66, "101": 415},
+          })
+          assert payload["Tags"] == {"Batch": 66.0, "Voltage": 415.0}, payload
+          print("TAG MAPPER PLC INFERENCE OK")
+          PY
+
+      - name: Verify production events traverse the connected Flow only
+        run: |
+          python - <<'PY'
+          from flow_runner import FlowRunner
+          import flow_engine.nodes.report_output as report_module
+
+          saved = []
+
+          def fake_save(company_id, tags, products, **kwargs):
+              saved.append({"company_id": company_id, "tags": dict(tags), "products": list(products), **kwargs})
+              return len(saved)
+
+          report_module.save_report_snapshot = fake_save
+
+          def node(name, config=None, outputs=None):
+              return {
+                  "name": name,
+                  "data": {"config": config or {}},
+                  "outputs": outputs or {},
+              }
+
+          flow = {"drawflow": {"Home": {"data": {
+              "1": node("ExpressionNode", {
+                  "expressions": [{"name": "Hour", "expression": "40-H"}]
+              }, {"output_1": {"connections": [{"node": "2"}]}}),
+              "2": node("SQLWriter", {}, {"output_1": {"connections": [{"node": "3"}]}}),
+              "3": node("ManagementPanel", {
+                  "calculations": [{"name": "Energy", "expression": "Voltage * Hour"}]
+              }, {"output_1": {"connections": [{"node": "4"}]}}),
+              "4": node("ReportOutput", {
+                  "products": [{"name": "Energy", "tag": "Energy", "plc_id": 1}]
+              }),
+              "5": node("ReportOutput", {
+                  "products": [{"name": "Energy", "tag": "Energy", "plc_id": 1}]
+              }),
+              "6": node("ReportOutput", {
+                  "products": [{"name": "Energy", "tag": "Energy", "plc_id": 1}]
+              }),
+          }}}}
+
+          runner = FlowRunner(flow, 7)
+          result = runner.execute_production_event({
+              "event_id": "evt-1",
+              "PLC_ID": 1,
+              "tags": {"H": 30, "Voltage": 400},
+              "duration_seconds": 120,
+              "timestamp": "2026-09-16 12:00:00",
+          })
+
+          assert result is not None
+          assert len(saved) == 1, saved
+          assert saved[0]["company_id"] == 7
+          assert saved[0]["tags"]["Hour"] == 10.0
+          assert saved[0]["tags"]["Energy"] == 4000.0
+          assert saved[0]["report_node_id"] == "4"
+          print("CONNECTED PRODUCTION FLOW OK")
+          PY
+
+      - name: Verify trigger edge definitions
+        run: |
+          python - <<'PY'
+          from services.production_event_service import trigger_definitions
+
+          definitions = [
+              {"name": "Start", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1, "trigger_edge": "rise"},
+              {"name": "Stop", "storage": "TRIGGER", "trigger_register": 119, "trigger_value": 0, "trigger_edge": "fall"},
+              {"name": "Ignored", "storage": "TIME", "trigger_register": 118, "trigger_value": 1},
+          ]
+          assert trigger_definitions(definitions, 118)[0][1] == "rise"
+          assert trigger_definitions(definitions, 119)[0][1] == "fall"
+          assert trigger_definitions(definitions, 120) == []
+          print("TRIGGER EDGE DEFINITION OK")
+          PY
+
+      - name: Verify report persistence has no calculation evaluator
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path("services/report_plc.py").read_text(encoding="utf-8")
+          assert "def _safe_eval" not in text
+          assert "_all_management_calculations" not in text
+          assert "eval(" not in text
+          text = Path("services/report_snapshot_runtime.py").read_text(encoding="utf-8")
+          assert "def safe_flow_eval" not in text
+          assert "eval(" not in text
+          print("REPORT PERSISTENCE IS FLOW-PAYLOAD ONLY")
           PY
 
       - name: Verify Pulse runtime validation
@@ -109,6 +247,19 @@ jobs:
         run: |
           ! grep -nE '(^|[^A-Za-z])threading|Thread\(' services/dashboard_service.py
           ! grep -n 'edge_timeout_service' services/dashboard_service.py
+
+      - name: Verify Edge ingestion routes are Flow-enforced
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path("app.py").read_text(encoding="utf-8")
+          assert '"/api/store_forward"' in text
+          assert "ingest_items(items)" in text
+          assert "ingest_items([item])" in text
+          assert "INSERT INTO PLC_Data" not in text.split('@app.route("/api/data"', 1)[1].split("# =====================================================", 1)[0]
+          print("EDGE INGESTION ROUTES ARE FLOW-ENFORCED")
+          PY
 
       - name: Verify PLC settings are Flow-defined
         run: |
