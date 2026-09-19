@@ -248,6 +248,19 @@ jobs:
           ! grep -nE '(^|[^A-Za-z])threading|Thread\(' services/dashboard_service.py
           ! grep -n 'edge_timeout_service' services/dashboard_service.py
 
+      - name: Verify Edge ingestion routes are Flow-enforced
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path("app.py").read_text(encoding="utf-8")
+          assert '"/api/store_forward"' in text
+          assert "ingest_items(items)" in text
+          assert "ingest_items([item])" in text
+          assert "INSERT INTO PLC_Data" not in text.split('@app.route("/api/data"', 1)[1].split("# =====================================================", 1)[0]
+          print("EDGE INGESTION ROUTES ARE FLOW-ENFORCED")
+          PY
+
       - name: Verify PLC settings are Flow-defined
         run: |
           python - <<'PY'
