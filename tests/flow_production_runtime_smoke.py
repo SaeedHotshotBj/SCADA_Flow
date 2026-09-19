@@ -6,6 +6,7 @@ from flow_engine.nodes.management_panel import ManagementPanel
 from flow_engine.nodes.tag_mapper import TagMapper
 from flow_runner import FlowRunner
 from services.production_event_service import trigger_definitions
+from services.edge_ingest import _ordered_ingest_items
 
 
 def node(name, config=None, outputs=None):
@@ -14,6 +15,20 @@ def node(name, config=None, outputs=None):
         "data": {"config": config or {}},
         "outputs": outputs or {},
     }
+
+
+def test_edge_batch_orders_trigger_signal_after_dependent_tags():
+    items = [
+        {"TagName": "__TRIGGER_REGISTER_118", "Value": 1},
+        {"TagName": "ContractCode", "Value": 123},
+        {"TagName": "ProductCode", "Value": 456},
+    ]
+    ordered = _ordered_ingest_items(items)
+    assert [item["TagName"] for item in ordered] == [
+        "ContractCode",
+        "ProductCode",
+        "__TRIGGER_REGISTER_118",
+    ]
 
 
 def test_calculation_context_and_security():
@@ -267,6 +282,7 @@ def test_report_persistence_contains_no_calculation_engine():
 
 def run():
     tests = [
+        test_edge_batch_orders_trigger_signal_after_dependent_tags,
         test_calculation_context_and_security,
         test_tag_mapper_plc_inference,
         test_shared_dag_executes_once_and_reaches_two_reports,
