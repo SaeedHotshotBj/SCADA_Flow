@@ -233,6 +233,7 @@ class FlowRunner:
         merged_tags = {}
         merged_event = None
         merged_branch_results = []
+        merged_report_calculations = []
 
         for payload in payloads:
             if not isinstance(payload, dict):
@@ -247,6 +248,10 @@ class FlowRunner:
                 if key == "_BranchResults":
                     if isinstance(value, list):
                         merged_branch_results.extend(copy.deepcopy(value))
+                    continue
+                if key == "ReportCalculations":
+                    if isinstance(value, list):
+                        merged_report_calculations.extend(copy.deepcopy(value))
                     continue
                 if key not in merged:
                     merged[key] = copy.deepcopy(value)
@@ -263,6 +268,8 @@ class FlowRunner:
             merged["ProductionEvent"] = merged_event
         if merged_branch_results:
             merged["_BranchResults"] = merged_branch_results
+        if merged_report_calculations:
+            merged["ReportCalculations"] = merged_report_calculations
         return merged
 
     def _production_report_targets(self):
