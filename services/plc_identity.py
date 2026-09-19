@@ -55,10 +55,10 @@ def ensure_plc_identity_schema():
                         config=config.get("config",config) or {}
                         if node.get("name")=="PLCReader" and config.get("plc_id") in (None,""):
                             config["plc_id"]=default_plc; changed=True
-                        if node.get("name")=="TagMapper":
-                            for mapping in config.get("mappings",[]) if isinstance(config.get("mappings",[]),list) else []:
-                                if isinstance(mapping,dict) and mapping.get("plc_id",mapping.get("PLC_ID")) in (None,""):
-                                    mapping["plc_id"]=default_plc; changed=True
+                        # TagMapper mappings may intentionally omit PLC_ID.
+                        # Runtime TagMapper/edge ingestion resolves that identity
+                        # from the PLC branch, so startup must not hard-code the
+                        # first company PLC into a blank mapping.
                     if changed:
                         conn.execute("UPDATE Flows SET FlowJson=?,LastModified=datetime('now','localtime') WHERE FlowID=?",(json.dumps(flow,ensure_ascii=False),row["FlowID"]))
 
