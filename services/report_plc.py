@@ -337,7 +337,7 @@ def save_report_snapshot(
         report_id = cur.lastrowid
         conn.executemany(
             "INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",
-            [(name, value) for name, value in values],
+            [(report_id, name, value) for name, value in values],
         )
         conn.commit()
         return report_id
