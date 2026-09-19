@@ -238,7 +238,8 @@ def _ordered_ingest_items(items):
     indexed = list(enumerate(items))
     indexed.sort(
         key=lambda pair: (
-            str((pair[1] or {}).get("TagName", "")).strip().startswith("__TRIGGER_REGISTER_"),
+            isinstance(pair[1], dict)
+            and str(pair[1].get("TagName", "")).strip().startswith("__TRIGGER_REGISTER_"),
             pair[0],
         )
     )
