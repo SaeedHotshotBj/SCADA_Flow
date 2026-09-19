@@ -29,6 +29,26 @@ class HistorianService:
             return True
         return False
 
+    @staticmethod
+    def _trigger_edge_matches(previous, current, trigger_value, trigger_edge):
+        if previous is None:
+            return False
+
+        try:
+            current_number = float(current)
+            target_number = float(trigger_value)
+            previous_number = float(previous)
+        except (TypeError, ValueError):
+            edge = str(trigger_edge or "rise").strip().lower()
+            if edge == "fall":
+                return previous == trigger_value and current != trigger_value
+            return previous != trigger_value and current == trigger_value
+
+        edge = str(trigger_edge or "rise").strip().lower()
+        if edge == "fall":
+            return previous_number == target_number and current_number != target_number
+        return previous_number != target_number and current_number == target_number
+
     def check_trigger(self, company_id, plc_id, definition, registers):
         trigger_register = definition.get("trigger_register")
         trigger_value = definition.get("trigger_value")
@@ -45,19 +65,12 @@ class HistorianService:
         previous = self.trigger_memory.get(key)
         self.trigger_memory[key] = current
 
-        try:
-            current_number = float(current)
-            target = float(trigger_value)
-            previous_number = None if previous is None else float(previous)
-            edge = str(definition.get("trigger_edge", "rise")).strip().lower()
-            if edge == "fall":
-                return previous_number == target and current_number != target
-            return previous_number != target and current_number == target
-        except (TypeError, ValueError):
-            edge = str(definition.get("trigger_edge", "rise")).strip().lower()
-            if edge == "fall":
-                return previous == trigger_value and current != trigger_value
-            return previous != trigger_value and current == trigger_value
+        return self._trigger_edge_matches(
+            previous,
+            current,
+            trigger_value,
+            definition.get("trigger_edge", "rise"),
+        )
 
     def _value_changed(self, company_id, plc_id, name, value):
         try:
@@ -108,6 +121,8 @@ class HistorianService:
         ensure_plc_identity_schema()
         written = 0
         report_keys = {str(tag).strip().lower() for tag in (report_tags or [])}
+        trigger_previous = {}
+        trigger_current = {}
 
         for definition in definitions or []:
             if not isinstance(definition, dict):
@@ -126,7 +141,24 @@ class HistorianService:
             if mode == "TIME":
                 save = self.check_time(company_id, plc_id, definition)
             elif mode == "TRIGGER":
-                save = self.check_trigger(company_id, plc_id, definition, registers)
+                trigger_register = definition.get("trigger_register")
+                current = registers.get(str(trigger_register))
+                if current is None and trigger_register is not None:
+                    current = registers.get(trigger_register)
+
+                if trigger_register is None or current is None:
+                    save = False
+                else:
+                    state_key = (int(company_id), int(plc_id), str(trigger_register))
+                    if state_key not in trigger_previous:
+                        trigger_previous[state_key] = self.trigger_memory.get(state_key)
+                        trigger_current[state_key] = current
+                    save = self._trigger_edge_matches(
+                        trigger_previous[state_key],
+                        current,
+                        definition.get("trigger_value"),
+                        definition.get("trigger_edge", "rise"),
+                    )
             else:
                 save = False
 
@@ -139,6 +171,9 @@ class HistorianService:
                 timestamp=None,
             ):
                 written += 1
+
+        self.trigger_memory.update(trigger_current)
+        return written
 
         return written
 
