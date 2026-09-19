@@ -68,7 +68,11 @@ def ensure_plc_identity_schema():
                     conn.execute("ALTER TABLE FlowTriggerState ADD COLUMN PLC_ID INTEGER")
                 conn.execute("""UPDATE FlowTriggerState SET PLC_ID=(SELECT MIN(p.PLC_ID) FROM PLCs p WHERE p.CompanyID=FlowTriggerState.CompanyID)
                                WHERE PLC_ID IS NULL AND 1=(SELECT COUNT(*) FROM PLCs p2 WHERE p2.CompanyID=FlowTriggerState.CompanyID)""")
-                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_trigger_state_company_plc_register ON FlowTriggerState(CompanyID,PLC_ID,TriggerRegister)")
+                conn.execute("DROP INDEX IF EXISTS uq_flow_trigger_state_company_plc_register")
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_trigger_state_company_plc_register "
+                    "ON FlowTriggerState(CompanyID,PLC_ID,TriggerRegister,ExpectedValue)"
+                )
 
             for table,idx,cols in (
                 ("Tags","idx_tags_company_plc_name","CompanyID,PLC_ID,TagName"),
