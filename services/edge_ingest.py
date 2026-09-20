@@ -60,6 +60,7 @@ def ensure_edge_event_schema():
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_edge_ledger_company_time ON EdgeEventLedger(CompanyID, PLC_ID, TagName, EventTimestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_edge_ledger_event_time ON EdgeEventLedger(EventTimestamp)")
             conn.commit()
             _EDGE_SCHEMA_READY = True
         except Exception:
