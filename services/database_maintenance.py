@@ -64,6 +64,13 @@ def _cutoff_text(days, now=None):
 
 
 def _delete_batches(conn, table, id_column, condition_sql, cutoff, params=()):
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table,),
+    ).fetchone()
+    if table_exists is None:
+        return 0
+
     deleted = 0
     while True:
         sql = f"""
