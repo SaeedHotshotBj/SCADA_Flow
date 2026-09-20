@@ -189,6 +189,20 @@ def test_disconnected_report_is_not_executed():
     finally:
         report_module.save_report_snapshot = original_save
 
+def test_edge_routes_dispatch_trigger_processing_after_ingest():
+    from pathlib import Path
+
+    text = Path("app.py").read_text(encoding="utf-8")
+    assert "def _process_ingested_trigger_signals" in text
+    store_forward = text.split('@app.route("/api/store_forward"', 1)[1].split(
+        '# =====================================================\n# EDGE DATA RECEIVER', 1
+    )[0]
+    assert "_process_ingested_trigger_signals(items, company_cache)" in store_forward
+    edge_data = text.split('@app.route("/api/data"', 1)[1].split(
+        '# =====================================================\n# HOME', 1
+    )[0]
+    assert "_process_ingested_trigger_signals(" in edge_data
+
 
 def test_saved_flow_sanitizer_repairs_ids_and_legacy_nodes():
     from services.runtime_bootstrap import _sanitize_company_flow
@@ -431,6 +445,7 @@ def run():
         test_disconnected_report_is_not_executed,
         test_converging_calculation_outputs_are_preserved,
         test_shared_trigger_register_stores_all_tags,
+        test_edge_routes_dispatch_trigger_processing_after_ingest,
         test_saved_flow_sanitizer_repairs_ids_and_legacy_nodes,
         test_trigger_edge_configuration,
         test_shared_production_trigger_creates_one_event,
