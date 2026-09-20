@@ -190,6 +190,55 @@ def test_disconnected_report_is_not_executed():
         report_module.save_report_snapshot = original_save
 
 
+def test_saved_flow_sanitizer_repairs_ids_and_legacy_nodes():
+    from services.runtime_bootstrap import _sanitize_company_flow
+
+    flow = {
+        "drawflow": {
+            "Home": {
+                "data": {
+                    "10": {
+                        "id": 99,
+                        "name": "PLCReader",
+                        "outputs": {
+                            "output_1": {
+                                "connections": [{"node": "11"}]
+                            }
+                        },
+                    },
+                    "11": {
+                        "id": 11,
+                        "name": "ManagementOutput",
+                        "inputs": {
+                            "input_1": {
+                                "connections": [{"node": "10"}]
+                            }
+                        },
+                    },
+                    "12": {
+                        "id": 12,
+                        "name": "TagMapper",
+                        "inputs": {
+                            "input_1": {
+                                "connections": [{"node": "10"}]
+                            }
+                        },
+                    },
+                }
+            }
+        }
+    }
+
+    cleaned, changed = _sanitize_company_flow(flow)
+    nodes = cleaned["drawflow"]["Home"]["data"]
+
+    assert changed is True
+    assert set(nodes) == {"10", "12"}
+    assert nodes["10"]["id"] == 10
+    assert nodes["10"]["outputs"]["output_1"]["connections"] == []
+    assert nodes["12"]["inputs"]["input_1"]["connections"] == [{"node": "10"}]
+
+
 def test_shared_production_trigger_creates_one_event():
     import sqlite3
     import services.production_event_service as production_module
@@ -342,6 +391,7 @@ def run():
         test_disconnected_report_is_not_executed,
         test_converging_calculation_outputs_are_preserved,
         test_shared_trigger_register_stores_all_tags,
+        test_saved_flow_sanitizer_repairs_ids_and_legacy_nodes,
         test_trigger_edge_configuration,
         test_shared_production_trigger_creates_one_event,
         test_high_volume_ingest_guardrails,
