@@ -59,12 +59,36 @@ def _trigger_registers(definitions):
     return sorted(result)
 
 
+def _node_connections(nodes, node_id, direction="outputs"):
+    node = nodes.get(str(node_id), {})
+    section = node.get(direction, {}) if isinstance(node, dict) else {}
+    if not isinstance(section, dict):
+        return []
+    result = []
+    for item in section.values():
+        if not isinstance(item, dict):
+            continue
+        connections = item.get("connections", [])
+        if not isinstance(connections, list):
+            continue
+        for connection in connections:
+            if isinstance(connection, dict) and connection.get("node") is not None:
+                result.append(str(connection["node"]))
+    return result
+
+
 def _all_tag_definitions(nodes, plc_id, company_id=None):
     """Resolve TagMapper definitions using the actual PLCReader graph branch."""
     target_plc = int(plc_id)
     company_plc_ids = []
 
-    if company_id is not None:
+    needs_fallback_ids = any(
+        isinstance(node, dict)
+        and node.get("name") == "PLCReader"
+        and (node.get("data", {}) or {}).get("plc_id", (node.get("data", {}) or {}).get("PLC_ID")) in (None, "")
+        for node in nodes.values()
+    )
+    if company_id is not None and needs_fallback_ids:
         try:
             conn = get_connection()
             try:
