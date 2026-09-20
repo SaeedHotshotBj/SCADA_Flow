@@ -1478,6 +1478,8 @@ def receive_store_forward():
         finally:
             conn.close()
 
+    _process_ingested_trigger_signals(items, company_cache)
+
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -1506,6 +1508,37 @@ def receive_store_forward():
         "errors": errors,
         "inserted": result.get("inserted", 0) if isinstance(result, dict) else 0,
     }), 200
+
+
+def _process_ingested_trigger_signals(items, company_cache):
+    targets = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        tag = str(item.get("TagName", "")).strip()
+        if not tag.startswith("__TRIGGER_REGISTER_"):
+            continue
+        try:
+            plc_id = int(item.get("PLC_ID"))
+        except (TypeError, ValueError):
+            continue
+        company_id = company_cache.get(plc_id)
+        if company_id is not None:
+            targets.add((int(company_id), plc_id))
+
+    if not targets:
+        return
+
+    try:
+        from services.edge_trigger_service import EdgeTriggerService
+        service = EdgeTriggerService()
+        for company_id, plc_id in sorted(targets):
+            service.enrich({
+                "CompanyID": company_id,
+                "PLC_ID": plc_id,
+            })
+    except Exception as exc:
+        print("EDGE TRIGGER PROCESSING ERROR:", exc)
 
 
 # =====================================================
@@ -1589,6 +1622,11 @@ def receive_edge_data():
         company_id = row["CompanyID"] if row else None
     finally:
         conn.close()
+
+    _process_ingested_trigger_signals(
+        [item],
+        {int(data.get("PLC_ID")): company_id} if company_id is not None else {},
+    )
 
     socketio.emit(
         "tag_update",
