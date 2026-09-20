@@ -430,6 +430,7 @@ def bootstrap(app):
     start_edge_timeout_worker()
     start_trend_runtime_worker()
     start_report_runtime_worker()
+    start_database_maintenance_worker()
     return True
 
 
