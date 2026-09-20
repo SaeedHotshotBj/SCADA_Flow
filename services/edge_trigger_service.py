@@ -59,28 +59,93 @@ def _trigger_registers(definitions):
     return sorted(result)
 
 
-def _all_tag_definitions(nodes, plc_id):
-    result = []
+def _all_tag_definitions(nodes, plc_id, company_id=None):
+    """Resolve TagMapper definitions using the actual PLCReader graph branch."""
     target_plc = int(plc_id)
-    for node in nodes.values():
+    company_plc_ids = []
+
+    if company_id is not None:
+        try:
+            conn = get_connection()
+            try:
+                rows = conn.execute(
+                    "SELECT PLC_ID FROM PLCs WHERE CompanyID=? ORDER BY PLC_ID",
+                    (int(company_id),),
+                ).fetchall()
+                company_plc_ids = [int(row["PLC_ID"]) for row in rows]
+            finally:
+                conn.close()
+        except Exception as exc:
+            print("PRODUCTION FLOW PLC LOOKUP ERROR:", exc)
+
+    plc_reader_to_id = {}
+    used_ids = set()
+    fallback_index = 0
+
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("name") != "PLCReader":
+            continue
+        data = _node_config(node)
+        raw = data.get("plc_id", data.get("PLC_ID"))
+        try:
+            reader_plc_id = int(raw) if raw not in (None, "") else None
+        except (TypeError, ValueError):
+            reader_plc_id = None
+
+        if reader_plc_id is None:
+            while (
+                fallback_index < len(company_plc_ids)
+                and company_plc_ids[fallback_index] in used_ids
+            ):
+                fallback_index += 1
+            if fallback_index < len(company_plc_ids):
+                reader_plc_id = company_plc_ids[fallback_index]
+                fallback_index += 1
+
+        if reader_plc_id is None or reader_plc_id in used_ids:
+            continue
+        used_ids.add(reader_plc_id)
+        plc_reader_to_id[str(node_id)] = reader_plc_id
+
+    result = []
+    for node_id, node in nodes.items():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
             continue
+
         mappings = _node_config(node).get("mappings", [])
         if not isinstance(mappings, list):
             continue
+
+        upstream_ids = []
+        for source_id, source_plc_id in plc_reader_to_id.items():
+            if str(node_id) in _node_connections(nodes, source_id, "outputs"):
+                upstream_ids.append(source_plc_id)
+        upstream_ids = list(dict.fromkeys(upstream_ids))
+
         for item in mappings:
             if not isinstance(item, dict) or not str(item.get("name", "")).strip():
                 continue
+
             explicit = item.get("plc_id", item.get("PLC_ID"))
             if explicit not in (None, ""):
                 try:
-                    item_plc = int(explicit)
+                    mapping_plc_ids = [int(explicit)]
                 except (TypeError, ValueError):
                     continue
+            elif upstream_ids:
+                mapping_plc_ids = upstream_ids
+            elif len(company_plc_ids) == 1:
+                mapping_plc_ids = company_plc_ids
             else:
-                item_plc = target_plc
-            if item_plc == target_plc:
-                result.append(item)
+                continue
+
+            if target_plc not in mapping_plc_ids:
+                continue
+
+            definition = dict(item)
+            definition["plc_id"] = target_plc
+            result.append(definition)
+
     return result
 
 
@@ -149,7 +214,7 @@ class EdgeTriggerService:
 
         definitions = payload.get("TagDefinitions", [])
         if not isinstance(definitions, list) or not definitions:
-            definitions = _all_tag_definitions(_nodes(company_id), plc_id)
+            definitions = _all_tag_definitions(_nodes(company_id), plc_id, company_id)
 
         registers = _trigger_registers(definitions)
         if not registers:
