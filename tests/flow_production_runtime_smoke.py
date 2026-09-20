@@ -268,6 +268,26 @@ def test_shared_trigger_register_stores_all_tags():
         historian_module.ensure_plc_identity_schema = original_schema
 
 
+def test_high_volume_ingest_guardrails():
+    ingest_source = Path("services/edge_ingest.py").read_text(encoding="utf-8")
+    maintenance_source = Path("services/database_maintenance.py").read_text(encoding="utf-8")
+
+    # EventID idempotency is now backed directly by the indexed PLC_Data.EventID
+    # field instead of a second hot-path ledger write.
+    assert "SELECT ID FROM PLC_Data WHERE EventID=? LIMIT 1" in ingest_source
+    assert "INSERT OR IGNORE INTO EdgeEventLedger" not in ingest_source
+
+    # Trigger signals are persisted only when their value changes, and
+    # TRIGGER samples cannot exceed the Flow-defined interval.
+    assert "def _trigger_signal_is_redundant" in ingest_source
+    assert "def _trigger_sample_is_due" in ingest_source
+
+    # High-volume operational history has explicit retention and WAL checkpointing.
+    assert "TRIGGER_SIGNAL" in maintenance_source
+    assert "EdgeEventLedger" in maintenance_source
+    assert "wal_checkpoint" in maintenance_source
+
+
 def test_report_persistence_contains_no_calculation_engine():
     report_plc = Path("services/report_plc.py").read_text(encoding="utf-8")
     snapshot_runtime = Path("services/report_snapshot_runtime.py").read_text(encoding="utf-8")
@@ -290,6 +310,7 @@ def run():
         test_converging_calculation_outputs_are_preserved,
         test_shared_trigger_register_stores_all_tags,
         test_trigger_edge_configuration,
+        test_high_volume_ingest_guardrails,
         test_report_persistence_contains_no_calculation_engine,
     ]
     for test in tests:
