@@ -246,8 +246,45 @@ def test_shared_production_trigger_creates_one_event():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     original_connection = production_module.get_connection
+    original_schema = production_module.ensure_production_event_schema
     production_module.get_connection = lambda: conn
+    production_module.ensure_production_event_schema = lambda: None
     try:
+        conn.executescript(
+            """
+            CREATE TABLE FlowTriggerState (
+                CompanyID INTEGER NOT NULL,
+                PLC_ID INTEGER NOT NULL,
+                TriggerRegister INTEGER NOT NULL,
+                ExpectedValue TEXT NOT NULL,
+                Active INTEGER NOT NULL DEFAULT 0,
+                StartTimestamp TEXT,
+                StartSnapshotJSON TEXT,
+                LastSignalID INTEGER,
+                LastSignalTimestamp TEXT,
+                LastSignalValue REAL,
+                PRIMARY KEY (CompanyID, PLC_ID, TriggerRegister, ExpectedValue)
+            );
+            CREATE TABLE ProductionEvents (
+                EventID TEXT PRIMARY KEY,
+                CompanyID INTEGER NOT NULL,
+                PLC_ID INTEGER NOT NULL,
+                TriggerRegister INTEGER NOT NULL,
+                ExpectedValue REAL,
+                TriggerValue REAL,
+                Edge TEXT NOT NULL,
+                TriggerTimestamp TEXT NOT NULL,
+                StartTimestamp TEXT,
+                EndTimestamp TEXT,
+                DurationSeconds REAL NOT NULL DEFAULT 0,
+                StartComplete INTEGER NOT NULL DEFAULT 1,
+                TagsJSON TEXT,
+                StartTagsJSON TEXT
+            );
+            """
+        )
+        conn.commit()
+
         definitions = [
             {"name": "B1", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1, "trigger_edge": "rise"},
             {"name": "B2", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1, "trigger_edge": "rise"},
@@ -266,10 +303,13 @@ def test_shared_production_trigger_creates_one_event():
         assert first == []
         assert len(second) == 1, second
         assert second[0]["edge"] == "rise"
-        count = conn.execute("SELECT COUNT(*) AS Count FROM ProductionEvents").fetchone()["Count"]
+        count = conn.execute(
+            "SELECT COUNT(*) AS Count FROM ProductionEvents"
+        ).fetchone()["Count"]
         assert count == 1
     finally:
         production_module.get_connection = original_connection
+        production_module.ensure_production_event_schema = original_schema
         conn.close()
 
 
