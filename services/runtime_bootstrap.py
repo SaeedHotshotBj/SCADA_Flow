@@ -39,6 +39,107 @@ def _node_config(node):
     return {}
 
 
+
+def _sanitize_company_flow(flow_data):
+    """Normalize Drawflow IDs and remove only known accidental legacy nodes."""
+    if not isinstance(flow_data, dict):
+        return flow_data, False
+    home = (flow_data.get("drawflow", {}) or {}).get("Home", {})
+    nodes = home.get("data") if isinstance(home, dict) else None
+    if not isinstance(nodes, dict):
+        return flow_data, False
+
+    cleaned = json.loads(json.dumps(flow_data, ensure_ascii=False))
+    cleaned_nodes = cleaned.get("drawflow", {}).get("Home", {}).get("data", {})
+    changed = False
+    remove_ids = {
+        str(node_id)
+        for node_id, node in cleaned_nodes.items()
+        if isinstance(node, dict) and str(node.get("name", "")).strip() in LEGACY_MANAGEMENT_NODE_NAMES
+    }
+    for node_id in list(cleaned_nodes.keys()):
+        if str(node_id) in remove_ids:
+            del cleaned_nodes[node_id]
+            changed = True
+
+    key_id_map = {}
+    for node_id, node in cleaned_nodes.items():
+        if not isinstance(node, dict):
+            continue
+        old_id = str(node.get("id", node_id))
+        new_id = str(node_id)
+        key_id_map[old_id] = new_id
+        if old_id != new_id:
+            node["id"] = int(new_id) if new_id.isdigit() else new_id
+            changed = True
+
+    for node in cleaned_nodes.values():
+        if not isinstance(node, dict):
+            continue
+        for output in (node.get("outputs", {}) or {}).values():
+            if not isinstance(output, dict):
+                continue
+            connections = output.get("connections", [])
+            if not isinstance(connections, list):
+                continue
+            repaired = []
+            for connection in connections:
+                if not isinstance(connection, dict):
+                    continue
+                target = str(connection.get("node", ""))
+                if target in remove_ids:
+                    changed = True
+                    continue
+                mapped = key_id_map.get(target, target)
+                if mapped != target:
+                    connection["node"] = mapped
+                    changed = True
+                repaired.append(connection)
+            output["connections"] = repaired
+        for input_item in (node.get("inputs", {}) or {}).values():
+            if not isinstance(input_item, dict):
+                continue
+            connections = input_item.get("connections", [])
+            if not isinstance(connections, list):
+                continue
+            repaired = []
+            for connection in connections:
+                if not isinstance(connection, dict):
+                    continue
+                source = str(connection.get("node", ""))
+                if source in remove_ids:
+                    changed = True
+                    continue
+                mapped = key_id_map.get(source, source)
+                if mapped != source:
+                    connection["node"] = mapped
+                    changed = True
+                repaired.append(connection)
+            input_item["connections"] = repaired
+    return cleaned, changed
+
+
+def _sanitize_saved_flow(conn, row):
+    raw = row["FlowJson"]
+    try:
+        flow = json.loads(raw or "{}")
+    except Exception as exc:
+        print("FLOW JSON REPAIR PARSE ERROR:", row["FlowID"], exc)
+        return None
+    cleaned, changed = _sanitize_company_flow(flow)
+    if not changed:
+        return cleaned
+    conn.execute(
+        """
+        UPDATE Flows
+        SET FlowJson = ?, LastModified = datetime('now', 'localtime')
+        WHERE FlowID = ?
+        """,
+        (json.dumps(cleaned, ensure_ascii=False), row["FlowID"]),
+    )
+    return cleaned
+
+
 def _sync_flow_plc(flow_data, company_id):
     readers = _extract_plc_readers(flow_data)
     if company_id is None or not readers:
