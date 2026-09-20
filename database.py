@@ -88,6 +88,12 @@ def get_connection():
         "PRAGMA journal_mode = WAL"
     )
 
+    # Keep SQLite's WAL from growing without bound when high-frequency
+    # historian writes are followed by periodic checkpoints.
+    conn.execute(
+        "PRAGMA journal_size_limit = 16777216"
+    )
+
     return conn
 
 
