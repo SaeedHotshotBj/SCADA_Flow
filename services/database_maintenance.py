@@ -187,7 +187,6 @@ def start():
             return _WORKER
 
         _WORKER = DatabaseMaintenanceWorker()
-        cleanup_once()
 
         thread = threading.Thread(
             target=_WORKER.run,
