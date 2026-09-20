@@ -2,12 +2,17 @@ import ast
 import math
 
 
-class ExpressionNode:
-    """Flow-configured numeric calculation node."""
+class ManagementPanel:
+    """Flow-time calculation node used by production/report branches.
+
+    The node never reads the database. It evaluates the calculations configured
+    on this Drawflow node against the current payload Tags and production-event
+    context, then exposes the resulting values to downstream Flow nodes.
+    """
 
     def __init__(self, config=None):
         self.config = config or {}
-        self.expressions = self.config.get("expressions", [])
+        self.calculations = self.config.get("calculations", [])
 
     @staticmethod
     def _safe_eval(expression, variables):
@@ -38,7 +43,7 @@ class ExpressionNode:
                 raise ValueError(f"Unknown variable: {node.id}")
 
         value = eval(
-            compile(tree, "<flow-expression>", "eval"),
+            compile(tree, "<flow-management-expression>", "eval"),
             {"__builtins__": {}},
             variables,
         )
@@ -72,8 +77,6 @@ class ExpressionNode:
     @classmethod
     def _variables(cls, tags, event_context=None):
         variables = {}
-        # Event metadata is context, not a synthetic TagMapper namespace.
-        # Flow expressions may reference numeric event fields directly.
         cls._add_numeric(event_context, variables)
         cls._add_numeric(tags, variables)
         return variables
@@ -83,19 +86,19 @@ class ExpressionNode:
         tags = dict(data.get("Tags", {}) or {})
         event_context = data.get("ProductionEvent", {}) or {}
         variables = self._variables(tags, event_context)
+        calculation_output = []
 
-        for item in self.expressions:
+        for item in self.calculations:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name", "")).strip()
+            name = str(item.get("name", item.get("result_name", ""))).strip()
             expression = str(item.get("expression", "")).strip()
             if not name or not expression:
                 continue
-
             try:
                 result = self._safe_eval(expression, variables)
             except Exception as exc:
-                print("EXPRESSION ERROR:", name, expression, exc)
+                print("MANAGEMENT CALCULATION ERROR:", name, expression, exc)
                 continue
 
             tags[name] = result
@@ -107,8 +110,18 @@ class ExpressionNode:
             if alias:
                 variables[alias] = result
 
+            calculation_output.append({
+                "name": name,
+                "label": str(item.get("label", name)).strip() or name,
+                "tag": name,
+                "unit": str(item.get("unit", "")).strip(),
+                "source": "management_calculation",
+                "allowed_roles": item.get("allowed_roles", ""),
+            })
+
         data["Tags"] = tags
+        data["ReportCalculations"] = calculation_output
         return data
 
 
-__all__ = ["ExpressionNode"]
+__all__ = ["ManagementPanel"]

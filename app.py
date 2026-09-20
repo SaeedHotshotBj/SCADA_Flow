@@ -36,6 +36,7 @@ from flow_engine.node_registry import NODE_REGISTRY
 from socket_manager import init_socketio
 
 from services.dashboard_service import get_dashboard_widgets
+from services.edge_ingest import ingest_items
 from services.runtime_bootstrap import bootstrap as bootstrap_services
 
 from database import (
@@ -959,7 +960,10 @@ def trend_config():
             if node.get("name") != "TrendOutput":
                 continue
 
-            config = node.get("data", {})
+            data = node.get("data", {}) or {}
+            config = data.get("config", data)
+            if not isinstance(config, dict):
+                config = {}
             result["date_picker"] = config.get(
                 "DatePicker",
                 "GregorianPicker"
@@ -975,7 +979,13 @@ def trend_config():
             if node.get("name") != "TagMapper":
                 continue
 
-            mappings = node.get("data", {}).get("mappings", [])
+            data = node.get("data", {}) or {}
+            config = data.get("config", data)
+            if isinstance(config, dict):
+                merged = dict(config)
+                merged.update({k: v for k, v in data.items() if k != "config"})
+                data = merged
+            mappings = data.get("mappings", [])
             if not isinstance(mappings, list):
                 continue
 
@@ -999,8 +1009,6 @@ def trend_config():
                     "PLC_ID": plc_id,
                     "plc_id": plc_id
                 })
-
-            break
 
     except Exception as e:
         print("TREND CONFIG ERROR:", e)
@@ -1031,20 +1039,26 @@ def trend_tags():
             .get("data", {})
         )
 
+        seen = set()
         for node in nodes.values():
-            if node.get("name") != "TagMapper":
+            if not isinstance(node, dict) or node.get("name") != "TagMapper":
                 continue
 
-            mappings = node.get("data", {}).get("mappings", [])
+            data = node.get("data", {}) or {}
+            config = data.get("config", data)
+            if isinstance(config, dict):
+                merged = dict(config)
+                merged.update({k: v for k, v in data.items() if k != "config"})
+                data = merged
+            mappings = data.get("mappings", [])
             if not isinstance(mappings, list):
                 continue
 
             for item in mappings:
-                name = item.get("name")
-                if not name:
+                if not isinstance(item, dict):
                     continue
-
-                if str(item.get("storage", "")).upper() != "TIME":
+                name = str(item.get("name", "")).strip()
+                if not name or str(item.get("storage", "")).upper() != "TIME":
                     continue
 
                 plc_id = item.get("plc_id", item.get("PLC_ID"))
@@ -1052,6 +1066,11 @@ def trend_tags():
                     plc_id = int(plc_id)
                 except (TypeError, ValueError):
                     plc_id = None
+
+                key = (name.lower(), plc_id)
+                if key in seen:
+                    continue
+                seen.add(key)
                 tags.append({
                     "tag": name,
                     "title": name,
@@ -1059,8 +1078,6 @@ def trend_tags():
                     "PLC_ID": plc_id,
                     "plc_id": plc_id
                 })
-
-            break
 
         return jsonify(tags)
 
@@ -1410,136 +1427,226 @@ def dashboard():
 
 
 # =====================================================
+# EDGE STORE & FORWARD RECEIVER
+# =====================================================
+
+@app.route("/api/store_forward", methods=["POST"])
+def receive_store_forward():
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items")
+
+    if not isinstance(items, list):
+        return jsonify({
+            "status": "error",
+            "message": "items must be a list",
+        }), 400
+
+    try:
+        result = ingest_items(items)
+    except Exception as exc:
+        print("STORE & FORWARD INGEST ERROR:", exc)
+        return jsonify({
+            "status": "error",
+            "message": str(exc),
+        }), 500
+
+    acks = result.get("acks", []) if isinstance(result, dict) else []
+    errors = result.get("errors", []) if isinstance(result, dict) else []
+    ack_set = {str(event_id) for event_id in acks}
+    company_cache = {}
+    plc_ids = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            plc_ids.add(int(item.get("PLC_ID")))
+        except (TypeError, ValueError):
+            continue
+
+    if plc_ids:
+        conn = get_connection()
+        try:
+            placeholders = ",".join("?" for _ in plc_ids)
+            rows = conn.execute(
+                f"SELECT PLC_ID, CompanyID FROM PLCs WHERE PLC_ID IN ({placeholders})",
+                sorted(plc_ids),
+            ).fetchall()
+            company_cache = {
+                int(row["PLC_ID"]): row["CompanyID"]
+                for row in rows
+            }
+        finally:
+            conn.close()
+
+    _process_ingested_trigger_signals(items, company_cache)
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        event_id = str(item.get("EventID", "")).strip()
+        if not event_id or event_id not in ack_set:
+            continue
+        try:
+            plc_id = int(item.get("PLC_ID"))
+        except (TypeError, ValueError):
+            plc_id = item.get("PLC_ID")
+        socketio.emit(
+            "tag_update",
+            {
+                "Online": True,
+                "CompanyID": company_cache.get(plc_id),
+                "PLC_ID": plc_id,
+                "Tag": str(item.get("TagName", "")).strip(),
+                "Value": item.get("Value"),
+                "Timestamp": item.get("Timestamp"),
+            }
+        )
+
+    return jsonify({
+        "status": "ok",
+        "acks": acks,
+        "errors": errors,
+        "inserted": result.get("inserted", 0) if isinstance(result, dict) else 0,
+    }), 200
+
+
+def _process_ingested_trigger_signals(items, company_cache):
+    targets = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        tag = str(item.get("TagName", "")).strip()
+        if not tag.startswith("__TRIGGER_REGISTER_"):
+            continue
+        try:
+            plc_id = int(item.get("PLC_ID"))
+        except (TypeError, ValueError):
+            continue
+        company_id = company_cache.get(plc_id)
+        if company_id is not None:
+            targets.add((int(company_id), plc_id))
+
+    if not targets:
+        return
+
+    try:
+        from services.edge_trigger_service import EdgeTriggerService
+        service = EdgeTriggerService()
+        for company_id, plc_id in sorted(targets):
+            service.enrich({
+                "CompanyID": company_id,
+                "PLC_ID": plc_id,
+            })
+    except Exception as exc:
+        print("EDGE TRIGGER PROCESSING ERROR:", exc)
+
+
+# =====================================================
 # EDGE DATA RECEIVER
 # =====================================================
 
 @app.route("/api/data", methods=["POST"])
 def receive_edge_data():
-    try:
-        data = request.get_json()
+    data = request.get_json(silent=True) or {}
 
-        if not data:
-            return jsonify({
-                "status": "error",
-                "message": "No data"
-            }), 400
-
-        plc_id = data.get("PLC_ID")
-        tag = data.get("TagName")
-        value = data.get("Value")
-        timestamp = data.get("Timestamp")
-
-        if plc_id is None:
-            return jsonify({
-                "status": "error",
-                "message": "PLC_ID missing"
-            }), 400
-
-        if not tag:
-            return jsonify({
-                "status": "error",
-                "message": "TagName missing"
-            }), 400
-
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            SELECT CompanyID
-            FROM PLCs
-            WHERE PLC_ID = ?
-            """,
-            (plc_id,)
-        )
-
-        plc = cursor.fetchone()
-
-        if not plc:
-            cursor.close()
-            conn.close()
-            return jsonify({
-                "status": "error",
-                "message": "PLC not found"
-            }), 404
-
-        company_id = plc["CompanyID"]
-
-        cursor.execute(
-            """
-            INSERT INTO PLC_Data
-            (
-                CompanyID,
-                TagName,
-                Value,
-                StorageType,
-                Timestamp
-            )
-            VALUES
-            (?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))
-            """,
-            (
-                company_id,
-                tag,
-                value,
-                "EDGE",
-                timestamp
-            )
-        )
-
-        cursor.execute(
-            """
-            INSERT INTO TagHistory
-            (
-                CompanyID,
-                PLC_ID,
-                TagName,
-                Value,
-                Timestamp
-            )
-            VALUES
-            (?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))
-            """,
-            (
-                company_id,
-                plc_id,
-                tag,
-                value,
-                timestamp
-            )
-        )
-
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        socketio.emit(
-            "tag_update",
-            {
-                "Online": True,
-                "CompanyID": company_id,
-                "PLC_ID": plc_id,
-                "Tag": tag,
-                "Value": value,
-                "Timestamp": timestamp
-            }
-        )
-
-        return jsonify({
-            "status": "ok",
-            "CompanyID": company_id,
-            "PLC_ID": plc_id,
-            "tag": tag,
-            "value": value
-        })
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
+    if not data:
         return jsonify({
             "status": "error",
-            "message": str(e)
+            "message": "No data",
+        }), 400
+
+    if data.get("PLC_ID") is None:
+        return jsonify({
+            "status": "error",
+            "message": "PLC_ID missing",
+        }), 400
+
+    if not data.get("TagName"):
+        return jsonify({
+            "status": "error",
+            "message": "TagName missing",
+        }), 400
+
+    event_id = str(data.get("EventID", "")).strip()
+    if not event_id:
+        timestamp = data.get("Timestamp")
+        if timestamp not in (None, ""):
+            import hashlib
+            import json as _json
+
+            identity = _json.dumps(
+                {
+                    "PLC_ID": data.get("PLC_ID"),
+                    "TagName": data.get("TagName"),
+                    "Value": data.get("Value"),
+                    "Timestamp": timestamp,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            event_id = "legacy-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        else:
+            import uuid
+            event_id = "legacy-" + uuid.uuid4().hex
+
+    item = dict(data)
+    item["EventID"] = event_id
+
+    try:
+        result = ingest_items([item])
+    except Exception as exc:
+        print("EDGE DATA INGEST ERROR:", exc)
+        return jsonify({
+            "status": "error",
+            "message": str(exc),
         }), 500
+
+    errors = result.get("errors", []) if isinstance(result, dict) else []
+    acks = result.get("acks", []) if isinstance(result, dict) else []
+
+    if errors and event_id not in {str(value) for value in acks}:
+        message = str(errors[0].get("Error", "Edge data rejected")) if isinstance(errors[0], dict) else "Edge data rejected"
+        status_code = 404 if message == "PLC not found" else 400
+        return jsonify({
+            "status": "error",
+            "message": message,
+        }), status_code
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT CompanyID FROM PLCs WHERE PLC_ID=? LIMIT 1",
+            (int(data.get("PLC_ID")),),
+        ).fetchone()
+        company_id = row["CompanyID"] if row else None
+    finally:
+        conn.close()
+
+    _process_ingested_trigger_signals(
+        [item],
+        {int(data.get("PLC_ID")): company_id} if company_id is not None else {},
+    )
+
+    socketio.emit(
+        "tag_update",
+        {
+            "Online": True,
+            "CompanyID": company_id,
+            "PLC_ID": data.get("PLC_ID"),
+            "Tag": str(data.get("TagName", "")).strip(),
+            "Value": data.get("Value"),
+            "Timestamp": data.get("Timestamp"),
+        },
+    )
+
+    return jsonify({
+        "status": "ok",
+        "CompanyID": company_id,
+        "PLC_ID": data.get("PLC_ID"),
+        "tag": data.get("TagName"),
+        "value": data.get("Value"),
+    }), 200
 
 
 # =====================================================

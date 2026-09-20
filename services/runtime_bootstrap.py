@@ -18,14 +18,26 @@ LEGACY_MANAGEMENT_NODE_NAMES = {
 }
 
 
-def _extract_plc_reader(flow_data):
+def _extract_plc_readers(flow_data):
     nodes = (flow_data or {}).get("drawflow", {}).get("Home", {}).get("data", {})
     if not isinstance(nodes, dict):
-        return None
-    for node in nodes.values():
+        return []
+    readers = []
+    for node_id, node in nodes.items():
         if isinstance(node, dict) and node.get("name") == "PLCReader":
-            return node
-    return None
+            readers.append((str(node_id), node))
+    return readers
+
+
+def _node_config(node):
+    data = node.get("data", {}) or {}
+    config = data.get("config", data)
+    if isinstance(config, dict):
+        merged = dict(config)
+        merged.update({key: value for key, value in data.items() if key != "config"})
+        return merged
+    return {}
+
 
 
 def _sanitize_company_flow(flow_data):
@@ -129,47 +141,153 @@ def _sanitize_saved_flow(conn, row):
 
 
 def _sync_flow_plc(flow_data, company_id):
-    plc_reader = _extract_plc_reader(flow_data)
-    if company_id is None or plc_reader is None:
+    readers = _extract_plc_readers(flow_data)
+    if company_id is None or not readers:
         return False
-    data = plc_reader.get("data", {}) or {}
-    ip = str(data.get("ip", "")).strip()
-    if not ip:
-        return False
-
-    port_value = data.get("port")
-    slave_value = data.get("slave")
-    if port_value in (None, "") or slave_value in (None, ""):
-        print("PLC FLOW SYNC ERROR: PLCReader requires port and slave in Flow configuration")
-        return False
-    try:
-        port = int(port_value)
-        slave = int(slave_value)
-    except (TypeError, ValueError):
-        print("PLC FLOW SYNC ERROR: PLCReader port/slave must be numeric")
-        return False
-
-    name = str(data.get("name") or data.get("PLC_Name") or "PLC").strip()
 
     from database import get_connection
+
     conn = cursor = None
+    changed_any = False
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT PLC_ID FROM PLCs WHERE CompanyID = ? ORDER BY PLC_ID LIMIT 1", (int(company_id),))
-        row = cursor.fetchone()
-        if row:
-            cursor.execute(
-                "UPDATE PLCs SET PLC_Name=?, PLC_IP=?, PLC_Port=?, Slave_ID=? WHERE PLC_ID=?",
-                (name, ip, port, slave, int(row["PLC_ID"])),
-            )
-        else:
-            cursor.execute(
-                "INSERT INTO PLCs (CompanyID, PLC_Name, PLC_IP, PLC_Port, Slave_ID) VALUES (?, ?, ?, ?, ?)",
-                (int(company_id), name, ip, port, slave),
-            )
+        company_id = int(company_id)
+
+        existing_rows = cursor.execute(
+            "SELECT PLC_ID FROM PLCs WHERE CompanyID = ? ORDER BY PLC_ID",
+            (company_id,),
+        ).fetchall()
+        unused_ids = [int(row["PLC_ID"]) for row in existing_rows]
+        used_ids = set()
+
+        for node_id, node in readers:
+            data = _node_config(node)
+            ip = str(data.get("ip", "")).strip()
+            if not ip:
+                print(
+                    "PLC FLOW SYNC ERROR:",
+                    "PLCReader", node_id,
+                    "requires an IP address",
+                )
+                continue
+
+            port_value = data.get("port")
+            slave_value = data.get("slave")
+            if port_value in (None, "") or slave_value in (None, ""):
+                print(
+                    "PLC FLOW SYNC ERROR:",
+                    "PLCReader", node_id,
+                    "requires port and slave in Flow configuration",
+                )
+                continue
+
+            try:
+                port = int(port_value)
+                slave = int(slave_value)
+            except (TypeError, ValueError):
+                print(
+                    "PLC FLOW SYNC ERROR:",
+                    "PLCReader", node_id,
+                    "port/slave must be numeric",
+                )
+                continue
+
+            if port <= 0 or slave < 0:
+                print(
+                    "PLC FLOW SYNC ERROR:",
+                    "PLCReader", node_id,
+                    "contains invalid numeric settings",
+                )
+                continue
+
+            name = str(data.get("name") or data.get("PLC_Name") or "PLC").strip() or "PLC"
+
+            explicit_value = data.get("plc_id", data.get("PLC_ID"))
+            explicit_plc_id = None
+            if explicit_value not in (None, ""):
+                try:
+                    explicit_plc_id = int(explicit_value)
+                except (TypeError, ValueError):
+                    print(
+                        "PLC FLOW SYNC ERROR:",
+                        "PLCReader", node_id,
+                        "PLC_ID must be numeric",
+                    )
+                    continue
+                if explicit_plc_id <= 0:
+                    print(
+                        "PLC FLOW SYNC ERROR:",
+                        "PLCReader", node_id,
+                        "PLC_ID must be positive",
+                    )
+                    continue
+
+            if explicit_plc_id is not None:
+                plc_id = explicit_plc_id
+                row = cursor.execute(
+                    "SELECT PLC_ID, CompanyID FROM PLCs WHERE PLC_ID = ? LIMIT 1",
+                    (plc_id,),
+                ).fetchone()
+
+                if row is not None and int(row["CompanyID"]) != company_id:
+                    print(
+                        "PLC FLOW SYNC ERROR:",
+                        "PLCReader", node_id,
+                        "PLC_ID belongs to another company",
+                    )
+                    continue
+
+                if plc_id in used_ids:
+                    print(
+                        "PLC FLOW SYNC ERROR:",
+                        "duplicate PLC_ID", plc_id,
+                        "in Flow node", node_id,
+                    )
+                    continue
+            else:
+                available = [item for item in unused_ids if item not in used_ids]
+                plc_id = available[0] if available else None
+
+            if plc_id is None:
+                cursor.execute(
+                    """
+                    INSERT INTO PLCs
+                    (CompanyID, PLC_Name, PLC_IP, PLC_Port, Slave_ID)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (company_id, name, ip, port, slave),
+                )
+                plc_id = int(cursor.lastrowid)
+            else:
+                row = cursor.execute(
+                    "SELECT PLC_ID FROM PLCs WHERE PLC_ID = ? AND CompanyID = ? LIMIT 1",
+                    (plc_id, company_id),
+                ).fetchone()
+                if row:
+                    cursor.execute(
+                        """
+                        UPDATE PLCs
+                        SET PLC_Name=?, PLC_IP=?, PLC_Port=?, Slave_ID=?
+                        WHERE PLC_ID=?
+                        """,
+                        (name, ip, port, slave, plc_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO PLCs
+                        (PLC_ID, CompanyID, PLC_Name, PLC_IP, PLC_Port, Slave_ID)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (plc_id, company_id, name, ip, port, slave),
+                    )
+
+            used_ids.add(plc_id)
+            changed_any = True
+
         conn.commit()
-        return True
+        return changed_any
     except Exception as exc:
         if conn is not None:
             conn.rollback()
@@ -180,7 +298,6 @@ def _sync_flow_plc(flow_data, company_id):
             cursor.close()
         if conn is not None:
             conn.close()
-
 
 def sync_all_saved_flows():
     from database import get_connection
@@ -378,6 +495,14 @@ def start_report_runtime_worker():
         print("REPORT RUNTIME WORKER BOOTSTRAP ERROR:", exc)
 
 
+def start_database_maintenance_worker():
+    try:
+        from services.database_maintenance import start
+        start()
+    except Exception as exc:
+        print("DATABASE MAINTENANCE WORKER BOOTSTRAP ERROR:", exc)
+
+
 def bootstrap(app):
     install_save_flow_sync(app)
     install_flow_json_guard(app)
@@ -406,6 +531,7 @@ def bootstrap(app):
     start_edge_timeout_worker()
     start_trend_runtime_worker()
     start_report_runtime_worker()
+    start_database_maintenance_worker()
     return True
 
 

@@ -60,6 +60,7 @@ def ensure_edge_event_schema():
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_edge_ledger_company_time ON EdgeEventLedger(CompanyID, PLC_ID, TagName, EventTimestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_edge_ledger_event_time ON EdgeEventLedger(EventTimestamp)")
             conn.commit()
             _EDGE_SCHEMA_READY = True
         except Exception:
@@ -227,6 +228,182 @@ def _flow_tag_storage(company_id):
     return allowed
 
 
+
+def _flow_tag_intervals(company_id):
+    """Return Flow-defined minimum sampling intervals for TRIGGER tags."""
+    flow_json = get_company_flow(company_id)
+    if not flow_json:
+        return {}
+    try:
+        flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
+    except Exception:
+        return {}
+
+    nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
+    if not isinstance(nodes, dict):
+        return {}
+
+    conn = get_connection()
+    try:
+        plc_rows = conn.execute(
+            "SELECT PLC_ID FROM PLCs WHERE CompanyID=? ORDER BY PLC_ID",
+            (int(company_id),),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    company_plc_ids = [int(row["PLC_ID"]) for row in plc_rows]
+    plc_reader_to_id = {}
+    used_ids = set()
+    fallback_index = 0
+
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("name") != "PLCReader":
+            continue
+        data = node.get("data", {}) or {}
+        raw_plc_id = data.get("plc_id", data.get("PLC_ID"))
+        plc_id = None
+        try:
+            if raw_plc_id not in (None, ""):
+                plc_id = int(raw_plc_id)
+        except (TypeError, ValueError):
+            plc_id = None
+        if plc_id is None:
+            while fallback_index < len(company_plc_ids) and company_plc_ids[fallback_index] in used_ids:
+                fallback_index += 1
+            if fallback_index < len(company_plc_ids):
+                plc_id = company_plc_ids[fallback_index]
+                fallback_index += 1
+        if plc_id is None or plc_id not in company_plc_ids or plc_id in used_ids:
+            continue
+        used_ids.add(plc_id)
+        plc_reader_to_id[str(node_id)] = plc_id
+
+    intervals = {}
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("name") != "TagMapper":
+            continue
+
+        data = node.get("data", {}) or {}
+        if isinstance(data.get("config"), dict):
+            merged = dict(data["config"])
+            merged.update({k: v for k, v in data.items() if k != "config"})
+            data = merged
+        mappings = data.get("mappings", [])
+        if not isinstance(mappings, list):
+            continue
+
+        upstream_ids = [
+            plc_reader_to_id[source]
+            for source in plc_reader_to_id
+            if str(node_id) in _node_connections(nodes, source, "outputs")
+        ]
+        upstream_ids = list(dict.fromkeys(upstream_ids))
+
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            if str(mapping.get("storage", "TIME")).upper().strip() != "TRIGGER":
+                continue
+
+            name = str(mapping.get("name", "")).strip()
+            if not name:
+                continue
+
+            try:
+                interval = float(mapping.get("interval", 1))
+            except (TypeError, ValueError):
+                interval = 1.0
+            if interval <= 0:
+                interval = 1.0
+
+            explicit = mapping.get("plc_id", mapping.get("PLC_ID"))
+            mapping_plc_ids = []
+            if explicit not in (None, ""):
+                try:
+                    mapping_plc_ids = [int(explicit)]
+                except (TypeError, ValueError):
+                    mapping_plc_ids = []
+            elif upstream_ids:
+                mapping_plc_ids = upstream_ids
+            elif len(company_plc_ids) == 1:
+                mapping_plc_ids = [company_plc_ids[0]]
+
+            for plc_id in mapping_plc_ids:
+                if plc_id not in company_plc_ids:
+                    continue
+                key = (plc_id, name.lower())
+                previous = intervals.get(key)
+                intervals[key] = interval if previous is None else min(previous, interval)
+
+    return intervals
+
+
+def _trigger_signal_is_redundant(conn, company_id, plc_id, tag, value):
+    row = conn.execute(
+        """
+        SELECT Value
+        FROM PLC_Data
+        WHERE CompanyID=? AND PLC_ID=?
+          AND LOWER(TagName)=LOWER(?)
+          AND StorageType='TRIGGER_SIGNAL'
+        ORDER BY ID DESC
+        LIMIT 1
+        """,
+        (int(company_id), int(plc_id), tag),
+    ).fetchone()
+    if row is None:
+        return False
+    try:
+        return float(row["Value"]) == float(value)
+    except (TypeError, ValueError):
+        return str(row["Value"]) == str(value)
+
+
+def _trigger_sample_is_due(conn, company_id, plc_id, tag, timestamp, interval):
+    try:
+        interval = float(interval)
+    except (TypeError, ValueError):
+        return True
+    if interval <= 0:
+        return True
+
+    row = conn.execute(
+        """
+        SELECT Timestamp
+        FROM PLC_Data
+        WHERE CompanyID=? AND PLC_ID=?
+          AND LOWER(TagName)=LOWER(?)
+          AND StorageType='TRIGGER'
+        ORDER BY ID DESC
+        LIMIT 1
+        """,
+        (int(company_id), int(plc_id), tag),
+    ).fetchone()
+    if row is None or row["Timestamp"] in (None, ""):
+        return True
+
+    try:
+        current_dt = datetime.fromisoformat(_parse_timestamp(timestamp))
+        previous_dt = datetime.fromisoformat(_parse_timestamp(row["Timestamp"]))
+    except Exception:
+        return True
+
+    elapsed = (current_dt - previous_dt).total_seconds()
+    return elapsed >= interval
+
+
+def _ordered_ingest_items(items):
+    """Preserve Edge Store & Forward queue order exactly.
+
+    SCADA_FLOW_EDGE emits each trigger group as dependent TRIGGER samples
+    followed by its synthetic trigger signal. The durable queue preserves that
+    order across offline replay and multi-scan batches, so the server must not
+    globally move signal rows to the end of a batch.
+    """
+    return list(items)
+
+
 def _insert_or_ack_existing(conn, event_id, company_id, plc_id, tag, value, timestamp, storage_type):
     try:
         conn.execute(
@@ -240,28 +417,11 @@ def _insert_or_ack_existing(conn, event_id, company_id, plc_id, tag, value, time
         return "inserted"
     except sqlite3.IntegrityError:
         existing = conn.execute(
-            "SELECT ID, CompanyID, PLC_ID, TagName, Value, StorageType, Timestamp, EventID FROM PLC_Data WHERE EventID=? LIMIT 1",
+            "SELECT ID FROM PLC_Data WHERE EventID=? LIMIT 1",
             (event_id,),
         ).fetchone()
         if existing is None:
             raise
-
-        received_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO EdgeEventLedger
-            (EventID, CompanyID, PLC_ID, TagName, EventTimestamp, ReceivedAt)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                event_id,
-                existing["CompanyID"],
-                existing["PLC_ID"],
-                existing["TagName"],
-                existing["Timestamp"],
-                received_at,
-            ),
-        )
         return "existing"
 
 
@@ -275,11 +435,12 @@ def ingest_items(items):
     inserted = 0
     conn = get_connection()
     flow_cache = {}
+    interval_cache = {}
     try:
         conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("BEGIN IMMEDIATE")
 
-        for item in items:
+        for item in _ordered_ingest_items(items):
             if not isinstance(item, dict):
                 continue
 
@@ -329,28 +490,43 @@ def ingest_items(items):
                 )
                 continue
 
-            existing = conn.execute(
-                "SELECT EventID FROM EdgeEventLedger WHERE EventID=?",
+            stored = conn.execute(
+                "SELECT ID FROM PLC_Data WHERE EventID=? LIMIT 1",
                 (event_id,),
             ).fetchone()
-            if existing is not None:
-                stored = conn.execute(
-                    "SELECT ID FROM PLC_Data WHERE EventID=? LIMIT 1",
-                    (event_id,),
-                ).fetchone()
-                if stored is not None:
+            if stored is not None:
+                acks.append(event_id)
+                continue
+
+            if storage_type == "TRIGGER_SIGNAL":
+                if _trigger_signal_is_redundant(
+                    conn,
+                    company_id,
+                    plc_id,
+                    tag,
+                    value,
+                ):
                     acks.append(event_id)
                     continue
-                conn.execute(
-                    "DELETE FROM EdgeEventLedger WHERE EventID=?",
-                    (event_id,),
-                )
+
+            elif storage_type == "TRIGGER":
+                if company_id not in interval_cache:
+                    interval_cache[company_id] = _flow_tag_intervals(company_id)
+                interval = interval_cache[company_id].get((plc_id, tag.lower()))
+                if not _trigger_sample_is_due(
+                    conn,
+                    company_id,
+                    plc_id,
+                    tag,
+                    timestamp,
+                    interval,
+                ):
+                    acks.append(event_id)
+                    continue
 
             savepoint = "edge_event"
             try:
                 conn.execute(f"SAVEPOINT {savepoint}")
-                received_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
-
                 insert_state = _insert_or_ack_existing(
                     conn,
                     event_id,
@@ -366,15 +542,6 @@ def ingest_items(items):
                     conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                     acks.append(event_id)
                     continue
-
-                conn.execute(
-                    """
-                    INSERT INTO EdgeEventLedger
-                    (EventID, CompanyID, PLC_ID, TagName, EventTimestamp, ReceivedAt)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (event_id, company_id, plc_id, tag, timestamp, received_at),
-                )
 
                 try:
                     conn.execute(
@@ -425,4 +592,4 @@ def ingest_items(items):
         conn.close()
 
 
-__all__ = ["ensure_edge_event_schema", "ingest_items"]
+__all__ = ["ensure_edge_event_schema", "ingest_items", "_ordered_ingest_items"]

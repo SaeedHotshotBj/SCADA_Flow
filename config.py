@@ -28,3 +28,13 @@ TREND_CONFIG = {
 
 # Background services are deliberately not started while config.py is imported.
 # Process-level startup is explicit in services.runtime_bootstrap.
+
+
+DB_MAINTENANCE_CONFIG = {
+    "interval_seconds": 900,
+    "trigger_retention_days": 3,
+    "edge_ledger_retention_days": 3,
+    "production_event_retention_days": 90,
+    "delete_batch_size": 5000,
+    "wal_checkpoint": "TRUNCATE",
+}

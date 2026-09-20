@@ -98,7 +98,15 @@ def ensure_production_event_schema():
 
 
 def trigger_definitions(definitions, register):
+    """Return unique trigger conditions for one physical trigger register.
+
+    Multiple TRIGGER TagMapper mappings may intentionally share the same
+    register/value (for example several production fields captured on one
+    machine-cycle trigger). They describe one physical edge, not multiple
+    production events.
+    """
     result = []
+    seen = set()
     for item in definitions or []:
         if not isinstance(item, dict):
             continue
@@ -107,11 +115,16 @@ def trigger_definitions(definitions, register):
         try:
             if int(item.get("trigger_register")) != int(register):
                 continue
+            expected = float(item.get("trigger_value", 0))
         except (TypeError, ValueError):
             continue
         edge = str(item.get("trigger_edge", "rise")).strip().lower()
         if edge not in {"rise", "fall"}:
             edge = "rise"
+        key = (expected, edge)
+        if key in seen:
+            continue
+        seen.add(key)
         result.append((item, edge))
     return result
 
@@ -126,7 +139,7 @@ def process_trigger_signal(
     definitions,
     snapshot_tags=None,
 ):
-    """Process one ordered trigger signal and emit completed report events."""
+    """Process one ordered trigger signal and emit one event per unique edge."""
     ensure_production_event_schema()
 
     company_id = int(company_id)
@@ -137,17 +150,22 @@ def process_trigger_signal(
     snapshot = _snapshot(snapshot_tags)
     events = []
 
+    conditions = {}
+    for definition, configured_edge in trigger_definitions(definitions, register):
+        try:
+            expected = float(definition.get("trigger_value", 0))
+        except (TypeError, ValueError):
+            continue
+        conditions.setdefault(str(expected), []).append(
+            (definition, configured_edge, expected)
+        )
+
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
 
-        for definition, configured_edge in trigger_definitions(definitions, register):
-            try:
-                expected = float(definition.get("trigger_value", 0))
-            except (TypeError, ValueError):
-                expected = 0.0
-
-            expected_key = str(expected)
+        for expected_key, condition_definitions in conditions.items():
+            expected = condition_definitions[0][2]
             state = conn.execute(
                 f"""
                 SELECT * FROM {STATE_TABLE}
@@ -195,7 +213,11 @@ def process_trigger_signal(
             except Exception:
                 start_snapshot = {}
 
-            if not previous_active and active:
+            transition = "rise" if (not previous_active and active) else (
+                "fall" if (previous_active and not active) else None
+            )
+
+            if transition == "rise":
                 conn.execute(
                     f"""
                     UPDATE {STATE_TABLE}
@@ -219,8 +241,7 @@ def process_trigger_signal(
                         expected_key,
                     ),
                 )
-
-                if configured_edge == "rise":
+                if any(edge == "rise" for _, edge, _ in condition_definitions):
                     event_id = uuid.uuid4().hex
                     conn.execute(
                         f"""
@@ -262,7 +283,7 @@ def process_trigger_signal(
                     })
                 continue
 
-            if previous_active and not active:
+            if transition == "fall":
                 end_timestamp = timestamp
                 duration = _duration_seconds(start_timestamp, end_timestamp) if start_timestamp else 0.0
 
@@ -288,7 +309,7 @@ def process_trigger_signal(
                     ),
                 )
 
-                if configured_edge == "fall":
+                if any(edge == "fall" for _, edge, _ in condition_definitions):
                     event_id = uuid.uuid4().hex
                     conn.execute(
                         f"""
@@ -358,7 +379,6 @@ def process_trigger_signal(
         conn.close()
 
     return events
-
 
 __all__ = [
     "STATE_TABLE",
