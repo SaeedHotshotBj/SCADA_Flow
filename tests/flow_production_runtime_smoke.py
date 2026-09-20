@@ -191,6 +191,40 @@ def test_disconnected_report_is_not_executed():
         report_module.save_report_snapshot = original_save
 
 
+def test_shared_production_trigger_creates_one_event():
+    import sqlite3
+    import services.production_event_service as production_module
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    original_connection = production_module.get_connection
+    production_module.get_connection = lambda: conn
+    try:
+        definitions = [
+            {"name": "B1", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1, "trigger_edge": "rise"},
+            {"name": "B2", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1, "trigger_edge": "rise"},
+            {"name": "ProductCode", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1, "trigger_edge": "rise"},
+        ]
+
+        first = production_module.process_trigger_signal(
+            7, 1, 118, 0, "2026-09-16 12:00:00", 1,
+            definitions, {"B1": 10, "B2": 20, "ProductCode": 30},
+        )
+        second = production_module.process_trigger_signal(
+            7, 1, 118, 1, "2026-09-16 12:00:01", 2,
+            definitions, {"B1": 11, "B2": 21, "ProductCode": 31},
+        )
+
+        assert first == []
+        assert len(second) == 1, second
+        assert second[0]["edge"] == "rise"
+        count = conn.execute("SELECT COUNT(*) AS Count FROM ProductionEvents").fetchone()["Count"]
+        assert count == 1
+    finally:
+        production_module.get_connection = original_connection
+        conn.close()
+
+
 def test_trigger_edge_configuration():
     definitions = [
         {
@@ -310,6 +344,7 @@ def run():
         test_converging_calculation_outputs_are_preserved,
         test_shared_trigger_register_stores_all_tags,
         test_trigger_edge_configuration,
+        test_shared_production_trigger_creates_one_event,
         test_high_volume_ingest_guardrails,
         test_report_persistence_contains_no_calculation_engine,
     ]
