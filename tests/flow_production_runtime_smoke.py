@@ -17,18 +17,17 @@ def node(name, config=None, outputs=None):
     }
 
 
-def test_edge_batch_orders_trigger_signal_after_dependent_tags():
+def test_edge_batch_preserves_trigger_groups_in_queue_order():
     items = [
-        {"TagName": "__TRIGGER_REGISTER_118", "Value": 1},
-        {"TagName": "ContractCode", "Value": 123},
-        {"TagName": "ProductCode", "Value": 456},
+        {"PLC_ID": 1, "TagName": "ContractCode", "Value": 123},
+        {"PLC_ID": 1, "TagName": "ProductCode", "Value": 456},
+        {"PLC_ID": 1, "TagName": "__TRIGGER_REGISTER_118", "Value": 1},
+        {"PLC_ID": 1, "TagName": "ContractCode", "Value": 223},
+        {"PLC_ID": 1, "TagName": "ProductCode", "Value": 556},
+        {"PLC_ID": 1, "TagName": "__TRIGGER_REGISTER_118", "Value": 0},
     ]
     ordered = _ordered_ingest_items(items)
-    assert [item["TagName"] for item in ordered] == [
-        "ContractCode",
-        "ProductCode",
-        "__TRIGGER_REGISTER_118",
-    ]
+    assert ordered == items
 
 
 def test_calculation_context_and_security():
