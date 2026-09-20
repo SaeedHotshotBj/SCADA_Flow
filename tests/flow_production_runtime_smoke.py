@@ -335,7 +335,7 @@ def test_report_persistence_contains_no_calculation_engine():
 
 def run():
     tests = [
-        test_edge_batch_orders_trigger_signal_after_dependent_tags,
+        test_edge_batch_preserves_trigger_groups_in_queue_order,
         test_calculation_context_and_security,
         test_tag_mapper_plc_inference,
         test_shared_dag_executes_once_and_reaches_two_reports,
