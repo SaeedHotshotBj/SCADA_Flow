@@ -188,6 +188,39 @@ def test_disconnected_report_is_not_executed():
         assert saved == ["2"], saved
     finally:
         report_module.save_report_snapshot = original_save
+def test_trigger_definitions_follow_plc_reader_branch():
+    from services.edge_trigger_service import _all_tag_definitions
+
+    nodes = {
+        "1": {
+            "name": "PLCReader",
+            "data": {"config": {"plc_id": 1}},
+            "outputs": {"output_1": {"connections": [{"node": "3"}]}},
+        },
+        "2": {
+            "name": "PLCReader",
+            "data": {"config": {"plc_id": 2}},
+            "outputs": {"output_1": {"connections": [{"node": "4"}]}},
+        },
+        "3": {
+            "name": "TagMapper",
+            "data": {"config": {"mappings": [
+                {"name": "B1", "register": 100, "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1}
+            ]}},
+        },
+        "4": {
+            "name": "TagMapper",
+            "data": {"config": {"mappings": [
+                {"name": "B2", "register": 101, "storage": "TRIGGER", "trigger_register": 119, "trigger_value": 1}
+            ]}},
+        },
+    }
+
+    plc1 = _all_tag_definitions(nodes, 1, 7)
+    plc2 = _all_tag_definitions(nodes, 2, 7)
+    assert [item["name"] for item in plc1] == ["B1"]
+    assert [item["name"] for item in plc2] == ["B2"]
+
 
 def test_edge_routes_dispatch_trigger_processing_after_ingest():
     from pathlib import Path
@@ -452,6 +485,7 @@ def run():
         test_disconnected_report_is_not_executed,
         test_converging_calculation_outputs_are_preserved,
         test_shared_trigger_register_stores_all_tags,
+        test_trigger_definitions_follow_plc_reader_branch,
         test_edge_routes_dispatch_trigger_processing_after_ingest,
         test_saved_flow_sanitizer_repairs_ids_and_legacy_nodes,
         test_trigger_edge_configuration,
