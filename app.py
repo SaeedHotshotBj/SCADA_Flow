@@ -960,7 +960,10 @@ def trend_config():
             if node.get("name") != "TrendOutput":
                 continue
 
-            config = node.get("data", {})
+            data = node.get("data", {}) or {}
+            config = data.get("config", data)
+            if not isinstance(config, dict):
+                config = {}
             result["date_picker"] = config.get(
                 "DatePicker",
                 "GregorianPicker"
@@ -976,7 +979,13 @@ def trend_config():
             if node.get("name") != "TagMapper":
                 continue
 
-            mappings = node.get("data", {}).get("mappings", [])
+            data = node.get("data", {}) or {}
+            config = data.get("config", data)
+            if isinstance(config, dict):
+                merged = dict(config)
+                merged.update({k: v for k, v in data.items() if k != "config"})
+                data = merged
+            mappings = data.get("mappings", [])
             if not isinstance(mappings, list):
                 continue
 
@@ -1000,8 +1009,6 @@ def trend_config():
                     "PLC_ID": plc_id,
                     "plc_id": plc_id
                 })
-
-            break
 
     except Exception as e:
         print("TREND CONFIG ERROR:", e)
@@ -1032,20 +1039,26 @@ def trend_tags():
             .get("data", {})
         )
 
+        seen = set()
         for node in nodes.values():
-            if node.get("name") != "TagMapper":
+            if not isinstance(node, dict) or node.get("name") != "TagMapper":
                 continue
 
-            mappings = node.get("data", {}).get("mappings", [])
+            data = node.get("data", {}) or {}
+            config = data.get("config", data)
+            if isinstance(config, dict):
+                merged = dict(config)
+                merged.update({k: v for k, v in data.items() if k != "config"})
+                data = merged
+            mappings = data.get("mappings", [])
             if not isinstance(mappings, list):
                 continue
 
             for item in mappings:
-                name = item.get("name")
-                if not name:
+                if not isinstance(item, dict):
                     continue
-
-                if str(item.get("storage", "")).upper() != "TIME":
+                name = str(item.get("name", "")).strip()
+                if not name or str(item.get("storage", "")).upper() != "TIME":
                     continue
 
                 plc_id = item.get("plc_id", item.get("PLC_ID"))
@@ -1053,6 +1066,11 @@ def trend_tags():
                     plc_id = int(plc_id)
                 except (TypeError, ValueError):
                     plc_id = None
+
+                key = (name.lower(), plc_id)
+                if key in seen:
+                    continue
+                seen.add(key)
                 tags.append({
                     "tag": name,
                     "title": name,
@@ -1060,8 +1078,6 @@ def trend_tags():
                     "PLC_ID": plc_id,
                     "plc_id": plc_id
                 })
-
-            break
 
         return jsonify(tags)
 
