@@ -257,14 +257,21 @@ def test_shared_production_trigger_creates_one_event():
     import sqlite3
     import services.production_event_service as production_module
 
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
+    uri = "file:scada_trigger_test?mode=memory&cache=shared"
+    keeper = sqlite3.connect(uri, uri=True)
+    keeper.row_factory = sqlite3.Row
     original_connection = production_module.get_connection
     original_schema = production_module.ensure_production_event_schema
-    production_module.get_connection = lambda: conn
+
+    def open_test_connection():
+        test_conn = sqlite3.connect(uri, uri=True)
+        test_conn.row_factory = sqlite3.Row
+        return test_conn
+
+    production_module.get_connection = open_test_connection
     production_module.ensure_production_event_schema = lambda: None
     try:
-        conn.executescript(
+        keeper.executescript(
             """
             CREATE TABLE FlowTriggerState (
                 CompanyID INTEGER NOT NULL,
@@ -317,14 +324,14 @@ def test_shared_production_trigger_creates_one_event():
         assert first == []
         assert len(second) == 1, second
         assert second[0]["edge"] == "rise"
-        count = conn.execute(
+        count = keeper.execute(
             "SELECT COUNT(*) AS Count FROM ProductionEvents"
         ).fetchone()["Count"]
         assert count == 1
     finally:
         production_module.get_connection = original_connection
         production_module.ensure_production_event_schema = original_schema
-        conn.close()
+        keeper.close()
 
 
 def test_trigger_edge_configuration():
