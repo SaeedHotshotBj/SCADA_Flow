@@ -250,7 +250,7 @@ def process_trigger_signal(
                          ExpectedValue, TriggerValue, Edge, TriggerTimestamp,
                          StartTimestamp, EndTimestamp, DurationSeconds,
                          StartComplete, TagsJSON, StartTagsJSON)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 1, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 1, ?, ?)
                         """,
                         (
                             event_id,
