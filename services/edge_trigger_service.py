@@ -85,7 +85,10 @@ def _all_tag_definitions(nodes, plc_id, company_id=None):
     needs_fallback_ids = any(
         isinstance(node, dict)
         and node.get("name") == "PLCReader"
-        and (node.get("data", {}) or {}).get("plc_id", (node.get("data", {}) or {}).get("PLC_ID")) in (None, "")
+        and _node_config(node).get(
+            "plc_id",
+            _node_config(node).get("PLC_ID")
+        ) in (None, "")
         for node in nodes.values()
     )
     if company_id is not None and needs_fallback_ids:
