@@ -304,7 +304,7 @@ def test_shared_production_trigger_creates_one_event():
             );
             """
         )
-        conn.commit()
+        keeper.commit()
 
         definitions = [
             {"name": "B1", "storage": "TRIGGER", "trigger_register": 118, "trigger_value": 1, "trigger_edge": "rise"},
