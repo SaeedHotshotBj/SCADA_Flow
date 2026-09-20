@@ -126,7 +126,12 @@ def get_trend_data(company_id,plc_id,tag_name,start=None,end=None):
         start=_format_timestamp(start); end=_format_timestamp(end)
         # Prefer the PLC-aware aggregation tables. Fall back to raw history.
         if start is not None and end is not None:
-            seconds=(end-start).total_seconds() if hasattr(end,"total_seconds") else 0
+            try:
+                start_dt = datetime.datetime.fromisoformat(str(start).replace("T", " "))
+                end_dt = datetime.datetime.fromisoformat(str(end).replace("T", " "))
+                seconds = max(0.0, (end_dt - start_dt).total_seconds())
+            except (TypeError, ValueError):
+                seconds = 0.0
             table="TrendMinute" if seconds<=7200 else ("TrendHour" if seconds<=172800 else "TrendDay")
             try:
                 rows=conn.execute(f"SELECT PeriodStart AS Timestamp,WeightedAverage AS Value FROM {table} WHERE CompanyID=? AND PLC_ID=? AND LOWER(TagName)=LOWER(?) AND PeriodStart<? AND PeriodEnd>? ORDER BY PeriodStart",(int(company_id),int(plc_id),tag_name,end,start)).fetchall()
