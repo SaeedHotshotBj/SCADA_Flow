@@ -394,22 +394,14 @@ def _trigger_sample_is_due(conn, company_id, plc_id, tag, timestamp, interval):
 
 
 def _ordered_ingest_items(items):
-    """Persist ordinary samples before synthetic trigger-register samples.
+    """Preserve Edge Store & Forward queue order exactly.
 
-    Edge emits a trigger signal and its dependent TRIGGER tags in the same
-    batch. Production snapshots are bounded by the signal row ID, so the
-    dependent values must be inserted first to belong to that event snapshot.
-    The ordering is stable for all other records.
+    SCADA_FLOW_EDGE emits each trigger group as dependent TRIGGER samples
+    followed by its synthetic trigger signal. The durable queue preserves that
+    order across offline replay and multi-scan batches, so the server must not
+    globally move signal rows to the end of a batch.
     """
-    indexed = list(enumerate(items))
-    indexed.sort(
-        key=lambda pair: (
-            isinstance(pair[1], dict)
-            and str(pair[1].get("TagName", "")).strip().startswith("__TRIGGER_REGISTER_"),
-            pair[0],
-        )
-    )
-    return [item for _, item in indexed]
+    return list(items)
 
 
 def _insert_or_ack_existing(conn, event_id, company_id, plc_id, tag, value, timestamp, storage_type):
