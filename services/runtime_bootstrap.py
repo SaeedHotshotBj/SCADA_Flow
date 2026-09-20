@@ -394,6 +394,14 @@ def start_report_runtime_worker():
         print("REPORT RUNTIME WORKER BOOTSTRAP ERROR:", exc)
 
 
+def start_database_maintenance_worker():
+    try:
+        from services.database_maintenance import start
+        start()
+    except Exception as exc:
+        print("DATABASE MAINTENANCE WORKER BOOTSTRAP ERROR:", exc)
+
+
 def bootstrap(app):
     install_save_flow_sync(app)
     install_flow_json_guard(app)
