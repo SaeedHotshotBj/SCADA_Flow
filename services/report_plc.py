@@ -9,6 +9,8 @@ from database import get_connection, get_company_flow
 _CONTEXT_CONTRACT_ROLES = {"contract", "contract_code", "contractid", "contract_id"}
 _CONTEXT_PRODUCT_ROLES = {"product", "product_code", "productid", "product_id"}
 
+TAGMAPPER_EVENT_NODE_ID = "__TAGMAPPER_EVENT__"
+
 
 def _flow_nodes(company_id):
     flow = get_company_flow(company_id)
@@ -92,6 +94,48 @@ def _collect_tagmapper_values(tags, company_id, plc_id):
         seen.add(key)
 
     return values
+
+
+def persist_tagmapper_snapshot(
+    company_id,
+    tags,
+    plc_id,
+    timestamp=None,
+    trigger_event_id=None,
+):
+    """Persist numeric TagMapper values independently of ReportOutput."""
+    if company_id is None or not isinstance(tags, dict):
+        return 0
+
+    ensure_report_tables()
+    timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    plc_id = _plc_id(plc_id)
+    contract = tags.get("ContractCode")
+    product = tags.get("ProductCode")
+    tag_values = _collect_tagmapper_values(tags, company_id, plc_id)
+    if not tag_values:
+        return 0
+
+    conn = get_connection()
+    try:
+        _persist_tagmapper_values(
+            conn,
+            company_id,
+            plc_id,
+            timestamp,
+            contract,
+            product,
+            tag_values,
+            trigger_event_id=trigger_event_id,
+            report_node_id=TAGMAPPER_EVENT_NODE_ID,
+        )
+        conn.commit()
+        return len(tag_values)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _persist_tagmapper_values(
@@ -375,6 +419,62 @@ def ensure_report_tables():
             "ON ReportHistory(TriggerEventID, ReportNodeID) "
             "WHERE TriggerEventID IS NOT NULL AND ReportNodeID IS NOT NULL"
         )
+
+        # Backfill production-event TagMapper snapshots independently of ReportOutput.
+        production_events = []
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ProductionEvents' LIMIT 1"
+        ).fetchone():
+            production_events = conn.execute(
+                """
+                SELECT EventID, CompanyID, PLC_ID, TriggerTimestamp, TagsJSON
+                FROM ProductionEvents
+                WHERE TagsJSON IS NOT NULL AND TRIM(TagsJSON) <> ''
+                """
+            ).fetchall()
+
+        for event in production_events:
+            existing_event = conn.execute(
+                """
+                SELECT 1
+                FROM TagMapperValues
+                WHERE CompanyID=?
+                  AND TriggerEventID=?
+                  AND ReportNodeID=?
+                LIMIT 1
+                """,
+                (
+                    int(event["CompanyID"]),
+                    str(event["EventID"]),
+                    TAGMAPPER_EVENT_NODE_ID,
+                ),
+            ).fetchone()
+            if existing_event:
+                continue
+
+            try:
+                event_tags = json.loads(event["TagsJSON"] or "{}")
+            except Exception:
+                event_tags = {}
+            if not isinstance(event_tags, dict):
+                continue
+
+            tag_values = _collect_tagmapper_values(
+                event_tags,
+                event["CompanyID"],
+                event["PLC_ID"],
+            )
+            _persist_tagmapper_values(
+                conn,
+                event["CompanyID"],
+                event["PLC_ID"],
+                event["TriggerTimestamp"],
+                event_tags.get("ContractCode"),
+                event_tags.get("ProductCode"),
+                tag_values,
+                trigger_event_id=str(event["EventID"]),
+                report_node_id=TAGMAPPER_EVENT_NODE_ID,
+            )
 
         # Repair TagMapper rows that were written before the complete event
         # context was available. ReportHistory is the authoritative event
@@ -803,4 +903,11 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None):
 
     result["totals"] = [round(value, 3) for value in totals]
     result["grand_total"] = round(sum(totals), 3)
-    return result
+    return result__all__ = [
+    "TAGMAPPER_EVENT_NODE_ID",
+    "persist_tagmapper_snapshot",
+    "ensure_report_tables",
+    "get_report_products",
+    "get_report_data",
+    "save_report_snapshot",
+]
