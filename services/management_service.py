@@ -446,11 +446,14 @@ def _query_base(company_id, filters):
     return where, args
 
 
-def _report_tag_values_for_pairs(conn, company_id, base_rows):
+def _tagmapper_values_for_pairs(conn, company_id, base_rows):
     pairs = []
     seen = set()
     for row in base_rows:
-        key = (str(row["ContractCode"]).strip().lower(), str(row["ProductCode"]).strip().lower())
+        key = (
+            str(row["ContractCode"]).strip().lower(),
+            str(row["ProductCode"]).strip().lower(),
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -462,17 +465,17 @@ def _report_tag_values_for_pairs(conn, company_id, base_rows):
     conditions = []
     for contract_code, product_code in pairs:
         conditions.append(
-            "(LOWER(COALESCE(h.ContractCode,''))=LOWER(?) AND LOWER(COALESCE(h.ProductCode,''))=LOWER(?))"
+            "(LOWER(COALESCE(ContractCode,''))=LOWER(?) "
+            "AND LOWER(COALESCE(ProductCode,''))=LOWER(?))"
         )
         args.extend([contract_code, product_code])
 
     rows = conn.execute(f"""
-        SELECT h.ReportID, h.ContractCode, h.ProductCode, h.Timestamp,
-               v.TagName, v.Value, v.ReportTagValueID
-        FROM ReportHistory h
-        INNER JOIN ReportTagValues v ON v.ReportID=h.ReportID
-        WHERE h.CompanyID=? AND ({' OR '.join(conditions)})
-        ORDER BY h.ReportID ASC, v.ReportTagValueID ASC
+        SELECT TagMapperValueID, ContractCode, ProductCode, Timestamp,
+               TagName, Value
+        FROM TagMapperValues
+        WHERE CompanyID=? AND ({' OR '.join(conditions)})
+        ORDER BY Timestamp ASC, TagMapperValueID ASC
     """, args).fetchall()
 
     grouped = {}
@@ -530,7 +533,7 @@ def get_management_data(company_id, filters=None):
         if not base_rows:
             return {"columns": [], "rows": [], "count": 0}
 
-        groups = _report_tag_values_for_pairs(conn, company_id, base_rows)
+        groups = _tagmapper_values_for_pairs(conn, company_id, base_rows)
         calculations = _management_calculations(company_id)
         expression_node = ExpressionNode({"expressions": calculations}) if calculations else None
 
