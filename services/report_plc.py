@@ -66,21 +66,20 @@ def _tagmapper_names(company_id, plc_id=None):
     return names
 
 
-def _append_tagmapper_values(values, tags, company_id, plc_id):
-    """Persist numeric values for every TagMapper-defined tag available in the payload."""
+def _collect_tagmapper_values(tags, company_id, plc_id):
+    """Return every numeric TagMapper value available in the report payload."""
     lookup = {
         str(key).strip().lower(): value
         for key, value in (tags or {}).items()
     }
-    stored_names = {
-        str(name).strip().lower()
-        for name, _ in values
-    }
+    values = []
+    seen = set()
 
     for tag_name in sorted(_tagmapper_names(company_id, plc_id), key=str.lower):
-        if tag_name.lower() in stored_names:
+        key = tag_name.lower()
+        if key in seen:
             continue
-        value = lookup.get(tag_name.lower())
+        value = lookup.get(key)
         if value is None:
             continue
         try:
@@ -90,7 +89,24 @@ def _append_tagmapper_values(values, tags, company_id, plc_id):
         if not math.isfinite(number):
             continue
         values.append((tag_name, number))
-        stored_names.add(tag_name.lower())
+        seen.add(key)
+
+    return values
+
+
+def _persist_report_tag_values(conn, report_id, tag_values, plc_id=None):
+    if not tag_values:
+        return
+    conn.executemany(
+        """
+        INSERT INTO ReportTagValues(ReportID, PLC_ID, TagName, Value)
+        VALUES (?, ?, ?, ?)
+        """,
+        [
+            (int(report_id), plc_id, str(name), float(value))
+            for name, value in tag_values
+        ],
+    )
 
 
 def _management_calculations(company_id, user_role=None):
@@ -221,6 +237,14 @@ def ensure_report_tables():
                 Value REAL,
                 FOREIGN KEY(ReportID) REFERENCES ReportHistory(ReportID) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS ReportTagValues(
+                ReportTagValueID INTEGER PRIMARY KEY AUTOINCREMENT,
+                ReportID INTEGER NOT NULL,
+                PLC_ID INTEGER,
+                TagName TEXT NOT NULL,
+                Value REAL,
+                FOREIGN KEY(ReportID) REFERENCES ReportHistory(ReportID) ON DELETE CASCADE
+            );
             """
         )
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(ReportHistory)").fetchall()}
@@ -242,6 +266,10 @@ def ensure_report_tables():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_report_values_report_tag "
             "ON ReportValues(ReportID, TagName)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_tag_values_report_tag "
+            "ON ReportTagValues(ReportID, TagName)"
         )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_event_node "
@@ -374,9 +402,7 @@ def save_report_snapshot(
         except (TypeError, ValueError):
             pass
 
-    # Keep every TagMapper-defined numeric tag available to ManagementPanel
-    # formulas, even when it is not selected as a ReportOutput column.
-    _append_tagmapper_values(values, tags, company_id, plc_id)
+    tagmapper_values = _collect_tagmapper_values(tags, company_id, plc_id)
 
     # Flow-designed ManagementPanel calculations become persisted report columns.
     variables = _formula_variables(tags, duration)
@@ -444,6 +470,7 @@ def save_report_snapshot(
             "INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",
             [(name, value) for name, value in values],
         )
+        _persist_report_tag_values(conn, report_id, tagmapper_values, plc_id)
         conn.commit()
         return report_id
     except sqlite3.IntegrityError:
