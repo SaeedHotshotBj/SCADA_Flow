@@ -42,8 +42,8 @@ class SQLWriter:
             if isinstance(flow, str):
                 flow = json.loads(flow)
             nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
-            for node in nodes.values():
-                if node.get("name") != "ReportOutput":
+            for node_id, node in nodes.items():
+                if not isinstance(node, dict) or node.get("name") != "ReportOutput":
                     continue
                 data = node.get("data", {}) or {}
                 config = data.get("config", data) or {}
