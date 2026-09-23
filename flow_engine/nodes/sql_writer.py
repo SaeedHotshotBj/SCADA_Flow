@@ -223,24 +223,71 @@ class SQLWriter:
             return 0
         context = self._get_management_context_tags(registers)
         saved = 0
-        report_names = {str(p.get("tag", "")).strip().lower() for p in report_products if isinstance(p, dict)}
+        report_names = {
+            str(p.get("tag", "")).strip().lower()
+            for p in report_products
+            if isinstance(p, dict)
+        }
         for event in events:
             if not isinstance(event, dict):
                 continue
+
             event_tags = event.get("tags", {}) or {}
-            matched = next((str(n).strip() for n in event_tags if str(n).strip().lower() in report_names), None)
+
+            # EdgeTriggerService may have created the event before SQLWriter
+            # persists the current TagMapper sample. Match against both the
+            # historical event snapshot and the current Flow payload.
+            available_tags = {}
+            available_tags.update({
+                str(k).strip(): v
+                for k, v in event_tags.items()
+                if str(k).strip() and v is not None
+            })
+            available_tags.update({
+                str(k).strip(): v
+                for k, v in tags.items()
+                if str(k).strip() and v is not None
+            })
+
+            matched = next(
+                (
+                    name
+                    for name in available_tags
+                    if str(name).strip().lower() in report_names
+                ),
+                None,
+            )
             if not matched:
                 continue
+
             snapshot = dict(tags)
             snapshot.update({k: v for k, v in context.items() if v is not None})
-            snapshot.update({str(k).strip(): v for k, v in event_tags.items() if v is not None})
+            snapshot.update({
+                str(k).strip(): v
+                for k, v in event_tags.items()
+                if str(k).strip() and v is not None
+            })
+
+            trigger_value = available_tags.get(matched)
             report_id = save_report_snapshot(
-                self.company_id, snapshot, report_products,
-                timestamp=str(event.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")).replace("T", " "),
+                self.company_id,
+                snapshot,
+                report_products,
+                timestamp=str(
+                    event.get("timestamp")
+                    or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                ).replace("T", " "),
                 trigger_tag=matched,
                 trigger_register=event.get("register"),
-                trigger_value=event_tags.get(matched),
+                trigger_value=trigger_value,
                 plc_id=plc_id,
+                trigger_edge=event.get("edge"),
+                start_timestamp=event.get("start_timestamp"),
+                end_timestamp=event.get("end_timestamp"),
+                duration_seconds=event.get("duration_seconds", 0),
+                start_complete=event.get("start_complete", 1),
+                trigger_event_id=event.get("event_id"),
+                report_node_id=event.get("report_node_id"),
             )
             if report_id is not None:
                 saved += 1
