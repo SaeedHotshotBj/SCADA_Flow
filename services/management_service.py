@@ -446,7 +446,7 @@ def _query_base(company_id, filters):
     return where, args
 
 
-def _report_values_for_pairs(conn, company_id, base_rows):
+def _report_tag_values_for_pairs(conn, company_id, base_rows):
     pairs = []
     seen = set()
     for row in base_rows:
@@ -457,6 +457,7 @@ def _report_values_for_pairs(conn, company_id, base_rows):
         pairs.append((row["ContractCode"], row["ProductCode"]))
     if not pairs:
         return {}
+
     args = [int(company_id)]
     conditions = []
     for contract_code, product_code in pairs:
@@ -464,23 +465,27 @@ def _report_values_for_pairs(conn, company_id, base_rows):
             "(LOWER(COALESCE(h.ContractCode,''))=LOWER(?) AND LOWER(COALESCE(h.ProductCode,''))=LOWER(?))"
         )
         args.extend([contract_code, product_code])
+
     rows = conn.execute(f"""
         SELECT h.ReportID, h.ContractCode, h.ProductCode, h.Timestamp,
-               v.TagName, v.Value, v.ReportValueID
+               v.TagName, v.Value, v.ReportTagValueID
         FROM ReportHistory h
-        INNER JOIN ReportValues v ON v.ReportID=h.ReportID
+        INNER JOIN ReportTagValues v ON v.ReportID=h.ReportID
         WHERE h.CompanyID=? AND ({' OR '.join(conditions)})
-        ORDER BY h.ReportID ASC, v.ReportValueID ASC
+        ORDER BY h.ReportID ASC, v.ReportTagValueID ASC
     """, args).fetchall()
+
     grouped = {}
     for row in rows:
-        key = (str(row["ContractCode"] or "").strip().lower(), str(row["ProductCode"] or "").strip().lower())
+        key = (
+            str(row["ContractCode"] or "").strip().lower(),
+            str(row["ProductCode"] or "").strip().lower(),
+        )
         group = grouped.setdefault(key, {"tags": {}})
         tag = str(row["TagName"] or "").strip()
         if tag:
             group["tags"].setdefault(tag, []).append(row["Value"])
     return grouped
-
 
 def _normalize_filter_text(value):
     return _normalize_digits(value).strip().lower()
