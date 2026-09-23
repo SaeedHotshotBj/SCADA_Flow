@@ -135,9 +135,7 @@ def save_report_snapshot(
         except (TypeError, ValueError):
             pass
 
-    # Keep every TagMapper-defined numeric tag available to ManagementPanel
-    # formulas, even when it is not selected as a ReportOutput column.
-    _report_plc._append_tagmapper_values(values, tags, company_id, plc_id)
+    tagmapper_values = _report_plc._collect_tagmapper_values(tags, company_id, plc_id)
 
     variables = _report_plc._formula_variables(tags, duration)
     for calculation in calculation_definitions:
@@ -204,6 +202,12 @@ def save_report_snapshot(
         conn.executemany(
             "INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",
             [(report_id, name, value) for name, value in values],
+        )
+        _report_plc._persist_report_tag_values(
+            conn,
+            report_id,
+            tagmapper_values,
+            plc_id,
         )
         conn.commit()
         return int(report_id)
