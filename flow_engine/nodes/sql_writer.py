@@ -12,6 +12,7 @@ from services.historian_service import HistorianService
 from services.plc_identity import insert_plc_data, ensure_plc_identity_schema
 from services.tag_registry import TagRegistry
 from services.report_service import save_report_snapshot
+from services.report_plc import persist_tagmapper_snapshot
 
 
 class SQLWriter:
@@ -42,14 +43,21 @@ class SQLWriter:
             if isinstance(flow, str):
                 flow = json.loads(flow)
             nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
-            for node in nodes.values():
-                if node.get("name") != "ReportOutput":
+            for node_id, node in nodes.items():
+                if not isinstance(node, dict) or node.get("name") != "ReportOutput":
                     continue
                 data = node.get("data", {}) or {}
                 config = data.get("config", data) or {}
                 products = config.get("products", [])
                 if isinstance(products, list):
-                    return products
+                    annotated = []
+                    for item in products:
+                        if not isinstance(item, dict):
+                            continue
+                        entry = dict(item)
+                        entry.setdefault("report_node_id", str(node_id))
+                        annotated.append(entry)
+                    return annotated
         except Exception as exc:
             print("SQLWRITER REPORT CONFIG ERROR:", exc)
         return []
@@ -218,29 +226,126 @@ class SQLWriter:
                 )
         return len(trigger_names)
 
+    def _persist_edge_tagmapper_values(self, plc_id, tags, events, registers, timestamp=None):
+        if not plc_id or not isinstance(tags, dict) or not isinstance(events, list):
+            return 0
+
+        context = self._get_management_context_tags(registers)
+        saved = 0
+
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+
+            snapshot = dict(tags)
+            snapshot.update({k: v for k, v in context.items() if v is not None})
+            snapshot.update({
+                str(k).strip(): v
+                for k, v in (event.get("tags", {}) or {}).items()
+                if str(k).strip() and v is not None
+            })
+
+            try:
+                saved += persist_tagmapper_snapshot(
+                    self.company_id,
+                    snapshot,
+                    plc_id,
+                    timestamp=str(
+                        event.get("timestamp")
+                        or timestamp
+                        or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    ).replace("T", " "),
+                    trigger_event_id=event.get("event_id"),
+                )
+            except Exception as exc:
+                print(
+                    "TAGMAPPER VALUE STORE ERROR:",
+                    "CompanyID=", self.company_id,
+                    "PLC_ID=", plc_id,
+                    "EventID=", event.get("event_id"),
+                    "Reason=", exc,
+                )
+
+        return saved
+
     def _save_edge_trigger_events(self, plc_id, tags, events, report_products, registers):
         if not plc_id or not isinstance(events, list) or not report_products:
             return 0
         context = self._get_management_context_tags(registers)
         saved = 0
-        report_names = {str(p.get("tag", "")).strip().lower() for p in report_products if isinstance(p, dict)}
+        report_names = {
+            str(p.get("tag", "")).strip().lower()
+            for p in report_products
+            if isinstance(p, dict)
+        }
         for event in events:
             if not isinstance(event, dict):
                 continue
+
             event_tags = event.get("tags", {}) or {}
-            matched = next((str(n).strip() for n in event_tags if str(n).strip().lower() in report_names), None)
+
+            # EdgeTriggerService may have created the event before SQLWriter
+            # persists the current TagMapper sample. Match against both the
+            # historical event snapshot and the current Flow payload.
+            available_tags = {}
+            available_tags.update({
+                str(k).strip(): v
+                for k, v in event_tags.items()
+                if str(k).strip() and v is not None
+            })
+            available_tags.update({
+                str(k).strip(): v
+                for k, v in tags.items()
+                if str(k).strip() and v is not None
+            })
+
+            matched = next(
+                (
+                    name
+                    for name in available_tags
+                    if str(name).strip().lower() in report_names
+                ),
+                None,
+            )
             if not matched:
                 continue
+
             snapshot = dict(tags)
             snapshot.update({k: v for k, v in context.items() if v is not None})
-            snapshot.update({str(k).strip(): v for k, v in event_tags.items() if v is not None})
+            snapshot.update({
+                str(k).strip(): v
+                for k, v in event_tags.items()
+                if str(k).strip() and v is not None
+            })
+
+            trigger_value = available_tags.get(matched)
             report_id = save_report_snapshot(
-                self.company_id, snapshot, report_products,
-                timestamp=str(event.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")).replace("T", " "),
+                self.company_id,
+                snapshot,
+                report_products,
+                timestamp=str(
+                    event.get("timestamp")
+                    or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                ).replace("T", " "),
                 trigger_tag=matched,
                 trigger_register=event.get("register"),
-                trigger_value=event_tags.get(matched),
+                trigger_value=trigger_value,
                 plc_id=plc_id,
+                trigger_edge=event.get("edge"),
+                start_timestamp=event.get("start_timestamp"),
+                end_timestamp=event.get("end_timestamp"),
+                duration_seconds=event.get("duration_seconds", 0),
+                start_complete=event.get("start_complete", 1),
+                trigger_event_id=event.get("event_id"),
+                report_node_id=next(
+                    (
+                        str(item.get("report_node_id")).strip()
+                        for item in report_products
+                        if isinstance(item, dict)
+                        and str(item.get("report_node_id", "")).strip()
+                    ),
+                    None,
+                ),
             )
             if report_id is not None:
                 saved += 1
@@ -307,6 +412,25 @@ class SQLWriter:
         report_products = self._cached_report_products
 
         timestamp = data.get("Timestamp")
+        context_tags = dict(tags)
+        context_tags.update({
+            key: value
+            for key, value in self._get_management_context_tags(registers).items()
+            if value is not None
+        })
+        persist_tagmapper_snapshot(
+            self.company_id,
+            context_tags,
+            plc_id,
+            timestamp=timestamp,
+        )
+        self._persist_edge_tagmapper_values(
+            plc_id,
+            context_tags,
+            edge_events,
+            registers,
+            timestamp=timestamp,
+        )
         edge_report_written = self._save_edge_trigger_events(plc_id, tags, edge_events, report_products, registers)
         trigger_written = 0
         if not edge_events:

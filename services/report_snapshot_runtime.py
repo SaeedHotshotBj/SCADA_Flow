@@ -115,6 +115,10 @@ def save_report_snapshot(
     timestamp = timestamp or end_timestamp or start_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     plc_id = _plc_id(plc_id)
     contract, product = _snapshot_context(all_products, tags)
+    if contract in (None, ""):
+        contract = tags.get("ContractCode")
+    if product in (None, ""):
+        product = tags.get("ProductCode")
     lookup = {str(key).strip().lower(): (key, value) for key, value in tags.items()}
     values = []
 
@@ -134,6 +138,8 @@ def save_report_snapshot(
             values.append((str(item.get("name", tag)).strip() or tag, float(found[1])))
         except (TypeError, ValueError):
             pass
+
+    tagmapper_values = _report_plc._collect_tagmapper_values(tags, company_id, plc_id)
 
     variables = _report_plc._formula_variables(tags, duration)
     for calculation in calculation_definitions:
@@ -200,6 +206,17 @@ def save_report_snapshot(
         conn.executemany(
             "INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",
             [(report_id, name, value) for name, value in values],
+        )
+        _report_plc._persist_tagmapper_values(
+            conn,
+            company_id,
+            plc_id,
+            timestamp,
+            contract,
+            product,
+            tagmapper_values,
+            trigger_event_id=trigger_event_id,
+            report_node_id=report_node_id,
         )
         conn.commit()
         return int(report_id)
