@@ -107,6 +107,38 @@ def _persist_tagmapper_values(
 ):
     if not tag_values:
         return
+
+    values = list(tag_values)
+
+    # A production event can reach save_report_snapshot twice: once from
+    # EdgeTriggerService and again from SQLWriter after TagMapper has run.
+    # Keep TagMapperValues independently complete without duplicating the same
+    # event/tag when the second call arrives.
+    if trigger_event_id and report_node_id:
+        existing = conn.execute(
+            """
+            SELECT LOWER(TagName) AS TagName
+            FROM TagMapperValues
+            WHERE CompanyID=?
+              AND TriggerEventID=?
+              AND ReportNodeID=?
+            """,
+            (
+                int(company_id),
+                str(trigger_event_id),
+                str(report_node_id),
+            ),
+        ).fetchall()
+        existing_names = {str(row["TagName"]).strip().lower() for row in existing}
+        values = [
+            (name, value)
+            for name, value in values
+            if str(name).strip().lower() not in existing_names
+        ]
+
+    if not values:
+        return
+
     conn.executemany(
         """
         INSERT INTO TagMapperValues
@@ -135,7 +167,7 @@ def _persist_tagmapper_values(
                 str(trigger_event_id) if trigger_event_id else None,
                 str(report_node_id) if report_node_id else None,
             )
-            for name, value in tag_values
+            for name, value in values
         ],
     )
 
@@ -432,6 +464,7 @@ def save_report_snapshot(
     all_products = [item for item in (report_products or []) if isinstance(item, dict)]
     calculation_definitions = _all_management_calculations(company_id)
 
+    existing_report_id = None
     if trigger_event_id and report_node_id:
         conn = get_connection()
         try:
@@ -440,7 +473,7 @@ def save_report_snapshot(
                 (str(trigger_event_id), str(report_node_id)),
             ).fetchone()
             if row:
-                return int(row["ReportID"])
+                existing_report_id = int(row["ReportID"])
         finally:
             conn.close()
 
@@ -505,6 +538,41 @@ def save_report_snapshot(
     for name, value in lifecycle_values.items():
         if name.lower() not in {key.lower() for key, _ in values}:
             values.append((name, value))
+
+    if existing_report_id is not None:
+        # The first call for this event may happen before SQLWriter has placed
+        # the current TagMapper/context values into the payload. A later call
+        # has the complete TagMapper payload; use it to finish the independent
+        # TagMapperValues store instead of returning too early.
+        conn = get_connection()
+        try:
+            conn.execute(
+                """
+                UPDATE ReportHistory
+                SET ContractCode=COALESCE(ContractCode, ?),
+                    ProductCode=COALESCE(ProductCode, ?)
+                WHERE ReportID=?
+                """,
+                (contract, product, existing_report_id),
+            )
+            _persist_tagmapper_values(
+                conn,
+                company_id,
+                plc_id,
+                timestamp,
+                contract,
+                product,
+                tagmapper_values,
+                trigger_event_id=trigger_event_id,
+                report_node_id=report_node_id,
+            )
+            conn.commit()
+            return existing_report_id
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     if not values:
         return None
