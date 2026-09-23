@@ -43,6 +43,56 @@ def _allowed(item, user_role):
     return str(user_role or "").strip().lower() in configured
 
 
+def _tagmapper_names(company_id, plc_id=None):
+    """Return TagMapper-defined tag names for the report's PLC."""
+    names = set()
+    for node in _flow_nodes(company_id).values():
+        if not isinstance(node, dict) or node.get("name") != "TagMapper":
+            continue
+        data = node.get("data", {}) or {}
+        config = data.get("config", data) or {}
+        mappings = config.get("mappings", []) if isinstance(config, dict) else []
+        if not isinstance(mappings, list):
+            continue
+        for item in mappings:
+            if not isinstance(item, dict):
+                continue
+            mapping_plc_id = _plc_id(item.get("plc_id", item.get("PLC_ID")))
+            if plc_id is not None and mapping_plc_id != plc_id:
+                continue
+            tag_name = str(item.get("name", "")).strip()
+            if tag_name:
+                names.add(tag_name)
+    return names
+
+
+def _append_tagmapper_values(values, tags, company_id, plc_id):
+    """Persist numeric values for every TagMapper-defined tag available in the payload."""
+    lookup = {
+        str(key).strip().lower(): value
+        for key, value in (tags or {}).items()
+    }
+    stored_names = {
+        str(name).strip().lower()
+        for name, _ in values
+    }
+
+    for tag_name in sorted(_tagmapper_names(company_id, plc_id), key=str.lower):
+        if tag_name.lower() in stored_names:
+            continue
+        value = lookup.get(tag_name.lower())
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(number):
+            continue
+        values.append((tag_name, number))
+        stored_names.add(tag_name.lower())
+
+
 def _management_calculations(company_id, user_role=None):
     result = []
     seen = set()
@@ -323,6 +373,10 @@ def save_report_snapshot(
             used_names.add(tag.lower())
         except (TypeError, ValueError):
             pass
+
+    # Keep every TagMapper-defined numeric tag available to ManagementPanel
+    # formulas, even when it is not selected as a ReportOutput column.
+    _append_tagmapper_values(values, tags, company_id, plc_id)
 
     # Flow-designed ManagementPanel calculations become persisted report columns.
     variables = _formula_variables(tags, duration)
