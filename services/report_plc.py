@@ -903,7 +903,10 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None):
 
     result["totals"] = [round(value, 3) for value in totals]
     result["grand_total"] = round(sum(totals), 3)
-    return result__all__ = [
+    return result
+
+
+__all__ = [
     "TAGMAPPER_EVENT_NODE_ID",
     "persist_tagmapper_snapshot",
     "ensure_report_tables",
