@@ -530,7 +530,7 @@ def get_management_data(company_id, filters=None):
         if not base_rows:
             return {"columns": [], "rows": [], "count": 0}
 
-        groups = _report_values_for_pairs(conn, company_id, base_rows)
+        groups = _report_tag_values_for_pairs(conn, company_id, base_rows)
         calculations = _management_calculations(company_id)
         expression_node = ExpressionNode({"expressions": calculations}) if calculations else None
 
