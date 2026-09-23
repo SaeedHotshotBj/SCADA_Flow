@@ -417,6 +417,7 @@ def ensure_report_tables():
                 )
             WHERE TriggerEventID IS NOT NULL
               AND ReportNodeID IS NOT NULL
+        """
         )
 
         legacy_exists = conn.execute(
