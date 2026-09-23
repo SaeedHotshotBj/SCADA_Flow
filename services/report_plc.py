@@ -94,16 +94,47 @@ def _collect_tagmapper_values(tags, company_id, plc_id):
     return values
 
 
-def _persist_report_tag_values(conn, report_id, tag_values, plc_id=None):
+def _persist_tagmapper_values(
+    conn,
+    company_id,
+    plc_id,
+    timestamp,
+    contract_code,
+    product_code,
+    tag_values,
+    trigger_event_id=None,
+    report_node_id=None,
+):
     if not tag_values:
         return
     conn.executemany(
         """
-        INSERT INTO ReportTagValues(ReportID, PLC_ID, TagName, Value)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO TagMapperValues
+        (
+            CompanyID,
+            PLC_ID,
+            Timestamp,
+            ContractCode,
+            ProductCode,
+            TagName,
+            Value,
+            TriggerEventID,
+            ReportNodeID
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            (int(report_id), plc_id, str(name), float(value))
+            (
+                int(company_id),
+                plc_id,
+                timestamp,
+                contract_code,
+                product_code,
+                str(name),
+                float(value),
+                str(trigger_event_id) if trigger_event_id else None,
+                str(report_node_id) if report_node_id else None,
+            )
             for name, value in tag_values
         ],
     )
@@ -237,13 +268,17 @@ def ensure_report_tables():
                 Value REAL,
                 FOREIGN KEY(ReportID) REFERENCES ReportHistory(ReportID) ON DELETE CASCADE
             );
-            CREATE TABLE IF NOT EXISTS ReportTagValues(
-                ReportTagValueID INTEGER PRIMARY KEY AUTOINCREMENT,
-                ReportID INTEGER NOT NULL,
+            CREATE TABLE IF NOT EXISTS TagMapperValues(
+                TagMapperValueID INTEGER PRIMARY KEY AUTOINCREMENT,
+                CompanyID INTEGER NOT NULL,
                 PLC_ID INTEGER,
+                Timestamp TEXT NOT NULL,
+                ContractCode TEXT,
+                ProductCode TEXT,
                 TagName TEXT NOT NULL,
                 Value REAL,
-                FOREIGN KEY(ReportID) REFERENCES ReportHistory(ReportID) ON DELETE CASCADE
+                TriggerEventID TEXT,
+                ReportNodeID TEXT
             );
             """
         )
@@ -268,14 +303,48 @@ def ensure_report_tables():
             "ON ReportValues(ReportID, TagName)"
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_report_tag_values_report_tag "
-            "ON ReportTagValues(ReportID, TagName)"
+            "CREATE INDEX IF NOT EXISTS idx_tagmapper_values_company_context_tag_time "
+            "ON TagMapperValues(CompanyID, ContractCode, ProductCode, TagName, Timestamp)"
         )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_event_node "
             "ON ReportHistory(TriggerEventID, ReportNodeID) "
             "WHERE TriggerEventID IS NOT NULL AND ReportNodeID IS NOT NULL"
         )
+
+        legacy_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ReportTagValues' LIMIT 1"
+        ).fetchone()
+        if legacy_exists:
+            conn.execute(
+                """
+                INSERT INTO TagMapperValues
+                (
+                    CompanyID,
+                    PLC_ID,
+                    Timestamp,
+                    ContractCode,
+                    ProductCode,
+                    TagName,
+                    Value,
+                    TriggerEventID,
+                    ReportNodeID
+                )
+                SELECT
+                    h.CompanyID,
+                    v.PLC_ID,
+                    h.Timestamp,
+                    h.ContractCode,
+                    h.ProductCode,
+                    v.TagName,
+                    v.Value,
+                    h.TriggerEventID,
+                    h.ReportNodeID
+                FROM ReportTagValues v
+                INNER JOIN ReportHistory h ON h.ReportID = v.ReportID
+                """
+            )
+            conn.execute("DROP TABLE ReportTagValues")
         conn.commit()
     finally:
         conn.close()
@@ -379,6 +448,10 @@ def save_report_snapshot(
     timestamp = timestamp or end_timestamp or start_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     plc_id = _plc_id(plc_id)
     contract, product = _context(all_products, tags)
+    if contract in (None, ""):
+        contract = tags.get("ContractCode")
+    if product in (None, ""):
+        product = tags.get("ProductCode")
     lookup = {str(key).strip().lower(): (key, value) for key, value in tags.items()}
     values = []
     used_names = set()
@@ -470,7 +543,17 @@ def save_report_snapshot(
             "INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",
             [(name, value) for name, value in values],
         )
-        _persist_report_tag_values(conn, report_id, tagmapper_values, plc_id)
+        _persist_tagmapper_values(
+            conn,
+            company_id,
+            plc_id,
+            timestamp,
+            contract,
+            product,
+            tagmapper_values,
+            trigger_event_id=trigger_event_id,
+            report_node_id=report_node_id,
+        )
         conn.commit()
         return report_id
     except sqlite3.IntegrityError:
