@@ -118,19 +118,58 @@ def persist_tagmapper_snapshot(
 
     conn = get_connection()
     try:
-        _persist_tagmapper_values(
-            conn,
-            company_id,
-            plc_id,
-            timestamp,
-            contract,
-            product,
-            tag_values,
-            trigger_event_id=trigger_event_id,
-            report_node_id=TAGMAPPER_EVENT_NODE_ID,
-        )
+        saved = 0
+        for name, value in tag_values:
+            latest = conn.execute(
+                """
+                SELECT Value
+                FROM TagMapperValues
+                WHERE CompanyID=?
+                  AND PLC_ID=?
+                  AND LOWER(COALESCE(ContractCode,''))=LOWER(COALESCE(?, ''))
+                  AND LOWER(COALESCE(ProductCode,''))=LOWER(COALESCE(?, ''))
+                  AND LOWER(TagName)=LOWER(?)
+                ORDER BY Timestamp DESC, TagMapperValueID DESC
+                LIMIT 1
+                """,
+                (
+                    int(company_id),
+                    plc_id,
+                    contract,
+                    product,
+                    str(name),
+                ),
+            ).fetchone()
+
+            changed = latest is None
+            if latest is not None:
+                try:
+                    changed = float(latest["Value"]) != float(value)
+                except (TypeError, ValueError):
+                    changed = str(latest["Value"]) != str(value)
+
+            if not changed and not trigger_event_id:
+                continue
+
+            _persist_tagmapper_values(
+                conn,
+                company_id,
+                plc_id,
+                timestamp,
+                contract,
+                product,
+                [(name, value)],
+                trigger_event_id=trigger_event_id,
+                report_node_id=(
+                    TAGMAPPER_EVENT_NODE_ID
+                    if trigger_event_id
+                    else None
+                ),
+            )
+            saved += 1
+
         conn.commit()
-        return len(tag_values)
+        return saved
     except Exception:
         conn.rollback()
         raise
