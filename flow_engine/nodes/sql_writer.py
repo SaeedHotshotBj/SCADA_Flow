@@ -12,6 +12,7 @@ from services.historian_service import HistorianService
 from services.plc_identity import insert_plc_data, ensure_plc_identity_schema
 from services.tag_registry import TagRegistry
 from services.report_service import save_report_snapshot
+from services.report_plc import persist_tagmapper_snapshot
 
 
 class SQLWriter:
@@ -225,6 +226,48 @@ class SQLWriter:
                 )
         return len(trigger_names)
 
+    def _persist_edge_tagmapper_values(self, plc_id, tags, events, registers, timestamp=None):
+        if not plc_id or not isinstance(tags, dict) or not isinstance(events, list):
+            return 0
+
+        context = self._get_management_context_tags(registers)
+        saved = 0
+
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+
+            snapshot = dict(tags)
+            snapshot.update({k: v for k, v in context.items() if v is not None})
+            snapshot.update({
+                str(k).strip(): v
+                for k, v in (event.get("tags", {}) or {}).items()
+                if str(k).strip() and v is not None
+            })
+
+            try:
+                saved += persist_tagmapper_snapshot(
+                    self.company_id,
+                    snapshot,
+                    plc_id,
+                    timestamp=str(
+                        event.get("timestamp")
+                        or timestamp
+                        or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    ).replace("T", " "),
+                    trigger_event_id=event.get("event_id"),
+                )
+            except Exception as exc:
+                print(
+                    "TAGMAPPER VALUE STORE ERROR:",
+                    "CompanyID=", self.company_id,
+                    "PLC_ID=", plc_id,
+                    "EventID=", event.get("event_id"),
+                    "Reason=", exc,
+                )
+
+        return saved
+
     def _save_edge_trigger_events(self, plc_id, tags, events, report_products, registers):
         if not plc_id or not isinstance(events, list) or not report_products:
             return 0
@@ -369,6 +412,13 @@ class SQLWriter:
         report_products = self._cached_report_products
 
         timestamp = data.get("Timestamp")
+        self._persist_edge_tagmapper_values(
+            plc_id,
+            tags,
+            edge_events,
+            registers,
+            timestamp=timestamp,
+        )
         edge_report_written = self._save_edge_trigger_events(plc_id, tags, edge_events, report_products, registers)
         trigger_written = 0
         if not edge_events:
