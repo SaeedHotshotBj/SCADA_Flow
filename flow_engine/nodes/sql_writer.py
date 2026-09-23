@@ -412,9 +412,21 @@ class SQLWriter:
         report_products = self._cached_report_products
 
         timestamp = data.get("Timestamp")
+        context_tags = dict(tags)
+        context_tags.update({
+            key: value
+            for key, value in self._get_management_context_tags(registers).items()
+            if value is not None
+        })
+        persist_tagmapper_snapshot(
+            self.company_id,
+            context_tags,
+            plc_id,
+            timestamp=timestamp,
+        )
         self._persist_edge_tagmapper_values(
             plc_id,
-            tags,
+            context_tags,
             edge_events,
             registers,
             timestamp=timestamp,
