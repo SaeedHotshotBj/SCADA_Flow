@@ -49,7 +49,14 @@ class SQLWriter:
                 config = data.get("config", data) or {}
                 products = config.get("products", [])
                 if isinstance(products, list):
-                    return products
+                    annotated = []
+                    for item in products:
+                        if not isinstance(item, dict):
+                            continue
+                        entry = dict(item)
+                        entry.setdefault("report_node_id", str(node_id))
+                        annotated.append(entry)
+                    return annotated
         except Exception as exc:
             print("SQLWRITER REPORT CONFIG ERROR:", exc)
         return []
@@ -287,7 +294,15 @@ class SQLWriter:
                 duration_seconds=event.get("duration_seconds", 0),
                 start_complete=event.get("start_complete", 1),
                 trigger_event_id=event.get("event_id"),
-                report_node_id=event.get("report_node_id"),
+                report_node_id=next(
+                    (
+                        str(item.get("report_node_id")).strip()
+                        for item in report_products
+                        if isinstance(item, dict)
+                        and str(item.get("report_node_id", "")).strip()
+                    ),
+                    None,
+                ),
             )
             if report_id is not None:
                 saved += 1
