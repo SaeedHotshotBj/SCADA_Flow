@@ -108,68 +108,100 @@ def _persist_tagmapper_values(
     if not tag_values:
         return
 
-    values = list(tag_values)
+    event_id = str(trigger_event_id) if trigger_event_id else None
+    node_id = str(report_node_id) if report_node_id else None
 
-    # A production event can reach save_report_snapshot twice: once from
-    # EdgeTriggerService and again from SQLWriter after TagMapper has run.
-    # Keep TagMapperValues independently complete without duplicating the same
-    # event/tag when the second call arrives.
-    if trigger_event_id and report_node_id:
-        existing = conn.execute(
+    for name, value in tag_values:
+        tag_name = str(name).strip()
+        if not tag_name:
+            continue
+
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(number):
+            continue
+
+        existing = None
+        if event_id and node_id:
+            existing = conn.execute(
+                """
+                SELECT TagMapperValueID
+                FROM TagMapperValues
+                WHERE CompanyID=?
+                  AND TriggerEventID=?
+                  AND ReportNodeID=?
+                  AND LOWER(TagName)=LOWER(?)
+                ORDER BY TagMapperValueID
+                LIMIT 1
+                """,
+                (int(company_id), event_id, node_id, tag_name),
+            ).fetchone()
+
+        if existing:
+            # The first event snapshot can be written before TagMapper/context
+            # is available. A later SQLWriter pass must enrich that same row
+            # instead of skipping it because the Tag already exists.
+            conn.execute(
+                """
+                UPDATE TagMapperValues
+                SET PLC_ID=?,
+                    Timestamp=?,
+                    ContractCode=CASE
+                        WHEN ? IS NOT NULL AND TRIM(CAST(? AS TEXT))<>'' THEN ?
+                        ELSE ContractCode
+                    END,
+                    ProductCode=CASE
+                        WHEN ? IS NOT NULL AND TRIM(CAST(? AS TEXT))<>'' THEN ?
+                        ELSE ProductCode
+                    END,
+                    Value=?
+                WHERE TagMapperValueID=?
+                """,
+                (
+                    plc_id,
+                    timestamp,
+                    contract_code,
+                    contract_code,
+                    contract_code,
+                    product_code,
+                    product_code,
+                    product_code,
+                    number,
+                    int(existing["TagMapperValueID"]),
+                ),
+            )
+            continue
+
+        conn.execute(
             """
-            SELECT LOWER(TagName) AS TagName
-            FROM TagMapperValues
-            WHERE CompanyID=?
-              AND TriggerEventID=?
-              AND ReportNodeID=?
-            """,
+            INSERT INTO TagMapperValues
             (
-                int(company_id),
-                str(trigger_event_id),
-                str(report_node_id),
-            ),
-        ).fetchall()
-        existing_names = {str(row["TagName"]).strip().lower() for row in existing}
-        values = [
-            (name, value)
-            for name, value in values
-            if str(name).strip().lower() not in existing_names
-        ]
-
-    if not values:
-        return
-
-    conn.executemany(
-        """
-        INSERT INTO TagMapperValues
-        (
-            CompanyID,
-            PLC_ID,
-            Timestamp,
-            ContractCode,
-            ProductCode,
-            TagName,
-            Value,
-            TriggerEventID,
-            ReportNodeID
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
+                CompanyID,
+                PLC_ID,
+                Timestamp,
+                ContractCode,
+                ProductCode,
+                TagName,
+                Value,
+                TriggerEventID,
+                ReportNodeID
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             (
                 int(company_id),
                 plc_id,
                 timestamp,
                 contract_code,
                 product_code,
-                str(name),
-                float(value),
-                str(trigger_event_id) if trigger_event_id else None,
-                str(report_node_id) if report_node_id else None,
-            )
-            for name, value in values
-        ],
-    )
+                tag_name,
+                number,
+                event_id,
+                node_id,
+            ),
+        )
 
 
 def _management_calculations(company_id, user_role=None):
@@ -342,6 +374,49 @@ def ensure_report_tables():
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_event_node "
             "ON ReportHistory(TriggerEventID, ReportNodeID) "
             "WHERE TriggerEventID IS NOT NULL AND ReportNodeID IS NOT NULL"
+        )
+
+        # Repair TagMapper rows that were written before the complete event
+        # context was available. ReportHistory is the authoritative event
+        # context for the same TriggerEventID + ReportNodeID.
+        conn.execute(
+            """
+            UPDATE TagMapperValues
+            SET PLC_ID=COALESCE(
+                    PLC_ID,
+                    (
+                        SELECT h.PLC_ID
+                        FROM ReportHistory h
+                        WHERE h.TriggerEventID=TagMapperValues.TriggerEventID
+                          AND h.ReportNodeID=TagMapperValues.ReportNodeID
+                        ORDER BY h.ReportID DESC
+                        LIMIT 1
+                    )
+                ),
+                ContractCode=COALESCE(
+                    NULLIF(TRIM(CAST(ContractCode AS TEXT)), ''),
+                    (
+                        SELECT h.ContractCode
+                        FROM ReportHistory h
+                        WHERE h.TriggerEventID=TagMapperValues.TriggerEventID
+                          AND h.ReportNodeID=TagMapperValues.ReportNodeID
+                        ORDER BY h.ReportID DESC
+                        LIMIT 1
+                    )
+                ),
+                ProductCode=COALESCE(
+                    NULLIF(TRIM(CAST(ProductCode AS TEXT)), ''),
+                    (
+                        SELECT h.ProductCode
+                        FROM ReportHistory h
+                        WHERE h.TriggerEventID=TagMapperValues.TriggerEventID
+                          AND h.ReportNodeID=TagMapperValues.ReportNodeID
+                        ORDER BY h.ReportID DESC
+                        LIMIT 1
+                    )
+                )
+            WHERE TriggerEventID IS NOT NULL
+              AND ReportNodeID IS NOT NULL
         )
 
         legacy_exists = conn.execute(
