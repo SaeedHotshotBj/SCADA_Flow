@@ -238,9 +238,9 @@ class PLCReader:
                 register_key = str(mapping["register"])
                 storage = str(mapping.get("storage", "TIME")).upper()
 
-                # Raw TIME tags are live-only. Never resurrect an old
+                # Raw TIME and LIVE tags are live-only. Never resurrect an old
                 # historical sample as a current PLC value.
-                if storage == "TIME":
+                if storage in {"TIME", "LIVE"}:
                     if register_key not in live_registers:
                         continue
                     value = live_registers[register_key]
