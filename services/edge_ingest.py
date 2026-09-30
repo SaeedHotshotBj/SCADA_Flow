@@ -307,7 +307,7 @@ def _flow_tag_storage(company_id):
             if not name:
                 continue
             storage = str(mapping.get("storage", "TIME")).upper().strip()
-            if storage not in {"TIME", "TRIGGER"}:
+            if storage not in {"TIME", "LIVE", "TRIGGER"}:
                 continue
 
             explicit = mapping.get("plc_id", mapping.get("PLC_ID"))
