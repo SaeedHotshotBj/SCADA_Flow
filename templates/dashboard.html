@@ -58,7 +58,7 @@ body { background: #111827; color: #fff; font-family: Arial, sans-serif; }
     <div class="dashboard-row">
       {% for w in widgets or [] %}
         {% if w and w.get('_dashboard_type') != 'machine' and w.get('_dashboard_type') != 'machine_parameter' and w.get('tag') %}
-          <div class="widget" data-tag="{{ w.get('tag')|e }}" data-configured-tag="{{ w.get('configured_tag','')|e }}" data-plc-id="{{ w.get('plc_id') if w.get('plc_id') is not none else '' }}">
+          <div class="widget" data-tag="{{ w.get('tag')|e }}" data-configured-tag="{{ w.get('configured_tag','')|e }}" data-plc-id="{{ w.get('plc_id') if w.get('plc_id') is not none else '' }}" data-storage="{{ w.get('storage','')|e }}">
             <div class="widget-title">{{ w.get('title', w.get('tag',''))|e }}</div>
             <div class="widget-value" data-value>--</div>
             <div class="widget-unit">{{ w.get('unit','')|e }}</div>
@@ -94,7 +94,7 @@ body { background: #111827; color: #fff; font-family: Arial, sans-serif; }
             <div class="machine-parameters">
               {% for p in m.get('parameters', []) %}
                 {% if p.get('tag') %}
-                  <div class="machine-parameter" data-tag="{{ p.get('tag')|e }}" data-configured-tag="{{ p.get('configured_tag','')|e }}" data-plc-id="{{ p.get('plc_id') if p.get('plc_id') is not none else '' }}">
+                  <div class="machine-parameter" data-tag="{{ p.get('tag')|e }}" data-configured-tag="{{ p.get('configured_tag','')|e }}" data-plc-id="{{ p.get('plc_id') if p.get('plc_id') is not none else '' }}" data-storage="{{ p.get('storage','')|e }}">
                     <div class="machine-parameter-label">{{ p.get('label',p.get('tag',''))|e }}</div>
                     <div class="machine-parameter-value"><span data-value>--</span><span class="machine-parameter-unit">{{ p.get('unit','')|e }}</span></div>
                   </div>
@@ -111,13 +111,24 @@ body { background: #111827; color: #fff; font-family: Arial, sans-serif; }
 <script src="https://cdn.socket.io/4.8.4/socket.io.min.js"></script>
 <script>
 let dashboardSocketConnected=false;
+const dashboardLastUpdate={};
 function normalizeTag(value){return String(value == null ? "" : value).trim().toLowerCase();}
+function normalizeStorage(value){return String(value == null ? "" : value).trim().toUpperCase();}
+function valueKey(plcId,tag){return String(plcId==null?"":plcId)+"::"+normalizeTag(tag);}
+function parseTimestamp(value){if(!value)return null;const text=String(value).trim().replace(" ","T");const ms=Date.parse(text);return Number.isFinite(ms)?ms:null;}
 function setOnline(){const s=document.getElementById("status");s.textContent="ONLINE";s.className="status online";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="ONLINE";e.classList.add("online-state")});}
 function setOffline(){const s=document.getElementById("status");s.textContent="OFFLINE";s.className="status offline";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="OFFLINE";e.classList.remove("online-state")});}
-function apply(tag,value,plcId){if(value===null||value===undefined)return;const normal=normalizeTag(tag);const pid=plcId==null?"":String(plcId);document.querySelectorAll("[data-tag]").forEach(row=>{const rowPid=String(row.dataset.plcId||"");const rowTag=normalizeTag(row.dataset.tag);const configured=normalizeTag(row.dataset.configuredTag);if((normal===rowTag||normal===configured)&&(rowPid===""||pid===""||rowPid===pid)){const target=row.querySelector("[data-value]");if(target)target.textContent=String(value);}});}
-function applyAll(data){if(!data){setOffline();return;}if(Array.isArray(data.TagValues)){data.TagValues.forEach(item=>apply(item.TagName,item.Value,item.PLC_ID));}else{Object.keys(data.Tags||{}).forEach(k=>apply(k,data.Tags[k],null));}if(data.Online===true)setOnline();else if(Array.isArray(data.TagValues)&&data.TagValues.length===0)setOffline();}
-function setupSocket(){if(typeof io!=="function")return;try{const socket=io({withCredentials:true});socket.on("connect",function(){dashboardSocketConnected=true;setOnline();});socket.on("disconnect",function(){dashboardSocketConnected=false;});socket.on("tag_update",function(data){if(!data)return;if(Array.isArray(data.TagValues)){applyAll(data);}else if(data.Tag!==undefined){apply(data.Tag,data.Value,data.PLC_ID);}if(data.Online===true)setOnline();});socket.on("connect_error",function(){dashboardSocketConnected=false;console.warn("DASHBOARD SOCKET ERROR",arguments[0]);});}catch(e){dashboardSocketConnected=false;console.error("DASHBOARD SOCKET INIT ERROR",e);}}
-async function latest(){if(dashboardSocketConnected)return;try{const r=await fetch("/dashboard/latest_plc?t="+Date.now(),{cache:"no-store",credentials:"same-origin",headers:{"Accept":"application/json"}});if(r.redirected)throw new Error("Dashboard data redirected to login");if(!r.ok)throw new Error("HTTP "+r.status);const data=await r.json();applyAll(data);}catch(e){console.error("DASHBOARD DATA ERROR",e);setOffline();}}
+function apply(tag,value,plcId,storageType,timestamp,source){if(value===null||value===undefined)return;const normal=normalizeTag(tag);const pid=plcId==null?"":String(plcId);const incomingStorage=normalizeStorage(storageType);const ts=parseTimestamp(timestamp);const sourceName=source||"socket";document.querySelectorAll("[data-tag]").forEach(row=>{const rowPid=String(row.dataset.plcId||"");const rowTag=normalizeTag(row.dataset.tag);const configured=normalizeTag(row.dataset.configuredTag);const rowStorage=normalizeStorage(row.dataset.storage);if(!((normal===rowTag||normal===configured)&&(rowPid===""||pid===""||rowPid===pid)))return;
+if(sourceName==="socket" && rowStorage==="LIVE" && incomingStorage!=="LIVE")return;
+const key=valueKey(rowPid||pid,normal||rowTag);
+const previous=dashboardLastUpdate[key];
+if(sourceName==="socket" && previous && previous.ts!==null && ts!==null && ts<=previous.ts)return;
+const target=row.querySelector("[data-value]");if(target)target.textContent=String(value);
+dashboardLastUpdate[key]={ts:ts,source:sourceName};
+});}
+function applyAll(data,source){if(!data){setOffline();return;}if(Array.isArray(data.TagValues)){data.TagValues.forEach(item=>apply(item.TagName,item.Value,item.PLC_ID,item.StorageType,item.Timestamp,source));}else{Object.keys(data.Tags||{}).forEach(k=>apply(k,data.Tags[k],null,"",null,source));}if(data.Online===true)setOnline();else if(Array.isArray(data.TagValues)&&data.TagValues.length===0&&source==="http")setOffline();}
+function setupSocket(){if(typeof io!=="function")return;try{const socket=io({withCredentials:true});socket.on("connect",function(){dashboardSocketConnected=true;setOnline();});socket.on("disconnect",function(){dashboardSocketConnected=false;});socket.on("tag_update",function(data){if(!data)return;if(Array.isArray(data.TagValues)){applyAll(data,"socket");}else if(data.Tag!==undefined){apply(data.Tag,data.Value,data.PLC_ID,data.StorageType,data.Timestamp,"socket");}if(data.Online===true)setOnline();});socket.on("connect_error",function(){dashboardSocketConnected=false;console.warn("DASHBOARD SOCKET ERROR",arguments[0]);});}catch(e){dashboardSocketConnected=false;console.error("DASHBOARD SOCKET INIT ERROR",e);}}
+async function latest(){try{const r=await fetch("/dashboard/latest_plc?t="+Date.now(),{cache:"no-store",credentials:"same-origin",headers:{"Accept":"application/json"}});if(r.redirected)throw new Error("Dashboard data redirected to login");if(!r.ok)throw new Error("HTTP "+r.status);const data=await r.json();applyAll(data,"http");}catch(e){console.error("DASHBOARD DATA ERROR",e);if(!dashboardSocketConnected)setOffline();}}
 setupSocket();latest();setInterval(latest,1000);
 </script>
 <script src="/static/dashboard_machine_trend.js?v=3"></script>
