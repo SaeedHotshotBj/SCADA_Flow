@@ -424,6 +424,7 @@ def get_flow_time_tags(company_id):
 
     result = []
     seen = set()
+    storage_map = _flow_tag_storage(company_id)
 
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
@@ -457,7 +458,6 @@ def get_flow_time_tags(company_id):
                     plc_ids = []
             if not plc_ids:
                 # Prefer the PLCs already inferred by the general storage map.
-                storage_map = _flow_tag_storage(company_id)
                 plc_ids = [
                     int(key[0])
                     for key, value in storage_map.items()
