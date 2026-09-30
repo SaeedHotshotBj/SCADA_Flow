@@ -1874,6 +1874,38 @@ def cleanup_old_trend_data():
 
     deleted = cursor.rowcount
 
+    # Historical calculated values are already aggregated on Edge.
+    # Keep only the resolution windows needed by Historical Trend.
+    cursor.execute(
+        """
+        DELETE FROM PLC_Data
+        WHERE StorageType = 'CALCULATED_MINUTE'
+          AND Timestamp <
+              datetime('now', 'localtime', '-2 hours')
+        """
+    )
+    deleted += cursor.rowcount
+
+    cursor.execute(
+        """
+        DELETE FROM PLC_Data
+        WHERE StorageType = 'CALCULATED_HOUR'
+          AND Timestamp <
+              datetime('now', 'localtime', '-2 days')
+        """
+    )
+    deleted += cursor.rowcount
+
+    cursor.execute(
+        """
+        DELETE FROM PLC_Data
+        WHERE StorageType = 'CALCULATED_DAY'
+          AND Timestamp <
+              datetime('now', 'localtime', '-600 days')
+        """
+    )
+    deleted += cursor.rowcount
+
     conn.commit()
 
     cursor.close()
