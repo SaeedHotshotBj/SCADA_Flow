@@ -1108,9 +1108,75 @@ def flow_trend():
         if not flow_json:
             return jsonify({"datasets": []})
 
+        request_data = request.get_json() or {}
+        trend_request = request_data.get("TrendRequest", {}) or {}
+        selected = str(trend_request.get("Tag", "")).strip()
+        requested_tags = trend_request.get("Tags") or ([selected] if selected else [])
+
+        # TIME tags are live-only. Historical calculated tags continue through
+        # the existing Flow-driven TrendDatabaseReader path.
+        if selected and len(requested_tags) <= 1:
+            from flow_engine.nodes.trend_database_reader import TrendDatabaseReader
+            from flow_engine.nodes.trend_output import TrendOutput
+
+            reader = TrendDatabaseReader({"company_id": company_id})
+            tag_plcs = reader._flow_tag_plcs(company_id)
+
+            plc_id = trend_request.get("PLC_ID", trend_request.get("plc_id"))
+            try:
+                plc_id = int(plc_id) if plc_id not in (None, "") else None
+            except (TypeError, ValueError):
+                plc_id = None
+
+            if plc_id is None:
+                plc_id = tag_plcs.get(reader._normalize_tag(selected))
+
+            storage = (
+                get_flow_storage_type(company_id, plc_id, selected)
+                if plc_id is not None
+                else None
+            )
+
+            if storage == "TIME":
+                calendar = trend_request.get("Calendar", "Gregorian")
+                start = reader.normalize_date(trend_request.get("Start"), calendar)
+                end = reader.normalize_date(trend_request.get("End"), calendar)
+
+                rows = get_live_series(
+                    company_id,
+                    plc_id,
+                    selected,
+                    start=start,
+                    end=end,
+                    default_minutes=10,
+                )
+
+                data = {
+                    "CompanyID": company_id,
+                    "PLC_ID": plc_id,
+                    "TrendRequest": dict(
+                        trend_request,
+                        Tag=selected,
+                        Tags=[selected],
+                        Start=start,
+                        End=end,
+                        CompanyID=company_id,
+                        PLC_ID=plc_id,
+                    ),
+                    "TrendData": rows,
+                    "TrendStats": {},
+                    "TrendResolution": {selected: "live"},
+                }
+                output = TrendOutput({}).execute(data)
+                return jsonify(
+                    output.get("ChartData", {"datasets": []})
+                )
+
+        trend_request["CompanyID"] = company_id
+        request_data["TrendRequest"] = trend_request
+
         flow = json.loads(flow_json)
         runner = FlowRunner(flow, company_id)
-        request_data = request.get_json() or {}
         result = runner.execute_request(request_data)
 
         return jsonify(
@@ -1118,8 +1184,9 @@ def flow_trend():
         )
 
     except Exception as e:
-        print("FLOW TREND ERROR:", e)
-        return jsonify({"datasets": []})
+        import traceback
+        traceback.print_exc()
+        return jsonify({"datasets": [], "error": str(e)}), 500
 
 
 # =====================================================
