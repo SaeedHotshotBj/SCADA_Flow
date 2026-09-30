@@ -118,6 +118,119 @@ def _node_connections(nodes, node_id, direction="outputs"):
     return result
 
 
+
+def _node_config(node):
+    data = node.get("data", {}) or {}
+    config = data.get("config", data)
+    if isinstance(config, dict):
+        merged = dict(config)
+        merged.update({key: value for key, value in data.items() if key != "config"})
+        return merged
+    return {}
+
+
+def _node_inputs(nodes, node_id):
+    node = nodes.get(str(node_id), {})
+    result = []
+    for item in (node.get("inputs", {}) or {}).values():
+        if not isinstance(item, dict):
+            continue
+        for connection in item.get("connections", []) or []:
+            if isinstance(connection, dict) and connection.get("node") is not None:
+                result.append(str(connection["node"]))
+    return result
+
+
+def _flow_reader_plcs(nodes, company_plc_ids):
+    result = {}
+    fallback = company_plc_ids[0] if len(company_plc_ids) == 1 else None
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("name") != "PLCReader":
+            continue
+        config = _node_config(node)
+        raw = config.get("plc_id", config.get("PLC_ID"))
+        try:
+            plc_id = int(raw) if raw not in (None, "") else fallback
+        except (TypeError, ValueError):
+            plc_id = fallback
+        if plc_id in company_plc_ids:
+            result[str(node_id)] = plc_id
+    return result
+
+
+def _flow_tagmapper_plcs(nodes, reader_plcs, company_plc_ids):
+    result = {}
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("name") != "TagMapper":
+            continue
+
+        config = _node_config(node)
+        mappings = config.get("mappings", [])
+        ids = set()
+
+        if isinstance(mappings, list):
+            for mapping in mappings:
+                if not isinstance(mapping, dict):
+                    continue
+                raw = mapping.get("plc_id", mapping.get("PLC_ID"))
+                if raw in (None, ""):
+                    continue
+                try:
+                    plc_id = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if plc_id in company_plc_ids:
+                    ids.add(plc_id)
+
+        queue = _node_inputs(nodes, node_id)
+        seen = set()
+        while queue:
+            source = queue.pop(0)
+            if source in seen:
+                continue
+            seen.add(source)
+            if source in reader_plcs:
+                ids.add(reader_plcs[source])
+                continue
+            queue.extend(_node_inputs(nodes, source))
+
+        if not ids and len(company_plc_ids) == 1:
+            ids.add(company_plc_ids[0])
+
+        result[str(node_id)] = sorted(ids)
+
+    return result
+
+
+def _flow_expression_plcs(nodes, expression_node_id, reader_plcs, mapper_plcs, company_plc_ids):
+    queue = _node_inputs(nodes, expression_node_id)
+    result = set()
+    seen = set()
+
+    while queue:
+        source = queue.pop(0)
+        if source in seen:
+            continue
+        seen.add(source)
+
+        node = nodes.get(source, {})
+        name = node.get("name") if isinstance(node, dict) else None
+
+        if source in reader_plcs:
+            result.add(reader_plcs[source])
+            continue
+
+        if name == "TagMapper":
+            result.update(mapper_plcs.get(source, []))
+
+        queue.extend(_node_inputs(nodes, source))
+
+    if not result and len(company_plc_ids) == 1:
+        result.add(company_plc_ids[0])
+
+    return sorted(result)
+
+
 def _flow_tag_storage(company_id):
     flow_json = get_company_flow(company_id)
     if not flow_json:
@@ -224,6 +337,146 @@ def _flow_tag_storage(company_id):
                 if register_key:
                     allowed[(plc_id, register_key)] = storage
 
+
+    # ExpressionNode outputs are historical calculated tags. They are
+    # accepted by the server only as precomputed aggregate values; the raw
+    # formula samples remain local to Edge.
+    reader_plcs = _flow_reader_plcs(nodes, company_plc_ids)
+    mapper_plcs = _flow_tagmapper_plcs(nodes, reader_plcs, company_plc_ids)
+
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("name") != "ExpressionNode":
+            continue
+
+        config = _node_config(node)
+        expressions = config.get("expressions", [])
+        if not isinstance(expressions, list):
+            continue
+
+        node_plcs = _flow_expression_plcs(
+            nodes,
+            node_id,
+            reader_plcs,
+            mapper_plcs,
+            company_plc_ids,
+        )
+
+        for expression in expressions:
+            if not isinstance(expression, dict):
+                continue
+            name = str(expression.get("name", expression.get("result_name", ""))).strip()
+            if not name:
+                continue
+
+            explicit = expression.get("plc_id", expression.get("PLC_ID"))
+            plc_ids = list(node_plcs)
+            if explicit not in (None, ""):
+                try:
+                    explicit_id = int(explicit)
+                    plc_ids = [explicit_id] if explicit_id in company_plc_ids else []
+                except (TypeError, ValueError):
+                    pass
+
+            for plc_id in plc_ids:
+                allowed[(plc_id, name.lower())] = "CALCULATED"
+
+    return allowed
+
+
+def get_flow_storage_type(company_id, plc_id, tag_name):
+    storage_map = _flow_tag_storage(company_id)
+    try:
+        plc_id = int(plc_id)
+    except (TypeError, ValueError):
+        return None
+    tag = str(tag_name or "").strip()
+    if not tag:
+        return None
+    return storage_map.get((plc_id, tag.lower())) or storage_map.get((plc_id, tag))
+
+
+def get_flow_calculated_tags(company_id):
+    flow_json = get_company_flow(company_id)
+    if not flow_json:
+        return []
+
+    try:
+        flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
+    except Exception:
+        return []
+
+    nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
+    if not isinstance(nodes, dict):
+        return []
+
+    conn = get_connection()
+    try:
+        company_plc_ids = [
+            int(row["PLC_ID"])
+            for row in conn.execute(
+                "SELECT PLC_ID FROM PLCs WHERE CompanyID=? ORDER BY PLC_ID",
+                (int(company_id),),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    reader_plcs = _flow_reader_plcs(nodes, company_plc_ids)
+    mapper_plcs = _flow_tagmapper_plcs(nodes, reader_plcs, company_plc_ids)
+    result = []
+    seen = set()
+
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("name") != "ExpressionNode":
+            continue
+
+        config = _node_config(node)
+        expressions = config.get("expressions", [])
+        if not isinstance(expressions, list):
+            continue
+
+        node_plcs = _flow_expression_plcs(
+            nodes,
+            node_id,
+            reader_plcs,
+            mapper_plcs,
+            company_plc_ids,
+        )
+
+        for expression in expressions:
+            if not isinstance(expression, dict):
+                continue
+
+            name = str(expression.get("name", expression.get("result_name", ""))).strip()
+            expression_text = str(expression.get("expression", "")).strip()
+            if not name or not expression_text:
+                continue
+
+            explicit = expression.get("plc_id", expression.get("PLC_ID"))
+            plc_ids = list(node_plcs)
+            if explicit not in (None, ""):
+                try:
+                    explicit_id = int(explicit)
+                    plc_ids = [explicit_id] if explicit_id in company_plc_ids else []
+                except (TypeError, ValueError):
+                    pass
+
+            for plc_id in plc_ids:
+                key = (int(plc_id), name.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append({
+                    "tag": name,
+                    "title": str(expression.get("label", name)).strip() or name,
+                    "unit": str(expression.get("unit", "")).strip(),
+                    "PLC_ID": int(plc_id),
+                    "plc_id": int(plc_id),
+                })
+
+    return result
+
+
     return allowed
 
 
@@ -316,6 +569,15 @@ def ingest_items(items):
             if storage_type is None:
                 storage_type = storage_map.get((plc_id, tag))
 
+            incoming_storage = str(item.get("StorageType", "") or "").strip().upper()
+
+            if incoming_storage in {"LIVE", "TIME", "CALCULATED"}:
+                # LIVE and raw CALCULATED samples are delivered through the
+                # live endpoint and are intentionally never persisted here.
+                if storage_type in {"TIME", "CALCULATED"} or incoming_storage in {"LIVE", "TIME"}:
+                    acks.append(event_id)
+                    continue
+
             if storage_type is None:
                 error = "Tag is not defined for this PLC by the company Flow"
                 errors.append({"EventID": event_id, "Error": error})
@@ -327,6 +589,17 @@ def ingest_items(items):
                     "EventID=", event_id,
                     "Reason=", error,
                 )
+                continue
+
+            if incoming_storage.startswith("CALCULATED_"):
+                if storage_type != "CALCULATED":
+                    error = "Calculated aggregate is not defined by the company Flow"
+                    errors.append({"EventID": event_id, "Error": error})
+                    continue
+                storage_type = incoming_storage
+
+            if incoming_storage in {"LIVE", "TIME"}:
+                acks.append(event_id)
                 continue
 
             existing = conn.execute(
@@ -376,17 +649,18 @@ def ingest_items(items):
                     (event_id, company_id, plc_id, tag, timestamp, received_at),
                 )
 
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO TagHistory
-                        (CompanyID, PLC_ID, TagName, Value, Timestamp, EventID)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (company_id, plc_id, tag, value, timestamp, event_id),
-                    )
-                except Exception as history_exc:
-                    print("EDGE TAG HISTORY WRITE WARNING:", event_id, history_exc)
+                if storage_type in {"TRIGGER", "TRIGGER_SIGNAL"}:
+                    try:
+                        conn.execute(
+                            """
+                            INSERT INTO TagHistory
+                            (CompanyID, PLC_ID, TagName, Value, Timestamp, EventID)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (company_id, plc_id, tag, value, timestamp, event_id),
+                        )
+                    except Exception as history_exc:
+                        print("EDGE TAG HISTORY WRITE WARNING:", event_id, history_exc)
 
                 conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 acks.append(event_id)
@@ -425,4 +699,9 @@ def ingest_items(items):
         conn.close()
 
 
-__all__ = ["ensure_edge_event_schema", "ingest_items"]
+__all__ = [
+    "ensure_edge_event_schema",
+    "ingest_items",
+    "get_flow_storage_type",
+    "get_flow_calculated_tags",
+]
