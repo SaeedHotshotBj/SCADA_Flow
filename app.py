@@ -1485,6 +1485,42 @@ def dashboard():
 
 
 # =====================================================
+# EDGE STORE & FORWARD RECEIVER
+# =====================================================
+
+@app.route("/api/store_forward", methods=["POST"])
+def receive_edge_store_forward():
+    try:
+        payload = request.get_json(silent=True) or {}
+        items = payload.get("items", [])
+        if not isinstance(items, list):
+            return jsonify({
+                "status": "error",
+                "message": "items must be a list",
+            }), 400
+
+        from services.edge_ingest import ingest_items
+        result = ingest_items(items)
+
+        return jsonify({
+            "status": "ok",
+            "acks": result.get("acks", []),
+            "errors": result.get("errors", []),
+            "inserted": result.get("inserted", 0),
+        })
+
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(exc),
+            "acks": [],
+            "errors": [],
+        }), 500
+
+
+# =====================================================
 # EDGE LIVE DATA RECEIVER
 # =====================================================
 
