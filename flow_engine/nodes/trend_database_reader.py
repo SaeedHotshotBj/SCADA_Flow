@@ -92,7 +92,7 @@ class TrendDatabaseReader:
                     name = TrendDatabaseReader._normalize_tag(item.get("tag"))
                     plc_id = TrendDatabaseReader._plc_id(item.get("PLC_ID", item.get("plc_id")))
                     if name and plc_id is not None:
-                        result[name] = plc_id
+                        result.setdefault(name, plc_id)
             except Exception as calc_exc:
                 print("TREND CALCULATED TAG MAP ERROR:", repr(calc_exc))
 
