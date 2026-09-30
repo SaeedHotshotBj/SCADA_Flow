@@ -1650,13 +1650,16 @@ def receive_edge_live():
 
 @app.route("/api/data", methods=["POST"])
 def receive_edge_data():
-    try:
-        data = request.get_json()
+    """Legacy single-item Edge receiver.
 
+    TIME and CALCULATED samples are live-only. TRIGGER data remains historical.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
         if not data:
             return jsonify({
                 "status": "error",
-                "message": "No data"
+                "message": "No data",
             }), 400
 
         plc_id = data.get("PLC_ID")
@@ -1664,108 +1667,83 @@ def receive_edge_data():
         value = data.get("Value")
         timestamp = data.get("Timestamp")
 
-        if plc_id is None:
+        try:
+            plc_id = int(plc_id)
+        except (TypeError, ValueError):
             return jsonify({
                 "status": "error",
-                "message": "PLC_ID missing"
+                "message": "PLC_ID missing",
             }), 400
 
+        tag = str(tag or "").strip()
         if not tag:
             return jsonify({
                 "status": "error",
-                "message": "TagName missing"
+                "message": "TagName missing",
             }), 400
 
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            SELECT CompanyID
-            FROM PLCs
-            WHERE PLC_ID = ?
-            """,
-            (plc_id,)
-        )
-
-        plc = cursor.fetchone()
-
-        if not plc:
-            cursor.close()
-            conn.close()
+        company_id = _company_id_for_plc(plc_id)
+        if company_id is None:
             return jsonify({
                 "status": "error",
-                "message": "PLC not found"
+                "message": "PLC not found",
             }), 404
 
-        company_id = plc["CompanyID"]
-
-        cursor.execute(
-            """
-            INSERT INTO PLC_Data
-            (
-                CompanyID,
-                TagName,
-                Value,
-                StorageType,
-                Timestamp
-            )
-            VALUES
-            (?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))
-            """,
-            (
-                company_id,
-                tag,
-                value,
-                "EDGE",
-                timestamp
-            )
+        flow_storage = get_flow_storage_type(
+            company_id,
+            plc_id,
+            tag,
         )
 
-        cursor.execute(
-            """
-            INSERT INTO TagHistory
-            (
-                CompanyID,
-                PLC_ID,
-                TagName,
-                Value,
-                Timestamp
-            )
-            VALUES
-            (?, ?, ?, ?, COALESCE(?, datetime('now', 'localtime')))
-            """,
-            (
-                company_id,
-                plc_id,
-                tag,
-                value,
-                timestamp
-            )
-        )
+        if flow_storage in {"TIME", "CALCULATED"}:
+            live_item = dict(data)
+            live_item["PLC_ID"] = plc_id
+            live_item["TagName"] = tag
+            live_item["StorageType"] = flow_storage
+            stored = record_live_items(company_id, [live_item])
 
-        conn.commit()
-        cursor.close()
-        conn.close()
+            if stored:
+                from socket_manager import send_dashboard_data
+                send_dashboard_data({
+                    "Online": True,
+                    "CompanyID": company_id,
+                    "Timestamp": timestamp,
+                    "TagValues": [{
+                        "PLC_ID": plc_id,
+                        "TagName": tag,
+                        "Value": value,
+                        "Timestamp": timestamp,
+                    }],
+                })
 
-        socketio.emit(
-            "tag_update",
-            {
-                "Online": True,
+            return jsonify({
+                "status": "ok",
                 "CompanyID": company_id,
                 "PLC_ID": plc_id,
-                "Tag": tag,
-                "Value": value,
-                "Timestamp": timestamp
-            }
-        )
+                "tag": tag,
+                "value": value,
+                "live_only": True,
+            })
+
+        # TRIGGER / TRIGGER_SIGNAL remains a durable event.
+        from services.edge_ingest import ingest_items
+        import uuid
+        event_id = str(data.get("EventID") or uuid.uuid4().hex)
+        item = dict(data)
+        item["EventID"] = event_id
+        item["PLC_ID"] = plc_id
+        item["TagName"] = tag
+
+        result = ingest_items([item])
 
         return jsonify({
-            "status": "ok",
+            "status": "ok" if not result.get("errors") else "error",
             "CompanyID": company_id,
             "PLC_ID": plc_id,
             "tag": tag,
-            "value": value
+            "value": value,
+            "acks": result.get("acks", []),
+            "errors": result.get("errors", []),
         })
 
     except Exception as e:
@@ -1773,7 +1751,7 @@ def receive_edge_data():
         traceback.print_exc()
         return jsonify({
             "status": "error",
-            "message": str(e)
+            "message": str(e),
         }), 500
 
 
