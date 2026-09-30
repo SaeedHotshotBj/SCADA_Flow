@@ -946,72 +946,35 @@ def trend_config():
     }
 
     company_id = get_request_company_id()
-
     if company_id is None:
         return jsonify(result)
 
     flow_json = get_company_flow(company_id)
-
     if not flow_json:
         flow_json = _read_flow_file()
-
     if not flow_json:
         return jsonify(result)
 
     try:
         flow = json.loads(flow_json)
-        nodes = (
-            flow.get("drawflow", {})
-            .get("Home", {})
-            .get("data", {})
-        )
+        nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {})
 
         for node in nodes.values():
             if node.get("name") != "TrendOutput":
                 continue
-
-            config = node.get("data", {})
+            config = node.get("data", {}) or {}
             result["date_picker"] = config.get(
                 "DatePicker",
-                "GregorianPicker"
+                "GregorianPicker",
             )
-
             result["calendar"] = (
                 "Jalali"
                 if result["date_picker"] == "JalaliPicker"
                 else "Gregorian"
             )
 
-        for node in nodes.values():
-            if node.get("name") != "TagMapper":
-                continue
-
-            mappings = node.get("data", {}).get("mappings", [])
-            if not isinstance(mappings, list):
-                continue
-
-            for item in mappings:
-                if str(item.get("storage", "")).upper() != "TIME":
-                    continue
-
-                tag_name = item.get("name")
-                if not tag_name:
-                    continue
-
-                plc_id = item.get("plc_id", item.get("PLC_ID"))
-                try:
-                    plc_id = int(plc_id)
-                except (TypeError, ValueError):
-                    plc_id = None
-                result["tags"].append({
-                    "tag": tag_name,
-                    "title": tag_name,
-                    "unit": item.get("unit", ""),
-                    "PLC_ID": plc_id,
-                    "plc_id": plc_id
-                })
-
-            break
+        # Historical Trend contains only Flow-defined calculated outputs.
+        result["tags"] = get_flow_calculated_tags(company_id)
 
     except Exception as e:
         print("TREND CONFIG ERROR:", e)
@@ -1027,54 +990,11 @@ def trend_config():
 @login_required
 @flow_role_required("TrendOutput")
 def trend_tags():
-    tags = []
-
     try:
         company_id = get_request_company_id()
-        flow = get_flow_data(company_id)
-
-        if not flow:
+        if company_id is None:
             return jsonify([])
-
-        nodes = (
-            flow.get("drawflow", {})
-            .get("Home", {})
-            .get("data", {})
-        )
-
-        for node in nodes.values():
-            if node.get("name") != "TagMapper":
-                continue
-
-            mappings = node.get("data", {}).get("mappings", [])
-            if not isinstance(mappings, list):
-                continue
-
-            for item in mappings:
-                name = item.get("name")
-                if not name:
-                    continue
-
-                if str(item.get("storage", "")).upper() != "TIME":
-                    continue
-
-                plc_id = item.get("plc_id", item.get("PLC_ID"))
-                try:
-                    plc_id = int(plc_id)
-                except (TypeError, ValueError):
-                    plc_id = None
-                tags.append({
-                    "tag": name,
-                    "title": name,
-                    "unit": item.get("unit", ""),
-                    "PLC_ID": plc_id,
-                    "plc_id": plc_id
-                })
-
-            break
-
-        return jsonify(tags)
-
+        return jsonify(get_flow_calculated_tags(company_id))
     except Exception as e:
         print("TREND TAG ERROR:", e)
         return jsonify([])
