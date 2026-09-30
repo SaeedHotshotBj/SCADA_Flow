@@ -610,9 +610,6 @@ def get_flow_calculated_tags(company_id):
     return result
 
 
-    return allowed
-
-
 def _insert_or_ack_existing(conn, event_id, company_id, plc_id, tag, value, timestamp, storage_type):
     try:
         conn.execute(
