@@ -1518,6 +1518,7 @@ def receive_edge_live():
             return jsonify({"status": "error", "message": "items must be a list"}), 400
 
         accepted_by_company = {}
+        company_by_plc = {}
 
         for item in items:
             if not isinstance(item, dict):
@@ -1532,29 +1533,26 @@ def receive_edge_live():
             if not tag:
                 continue
 
-            company_id = _company_id_for_plc(plc_id)
-            if company_id is None:
+            incoming_storage = str(
+                item.get("StorageType", "LIVE") or "LIVE"
+            ).strip().upper()
+            if incoming_storage not in {"LIVE", "CALCULATED", "TIME"}:
                 continue
 
-            flow_storage = get_flow_storage_type(
-                company_id,
-                plc_id,
-                tag,
-            )
-            if flow_storage not in {"TIME", "CALCULATED"}:
-                print(
-                    "EDGE LIVE REJECTED:",
-                    "CompanyID=", company_id,
-                    "PLC_ID=", plc_id,
-                    "Tag=", tag,
-                )
+            if plc_id not in company_by_plc:
+                company_by_plc[plc_id] = _company_id_for_plc(plc_id)
+            company_id = company_by_plc[plc_id]
+            if company_id is None:
                 continue
 
             normalized = dict(item)
             normalized["PLC_ID"] = plc_id
             normalized["TagName"] = tag
-            normalized["StorageType"] = flow_storage
-
+            normalized["StorageType"] = (
+                "CALCULATED"
+                if incoming_storage == "CALCULATED"
+                else "TIME"
+            )
             accepted_by_company.setdefault(company_id, []).append(normalized)
 
         accepted_count = 0
