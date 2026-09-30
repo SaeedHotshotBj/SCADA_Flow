@@ -131,7 +131,6 @@ def _apply_dashboard_edge_timeout(response):
     if response.status_code != 200:
         return response
 
-    conn = None
     try:
         payload = response.get_json(silent=True)
         if not isinstance(payload, dict):
@@ -165,87 +164,78 @@ def _apply_dashboard_edge_timeout(response):
         if not isinstance(tags, dict) or not tags:
             return response
 
-        now_monotonic = time.monotonic()
-        any_fresh = False
-        stale_count = 0
-        # Prefer the actual live values already returned by the dashboard
-        # endpoint. Do not resolve LIVE tags through TagHistory: LIVE data is
-        # intentionally non-persistent and may have no historian row.
-        tag_values = payload.get("TagValues", [])
-        value_items = {
-            str(item.get("TagName", "")).strip().lower(): item
-            for item in tag_values
-            if isinstance(item, dict) and str(item.get("TagName", "")).strip()
-        }
+        conn = None
+        try:
+            from database import get_connection
 
-        for tag in list(tags.keys()):
-            item = value_items.get(str(tag).strip().lower())
-            edge_timestamp = item.get("Timestamp") if item else None
-            plc_id = item.get("PLC_ID") if item else None
+            conn = get_connection()
 
-            if plc_id is None:
-                # Legacy payloads may not carry PLC identity. Keep the old
-                # receive-time fallback for those payloads.
-                if conn is None:
-                    from database import get_connection
-                    conn = get_connection()
+            now_monotonic = time.monotonic()
+            any_fresh = False
+            stale_count = 0
+
+            for tag in list(tags.keys()):
                 plc_id, edge_timestamp = _latest_edge_plc_for_tag(
                     conn,
                     company_id,
                     tag,
                 )
 
-            last_seen = (
-                _edge_last_seen.get((company_id, str(plc_id)))
-                if plc_id is not None
-                else None
-            )
+                if plc_id is None:
+                    continue
 
-            if last_seen is None:
-                parsed = _parse_timestamp(edge_timestamp)
-                if parsed is not None:
-                    age = max(
-                        0.0,
-                        (datetime.now() - parsed).total_seconds(),
-                    )
-                else:
-                    age = timeout + 1
-            else:
-                age = max(
-                    0.0,
-                    now_monotonic - last_seen,
+                last_seen = _edge_last_seen.get(
+                    (company_id, str(plc_id))
                 )
 
-            if age >= timeout:
-                tags[tag] = 0
-                stale_count += 1
-            else:
-                any_fresh = True
+                # After a server restart there may be no in-memory receive
+                # time yet. Fall back to the actual Edge timestamp once.
+                if last_seen is None:
+                    parsed = _parse_timestamp(edge_timestamp)
+                    if parsed is not None:
+                        age = max(
+                            0.0,
+                            (datetime.now() - parsed).total_seconds(),
+                        )
+                    else:
+                        age = 0.0
+                else:
+                    age = max(
+                        0.0,
+                        now_monotonic - last_seen,
+                    )
 
-        payload["Tags"] = tags
-        payload["Online"] = any_fresh
+                if age >= timeout:
+                    tags[tag] = 0
+                    stale_count += 1
+                else:
+                    any_fresh = True
 
-        if stale_count:
-            print(
-                "DASHBOARD EDGE TIMEOUT:",
-                "Company:", company_id,
-                "Timeout:", timeout,
-                "Stale Tags:", stale_count,
+            payload["Tags"] = tags
+            payload["Online"] = any_fresh
+
+            if stale_count:
+                print(
+                    "DASHBOARD EDGE TIMEOUT:",
+                    "Company:", company_id,
+                    "Timeout:", timeout,
+                    "Stale Tags:", stale_count,
+                )
+
+            response.set_data(
+                json.dumps(payload, ensure_ascii=False),
             )
+            response.content_type = "application/json"
 
-        response.set_data(
-            json.dumps(payload, ensure_ascii=False),
-        )
-        response.content_type = "application/json"
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     except Exception as exc:
         print("DASHBOARD EDGE TIMEOUT ERROR:", exc)
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
     return response
 
