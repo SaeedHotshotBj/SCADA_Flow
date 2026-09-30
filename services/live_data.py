@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Asia/Tehran")
-MAX_POINTS_PER_TAG = 3600
+MAX_POINTS_PER_TAG = 7200
 DEFAULT_MAX_AGE_SECONDS = 30
 _LOCK = threading.RLock()
 _BUFFERS = {}
