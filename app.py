@@ -1601,6 +1601,7 @@ def receive_edge_live():
                     "TagName": item["TagName"],
                     "Value": item.get("Value"),
                     "Timestamp": item.get("Timestamp"),
+                    "StorageType": item.get("StorageType"),
                     "title": widget.get("title", item["TagName"]),
                     "unit": widget.get("unit", ""),
                     "AllowedRoles": widget.get("allowed_roles", ""),
