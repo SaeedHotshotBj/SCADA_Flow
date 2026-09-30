@@ -1420,6 +1420,7 @@ def dashboard_latest_plc():
             "TagName": tag,
             "Value": value["Value"],
             "Timestamp": value["Timestamp"],
+            "StorageType": str(widget.get("storage", get_flow_storage_type(company_id, plc_id, tag) or "")).strip().upper(),
             "title": widget.get("title", tag),
             "unit": widget.get("unit", ""),
         })
