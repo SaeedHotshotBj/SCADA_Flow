@@ -207,6 +207,7 @@ except Exception as _service_bootstrap_error:
 
 flow_runner_instance = None
 trend_runtime_tags = []
+_live_edge_debug_last = 0.0
 
 
 # =====================================================
@@ -1465,14 +1466,6 @@ def dashboard_latest_plc():
 
         value = get_live_value(company_id, plc_id, tag)
         if value is None:
-            print(
-                "DASHBOARD LIVE MISS:",
-                "PID=", os.getpid(),
-                "CompanyID=", company_id,
-                "PLC_ID=", plc_id,
-                "Tag=", tag,
-                "Storage=", widget.get("storage", ""),
-            )
             continue
 
         tags[tag] = value["Value"]
@@ -1639,23 +1632,27 @@ def receive_edge_live():
         for company_id, accepted in accepted_by_company.items():
             accepted_count += record_live_items(company_id, accepted)
 
-            print(
-                "EDGE LIVE ACCEPTED:",
-                "CompanyID=", company_id,
-                "COUNT=", len(accepted),
-                "SAMPLES=",
-                [
-                    {
-                        "PLC_ID": item.get("PLC_ID"),
-                        "TagName": item.get("TagName"),
-                        "Value": item.get("Value"),
-                        "Timestamp": item.get("Timestamp"),
-                        "StorageType": item.get("StorageType"),
-                    }
-                    for item in accepted
-                    if str(item.get("StorageType", "")).upper() == "LIVE"
-                ][:20],
-            )
+            global _live_edge_debug_last
+            debug_now = time.monotonic()
+            if debug_now - _live_edge_debug_last >= 5.0:
+                _live_edge_debug_last = debug_now
+                print(
+                    "EDGE LIVE ACCEPTED:",
+                    "CompanyID=", company_id,
+                    "COUNT=", len(accepted),
+                    "SAMPLES=",
+                    [
+                        {
+                            "PLC_ID": item.get("PLC_ID"),
+                            "TagName": item.get("TagName"),
+                            "Value": item.get("Value"),
+                            "Timestamp": item.get("Timestamp"),
+                            "StorageType": item.get("StorageType"),
+                        }
+                        for item in accepted
+                        if str(item.get("StorageType", "")).upper() == "LIVE"
+                    ][:20],
+                )
 
             widget_map = {}
             for widget in get_dashboard_widgets(company_id):
