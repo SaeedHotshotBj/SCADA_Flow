@@ -131,6 +131,7 @@ def _apply_dashboard_edge_timeout(response):
     if response.status_code != 200:
         return response
 
+    conn = None
     try:
         payload = response.get_json(silent=True)
         if not isinstance(payload, dict):
@@ -167,8 +168,6 @@ def _apply_dashboard_edge_timeout(response):
         now_monotonic = time.monotonic()
         any_fresh = False
         stale_count = 0
-        conn = None
-
         # Prefer the actual live values already returned by the dashboard
         # endpoint. Do not resolve LIVE tags through TagHistory: LIVE data is
         # intentionally non-persistent and may have no historian row.
@@ -239,12 +238,14 @@ def _apply_dashboard_edge_timeout(response):
         )
         response.content_type = "application/json"
 
-        if conn is not None:
-            conn.close()
-
-
     except Exception as exc:
         print("DASHBOARD EDGE TIMEOUT ERROR:", exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     return response
 
