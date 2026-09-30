@@ -133,6 +133,16 @@ def _flow_tag_plcs(company_id, nodes):
             for key in keys:
                 result.setdefault(key, set()).update(pid for pid in plc_ids if pid in company_plc_ids)
 
+    try:
+        from services.edge_ingest import get_flow_calculated_tags
+        for item in get_flow_calculated_tags(company_id):
+            tag = str(item.get("tag", "")).strip().lower()
+            plc_id = _to_plc_id(item.get("PLC_ID", item.get("plc_id")))
+            if tag and plc_id is not None:
+                result.setdefault(tag, set()).add(plc_id)
+    except Exception as exc:
+        print("Dashboard calculated tag PLC lookup error:", exc)
+
     return result
 
 
