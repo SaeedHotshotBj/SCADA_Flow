@@ -282,6 +282,13 @@ class SQLWriter:
 
     def execute(self, data=None):
         data = data or {}
+
+        # Trend requests are read-only Flow requests. When SQLWriter appears
+        # on the saved Trend branch, it must pass the request through instead
+        # of treating it as a PLC historian write and requiring PLC_ID.
+        if isinstance(data.get("TrendRequest"), dict):
+            return data
+
         plc_id = self._plc_id(data)
         if plc_id is None:
             raise ValueError("SQLWriter requires PLC_ID in the runtime payload")
