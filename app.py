@@ -54,7 +54,7 @@ from services.live_data import (
 )
 from services.edge_ingest import (
     get_flow_storage_type,
-    get_flow_calculated_tags,
+    get_flow_historical_tags,
 )
 
 
@@ -974,7 +974,7 @@ def trend_config():
             )
 
         # Historical Trend contains only Flow-defined calculated outputs.
-        result["tags"] = get_flow_calculated_tags(company_id)
+        result["tags"] = get_flow_historical_tags(company_id)
 
     except Exception as e:
         print("TREND CONFIG ERROR:", e)
@@ -994,7 +994,7 @@ def trend_tags():
         company_id = get_request_company_id()
         if company_id is None:
             return jsonify([])
-        return jsonify(get_flow_calculated_tags(company_id))
+        return jsonify(get_flow_historical_tags(company_id))
     except Exception as e:
         print("TREND TAG ERROR:", e)
         return jsonify([])
