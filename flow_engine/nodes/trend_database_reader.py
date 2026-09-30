@@ -84,6 +84,18 @@ class TrendDatabaseReader:
                 # TagMapper is the canonical tag-definition node.
                 if result:
                     break
+
+            # Historical Trend also exposes ExpressionNode result tags.
+            try:
+                from services.edge_ingest import get_flow_calculated_tags
+                for item in get_flow_calculated_tags(company_id):
+                    name = TrendDatabaseReader._normalize_tag(item.get("tag"))
+                    plc_id = TrendDatabaseReader._plc_id(item.get("PLC_ID", item.get("plc_id")))
+                    if name and plc_id is not None:
+                        result[name] = plc_id
+            except Exception as calc_exc:
+                print("TREND CALCULATED TAG MAP ERROR:", repr(calc_exc))
+
             return result
         except Exception as exc:
             print("TREND TAG PLC MAP ERROR:", repr(exc))
