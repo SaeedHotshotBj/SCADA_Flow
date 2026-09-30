@@ -167,6 +167,7 @@ def _apply_dashboard_edge_timeout(response):
         now_monotonic = time.monotonic()
         any_fresh = False
         stale_count = 0
+        conn = None
 
         # Prefer the actual live values already returned by the dashboard
         # endpoint. Do not resolve LIVE tags through TagHistory: LIVE data is
@@ -186,8 +187,11 @@ def _apply_dashboard_edge_timeout(response):
             if plc_id is None:
                 # Legacy payloads may not carry PLC identity. Keep the old
                 # receive-time fallback for those payloads.
+                if conn is None:
+                    from database import get_connection
+                    conn = get_connection()
                 plc_id, edge_timestamp = _latest_edge_plc_for_tag(
-                    get_connection(),
+                    conn,
                     company_id,
                     tag,
                 )
@@ -234,6 +238,10 @@ def _apply_dashboard_edge_timeout(response):
             json.dumps(payload, ensure_ascii=False),
         )
         response.content_type = "application/json"
+
+        if conn is not None:
+            conn.close()
+
 
     except Exception as exc:
         print("DASHBOARD EDGE TIMEOUT ERROR:", exc)
