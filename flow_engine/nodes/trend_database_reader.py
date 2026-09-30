@@ -6,8 +6,12 @@
 from datetime import datetime, timedelta
 import json
 import jdatetime
+from zoneinfo import ZoneInfo
 
 from services.trend_query import get_trend_series, get_trend_stats
+
+
+SCADA_TIMEZONE = ZoneInfo("Asia/Tehran")
 from database import row_value
 
 
@@ -161,7 +165,11 @@ class TrendDatabaseReader:
         end = self.normalize_date(request.get("End"), calendar)
 
         if start is None and end is None:
-            end = datetime.now().replace(microsecond=0)
+            # Historian timestamps are stored as SCADA local time (Asia/Tehran).
+            # Do not use the VPS process timezone here, because Ubuntu is
+            # commonly configured for UTC. A UTC/local mismatch can move the
+            # default two-hour window completely away from the newest samples.
+            end = datetime.now(SCADA_TIMEZONE).replace(tzinfo=None, microsecond=0)
             start = end - timedelta(hours=2)
         elif start is None or end is None or start >= end:
             data["TrendData"], data["TrendStats"], data["TrendResolution"] = [], {}, {}
