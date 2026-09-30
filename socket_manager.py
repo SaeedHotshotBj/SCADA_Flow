@@ -460,6 +460,7 @@ def send_dashboard_data(data):
                     "Tag": tag,
                     "Value": value,
                     "Timestamp": item.get("Timestamp", timestamp),
+                    "StorageType": item.get("StorageType", ""),
                     "title": item.get("title", tag),
                     "unit": item.get("unit", ""),
                 }
