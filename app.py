@@ -1545,10 +1545,30 @@ def receive_edge_live():
             if company_id is None:
                 continue
 
+            flow_storage = get_flow_storage_type(
+                company_id,
+                plc_id,
+                tag,
+            )
+
+            if flow_storage not in {"TIME", "LIVE", "CALCULATED"}:
+                continue
+
+            if incoming_storage != flow_storage:
+                print(
+                    "EDGE LIVE STORAGE MISMATCH:",
+                    "CompanyID=", company_id,
+                    "PLC_ID=", plc_id,
+                    "Tag=", tag,
+                    "Incoming=", incoming_storage,
+                    "Flow=", flow_storage,
+                )
+                continue
+
             normalized = dict(item)
             normalized["PLC_ID"] = plc_id
             normalized["TagName"] = tag
-            normalized["StorageType"] = incoming_storage
+            normalized["StorageType"] = flow_storage
             accepted_by_company.setdefault(company_id, []).append(normalized)
 
         accepted_count = 0
