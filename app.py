@@ -1353,37 +1353,7 @@ def trend_request():
 @app.route("/dashboard/latest")
 @login_required
 def dashboard_latest():
-    company_id = get_request_company_id()
-
-    if company_id is None:
-        return jsonify({
-            "Online": False,
-            "Tags": {},
-            "Timestamps": {}
-        })
-
-    widgets = get_dashboard_widgets(company_id)
-    tag_names = [
-        widget.get("tag")
-        for widget in widgets
-        if widget.get("tag")
-    ]
-
-    latest = get_latest_tag_values(company_id, tag_names)
-
-    tags = {
-        tag: item["value"]
-        for tag, item in latest.items()
-    }
-
-    return jsonify({
-        "Online": bool(tags),
-        "Tags": tags,
-        "Timestamps": {
-            tag: item["timestamp"]
-            for tag, item in latest.items()
-        },
-    })
+    return dashboard_latest_plc()
 
 
 @app.route("/dashboard/latest_plc")
