@@ -27,7 +27,8 @@ MAX_MINUTE_BUCKETS_PER_RUN = max(1, int(os.environ.get("SCADA_TREND_MINUTE_BUCKE
 MAX_HOUR_BUCKETS_PER_RUN = max(1, int(os.environ.get("SCADA_TREND_HOUR_BUCKETS_PER_RUN", "48")))
 MAX_DAY_BUCKETS_PER_RUN = max(1, int(os.environ.get("SCADA_TREND_DAY_BUCKETS_PER_RUN", "10")))
 LEASE_SECONDS = max(WORKER_INTERVAL_SECONDS * 2, 90)
-_ALLOWED_STORAGE = ("EDGE", "TIME")
+# Server no longer aggregates transient PLC data. Edge sends precomputed history.
+_ALLOWED_STORAGE = ("CALCULATED",)
 SCADA_TIMEZONE = ZoneInfo("Asia/Tehran")
 _worker_started = False
 _worker_lock = threading.Lock()
