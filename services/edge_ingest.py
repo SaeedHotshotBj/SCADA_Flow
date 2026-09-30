@@ -592,11 +592,25 @@ def ingest_items(items):
                 continue
 
             if incoming_storage.startswith("CALCULATED_"):
+                if incoming_storage not in {
+                    "CALCULATED_MINUTE",
+                    "CALCULATED_HOUR",
+                    "CALCULATED_DAY",
+                }:
+                    error = "Unknown calculated aggregate resolution"
+                    errors.append({"EventID": event_id, "Error": error})
+                    continue
                 if storage_type != "CALCULATED":
                     error = "Calculated aggregate is not defined by the company Flow"
                     errors.append({"EventID": event_id, "Error": error})
                     continue
                 storage_type = incoming_storage
+
+            elif storage_type == "CALCULATED":
+                # Raw formula samples are live-only and are never persisted
+                # through Store & Forward.
+                acks.append(event_id)
+                continue
 
             if incoming_storage in {"LIVE", "TIME"}:
                 acks.append(event_id)
