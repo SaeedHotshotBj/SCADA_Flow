@@ -1057,7 +1057,7 @@ def flow_trend():
                 else None
             )
 
-            if storage == "TIME":
+            if storage in {"TIME", "LIVE"}:
                 calendar = trend_request.get("Calendar", "Gregorian")
                 start = reader.normalize_date(trend_request.get("Start"), calendar)
                 end = reader.normalize_date(trend_request.get("End"), calendar)
@@ -1663,7 +1663,7 @@ def receive_edge_data():
             tag,
         )
 
-        if flow_storage in {"TIME", "CALCULATED"}:
+        if flow_storage in {"TIME", "LIVE", "CALCULATED"}:
             live_item = dict(data)
             live_item["PLC_ID"] = plc_id
             live_item["TagName"] = tag
