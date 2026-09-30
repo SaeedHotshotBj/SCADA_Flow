@@ -31,18 +31,18 @@ button{background:#2563eb;border:0;color:#fff;padding:14px 28px;border-radius:12
 </head>
 <body>
 {% include "nav.html" %}
-<div class="header"><div class="title">سامانه مانیتورینگ صنعتی SCADA</div><div class="subtitle">مقایسهٔ چند پارامتر + روند تاریخی + مقدار Live</div></div>
+<div class="header"><div class="title">سامانه مانیتورینگ صنعتی SCADA</div><div class="subtitle">مقایسهٔ چند پارامتر + میانگین‌های تاریخی + مقدار Live</div></div>
 <div class="container">
 
 <div class="card">
-    <div class="filter-title">انتخاب پارامترهای TIME</div>
+    <div class="filter-title">انتخاب پارامترهای تاریخی</div>
     <div class="parameter-summary" id="liveSummary"><span class="live-pill">Live: -</span></div>
 </div>
 
 <div class="card">
     <div class="filter-container">
         <div class="filter-item">
-            <label>پارامترهای TIME</label>
+            <label>پارامترهای تاریخی</label>
             <div class="multi-select" id="tagMulti">
                 <button type="button" class="multi-select-trigger" id="tagTrigger">انتخاب پارامترها</button>
                 <div class="multi-select-menu" id="tagMenu"><div class="multi-select-empty">در حال خواندن...</div></div>
@@ -72,11 +72,11 @@ function selectedTags(){return [...document.querySelectorAll('#tagMenu input[typ
 function updateTagTrigger(){const selected=selectedTags();el('tagTrigger').textContent=!selected.length?'انتخاب پارامترها':selected.length===1?selected[0]:`${selected.length} پارامتر انتخاب شده`;}
 function formatNumber(v){if(v===null||v===undefined||!Number.isFinite(Number(v)))return '-';const n=Number(v);return Number.isInteger(n)?String(n):n.toFixed(2);}
 function setupPicker(){if(!window.jQuery||!jQuery.fn||!jQuery.fn.persianDatepicker)throw new Error('Persian date picker library is not loaded');const o={format:'YYYY/MM/DD HH:mm',initialValue:false,autoClose:false,observer:true,timePicker:{enabled:true,step:1,hour:{enabled:true},minute:{enabled:true},second:{enabled:false},meridian:{enabled:false}}};jQuery('#start_time').persianDatepicker(o);jQuery('#end_time').persianDatepicker({...o});}
-function renderTags(items){tags=(items||[]).map(x=>({tag:String(x.tag),title:x.title||x.tag}));const menu=el('tagMenu');menu.innerHTML='';if(!tags.length){menu.innerHTML='<div class="multi-select-empty">پارامتر TIME وجود ندارد</div>';updateTagTrigger();updateLiveSummary();return;}tags.forEach((x,i)=>{const label=document.createElement('label');label.className='multi-select-option';const cb=document.createElement('input');cb.type='checkbox';cb.value=x.tag;cb.checked=i===0;cb.addEventListener('change',()=>{updateTagTrigger();updateLiveSummary();resetLiveGraph();});label.appendChild(cb);const span=document.createElement('span');span.textContent=x.title;label.appendChild(span);menu.appendChild(label);});updateTagTrigger();updateLiveSummary();}
+function renderTags(items){tags=(items||[]).map(x=>({tag:String(x.tag),title:x.title||x.tag}));const menu=el('tagMenu');menu.innerHTML='';if(!tags.length){menu.innerHTML='<div class="multi-select-empty">پارامتر محاسبه‌شده‌ای وجود ندارد</div>';updateTagTrigger();updateLiveSummary();return;}tags.forEach((x,i)=>{const label=document.createElement('label');label.className='multi-select-option';const cb=document.createElement('input');cb.type='checkbox';cb.value=x.tag;cb.checked=i===0;cb.addEventListener('change',()=>{updateTagTrigger();updateLiveSummary();resetLiveGraph();});label.appendChild(cb);const span=document.createElement('span');span.textContent=x.title;label.appendChild(span);menu.appendChild(label);});updateTagTrigger();updateLiveSummary();}
 function updateLiveSummary(values={}){const selected=selectedTags();const box=el('liveSummary');box.innerHTML='';if(!selected.length){box.innerHTML='<span class="live-pill">پارامتری انتخاب نشده</span>';return;}selected.forEach(tag=>{const v=values[tag];const pill=document.createElement('span');pill.className='live-pill';pill.textContent=`${tag}: ${v===undefined?'-':formatNumber(v)}`;box.appendChild(pill);});}
 function renderStats(stats){const box=el('statsContainer');box.innerHTML='';const selected=selectedTags();selected.forEach(tag=>{const s=stats?.[tag]||{};const group=document.createElement('div');group.className='stat-group';group.innerHTML=`<div class="stat-group-title">${tag}</div><div class="stat-grid"><div class="stat"><div class="stat-title">کمترین مقدار</div><div class="stat-value">${formatNumber(s.min)}</div></div><div class="stat"><div class="stat-title">بیشترین مقدار</div><div class="stat-value">${formatNumber(s.max)}</div></div><div class="stat"><div class="stat-title">میانگین وزنی زمانی</div><div class="stat-value">${formatNumber(s.weighted_average)}</div></div><div class="stat"><div class="stat-title">تعداد نمونه</div><div class="stat-value">${formatNumber(s.sample_count)}</div></div></div>`;box.appendChild(group);});}
 function setResolution(resolutions){const selected=selectedTags();const vals=selected.map(t=>resolutions?.[t]).filter(Boolean);const unique=[...new Set(vals)];el('resolution').textContent=unique.length===1?`Resolution: ${unique[0]}`:(unique.length?`Resolution: ${unique.join(' / ')}`:'-');}
-async function loadTags(){try{const r=await fetch('/trend_config?_='+Date.now(),{cache:'no-store',credentials:'same-origin'}),d=await r.json();if(!r.ok)throw Error(d.message||('HTTP '+r.status));renderTags(d.tags||[]);setupPicker();el('status').textContent=(d.tags||[]).length?'چند پارامتر را انتخاب کنید و نمودار مقایسه‌ای را نمایش دهید.':'هیچ پارامتر TIME پیدا نشد.';connectLiveSocket();}catch(e){console.error(e);el('status').textContent='خطا در خواندن پارامترها: '+e.message;}}
+async function loadTags(){try{const r=await fetch('/trend_config?_='+Date.now(),{cache:'no-store',credentials:'same-origin'}),d=await r.json();if(!r.ok)throw Error(d.message||('HTTP '+r.status));renderTags(d.tags||[]);setupPicker();el('status').textContent=(d.tags||[]).length?'چند پارامتر را انتخاب کنید و نمودار مقایسه‌ای را نمایش دهید.':'هیچ پارامتر تاریخی پیدا نشد.';connectLiveSocket();}catch(e){console.error(e);el('status').textContent='خطا در خواندن پارامترها: '+e.message;}}
 async function requestTrend(start,end){const selected=selectedTags();const r=await fetch('/flow_trend?_='+Date.now(),{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({TrendRequest:{Tag:null,Tags:selected,Start:start||null,End:end||null,Calendar:'Jalali',DatePicker:'JalaliPicker'}})});const d=await r.json();if(!r.ok)throw Error(d.error||('HTTP '+r.status));return d;}
 function normalizePoints(ds){return(ds?.data||[]).map(p=>({x:Number(p.x),y:Number(p.y),label:p.label||''})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);}
 function nearestLabel(ms){if(!chart||!chart.data.datasets.length)return '';const p=chart.data.datasets.flatMap(d=>d.data||[]);if(!p.length)return '';let best=p[0],dist=Math.abs(Number(best.x)-Number(ms));for(const x of p){const d=Math.abs(Number(x.x)-Number(ms));if(d<dist){best=x;dist=d;}}return best.label||'';}
