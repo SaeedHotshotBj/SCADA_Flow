@@ -5,6 +5,7 @@ from datetime import datetime
 
 from plc import read_registers
 from database import get_connection
+from services.live_data import get_live_register_values
 
 ZERO_DEBOUNCE_SECONDS = 2.0
 MAPPING_CACHE_SECONDS = 30.0
@@ -104,7 +105,14 @@ class PLCReader:
                         register = int(register)
                     except (TypeError, ValueError):
                         continue
-                    mappings.append({"register": register, "name": name, "plc_id": plc_id})
+                    mappings.append({
+                        "register": register,
+                        "name": name,
+                        "plc_id": plc_id,
+                        "storage": str(
+                            mapping.get("storage", "TIME")
+                        ).strip().upper(),
+                    })
 
                     if str(mapping.get("storage", "TIME")).strip().upper() == "TRIGGER":
                         try:
@@ -117,6 +125,7 @@ class PLCReader:
                     "register": trigger_register,
                     "name": f"{TRIGGER_TAG_PREFIX}{trigger_register}",
                     "plc_id": plc_id,
+                    "storage": "TRIGGER_SIGNAL",
                 })
 
             result = []
@@ -217,11 +226,38 @@ class PLCReader:
             timeout = self._edge_timeout()
             now = time.time()
 
+            live_registers = get_live_register_values(
+                company_id,
+                plc_id,
+                mappings,
+                max_age_seconds=timeout,
+            )
+
             for mapping in mappings:
                 tag_name = mapping["name"]
+                register_key = str(mapping["register"])
+                storage = str(mapping.get("storage", "TIME")).upper()
+
+                # Raw TIME tags are live-only. Never resurrect an old
+                # historical sample as a current PLC value.
+                if storage == "TIME":
+                    if register_key not in live_registers:
+                        continue
+                    value = live_registers[register_key]
+                    registers[register_key] = value
+                    self._zero_memory.pop(
+                        self._zero_key(company_id, plc_id, tag_name),
+                        None,
+                    )
+                    self._watchdog_zero_memory.discard(
+                        self._zero_key(company_id, plc_id, tag_name)
+                    )
+                    continue
+
                 row = latest_rows.get(tag_name)
                 if not row:
                     continue
+
                 value = row["Value"]
                 timestamp = row["Timestamp"]
 
@@ -249,12 +285,19 @@ class PLCReader:
                         else:
                             continue
                 else:
-                    self._zero_memory.pop(self._zero_key(company_id, plc_id, tag_name), None)
+                    self._zero_memory.pop(
+                        self._zero_key(company_id, plc_id, tag_name),
+                        None,
+                    )
 
-                registers[str(mapping["register"])] = value
+                registers[register_key] = value
 
-                if age <= timeout and (is_trigger_register or value not in (None, 0, 0.0)):
-                    self._watchdog_zero_memory.discard(self._zero_key(company_id, plc_id, tag_name))
+                if age <= timeout and (
+                    is_trigger_register or value not in (None, 0, 0.0)
+                ):
+                    self._watchdog_zero_memory.discard(
+                        self._zero_key(company_id, plc_id, tag_name)
+                    )
 
             return registers
         except Exception as exc:
