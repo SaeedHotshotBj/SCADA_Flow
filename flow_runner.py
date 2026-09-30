@@ -11,6 +11,8 @@ REALTIME_SKIP_NODE_TYPES = {
     "TrendReader",
     "TrendDatabaseReader",
     "TrendOutput",
+    "ExpressionNode",
+    "SQLWriter",
 }
 
 
