@@ -395,6 +395,139 @@ def get_flow_storage_type(company_id, plc_id, tag_name):
     return storage_map.get((plc_id, tag.lower())) or storage_map.get((plc_id, tag))
 
 
+def get_flow_time_tags(company_id):
+    """Return Flow-defined raw TIME tags whose history is precomputed on Edge."""
+    flow_json = get_company_flow(company_id)
+    if not flow_json:
+        return []
+
+    try:
+        flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
+    except Exception:
+        return []
+
+    nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
+    if not isinstance(nodes, dict):
+        return []
+
+    conn = get_connection()
+    try:
+        company_plc_ids = {
+            int(row["PLC_ID"])
+            for row in conn.execute(
+                "SELECT PLC_ID FROM PLCs WHERE CompanyID=? ORDER BY PLC_ID",
+                (int(company_id),),
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+
+    result = []
+    seen = set()
+
+    for node in nodes.values():
+        if not isinstance(node, dict) or node.get("name") != "TagMapper":
+            continue
+
+        config = _node_config(node)
+        mappings = config.get("mappings", [])
+        if not isinstance(mappings, list):
+            continue
+
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+
+            storage = str(
+                mapping.get("storage", "TIME")
+            ).strip().upper()
+            if storage != "TIME":
+                continue
+
+            tag = str(mapping.get("name", "")).strip()
+            if not tag:
+                continue
+
+            explicit = mapping.get("plc_id", mapping.get("PLC_ID"))
+            plc_ids = []
+            if explicit not in (None, ""):
+                try:
+                    plc_ids = [int(explicit)]
+                except (TypeError, ValueError):
+                    plc_ids = []
+            if not plc_ids:
+                # Prefer the PLCs already inferred by the general storage map.
+                storage_map = _flow_tag_storage(company_id)
+                plc_ids = [
+                    int(key[0])
+                    for key, value in storage_map.items()
+                    if (
+                        isinstance(key, tuple)
+                        and len(key) == 2
+                        and str(key[1]).lower() == tag.lower()
+                        and value == "TIME"
+                    )
+                ]
+
+            for plc_id in dict.fromkeys(plc_ids):
+                if plc_id not in company_plc_ids:
+                    continue
+
+                key = (int(plc_id), tag.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                result.append({
+                    "tag": tag,
+                    "title": str(
+                        mapping.get("title", mapping.get("label", tag))
+                    ).strip() or tag,
+                    "unit": str(mapping.get("unit", "")).strip(),
+                    "PLC_ID": int(plc_id),
+                    "plc_id": int(plc_id),
+                })
+
+    return result
+
+
+def get_flow_historical_tags(company_id):
+    """Return raw TIME and calculated tags available in Historical Trend."""
+    result = []
+    seen = set()
+
+    for item in (
+        get_flow_time_tags(company_id)
+        + get_flow_calculated_tags(company_id)
+    ):
+        if not isinstance(item, dict):
+            continue
+
+        tag = str(item.get("tag", "")).strip()
+        try:
+            plc_id = int(item.get("PLC_ID", item.get("plc_id")))
+        except (TypeError, ValueError):
+            continue
+
+        if not tag:
+            continue
+
+        key = (plc_id, tag.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+
+        result.append({
+            "tag": tag,
+            "title": item.get("title", tag),
+            "unit": item.get("unit", ""),
+            "PLC_ID": plc_id,
+            "plc_id": plc_id,
+        })
+
+    return result
+
+
 def get_flow_calculated_tags(company_id):
     flow_json = get_company_flow(company_id)
     if not flow_json:
@@ -600,7 +733,7 @@ def ingest_items(items):
                     error = "Unknown calculated aggregate resolution"
                     errors.append({"EventID": event_id, "Error": error})
                     continue
-                if storage_type != "CALCULATED":
+                if storage_type not in {"TIME", "CALCULATED"}:
                     error = "Calculated aggregate is not defined by the company Flow"
                     errors.append({"EventID": event_id, "Error": error})
                     continue
@@ -717,5 +850,7 @@ __all__ = [
     "ensure_edge_event_schema",
     "ingest_items",
     "get_flow_storage_type",
+    "get_flow_time_tags",
     "get_flow_calculated_tags",
+    "get_flow_historical_tags",
 ]
