@@ -1565,6 +1565,130 @@ def dashboard():
 
 
 # =====================================================
+# EDGE LIVE DATA RECEIVER
+# =====================================================
+
+def _company_id_for_plc(plc_id):
+    try:
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT CompanyID FROM PLCs WHERE PLC_ID=?",
+                (int(plc_id),),
+            ).fetchone()
+            return int(row["CompanyID"]) if row else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+@app.route("/api/edge/live", methods=["POST"])
+def receive_edge_live():
+    try:
+        payload = request.get_json(silent=True) or {}
+        items = payload.get("items", [])
+        if not isinstance(items, list):
+            return jsonify({"status": "error", "message": "items must be a list"}), 400
+
+        accepted_by_company = {}
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            try:
+                plc_id = int(item.get("PLC_ID"))
+            except (TypeError, ValueError):
+                continue
+
+            tag = str(item.get("TagName", "")).strip()
+            if not tag:
+                continue
+
+            company_id = _company_id_for_plc(plc_id)
+            if company_id is None:
+                continue
+
+            flow_storage = get_flow_storage_type(
+                company_id,
+                plc_id,
+                tag,
+            )
+            if flow_storage not in {"TIME", "CALCULATED"}:
+                print(
+                    "EDGE LIVE REJECTED:",
+                    "CompanyID=", company_id,
+                    "PLC_ID=", plc_id,
+                    "Tag=", tag,
+                )
+                continue
+
+            normalized = dict(item)
+            normalized["PLC_ID"] = plc_id
+            normalized["TagName"] = tag
+            normalized["StorageType"] = flow_storage
+
+            accepted_by_company.setdefault(company_id, []).append(normalized)
+
+        accepted_count = 0
+
+        for company_id, accepted in accepted_by_company.items():
+            accepted_count += record_live_items(company_id, accepted)
+
+            widget_map = {}
+            for widget in get_dashboard_widgets(company_id):
+                if not isinstance(widget, dict):
+                    continue
+                widget_tag = str(widget.get("tag", "")).strip()
+                if not widget_tag:
+                    continue
+                try:
+                    widget_plc = int(widget.get("plc_id", widget.get("PLC_ID")))
+                except (TypeError, ValueError):
+                    continue
+                widget_map[(widget_plc, widget_tag.lower())] = widget
+
+            tag_values = []
+            for item in accepted:
+                widget = widget_map.get(
+                    (int(item["PLC_ID"]), str(item["TagName"]).lower()),
+                    {},
+                )
+                tag_values.append({
+                    "PLC_ID": item["PLC_ID"],
+                    "TagName": item["TagName"],
+                    "Value": item.get("Value"),
+                    "Timestamp": item.get("Timestamp"),
+                    "title": widget.get("title", item["TagName"]),
+                    "unit": widget.get("unit", ""),
+                    "AllowedRoles": widget.get("allowed_roles", ""),
+                })
+
+            if tag_values:
+                from socket_manager import send_dashboard_data
+                send_dashboard_data({
+                    "Online": True,
+                    "CompanyID": company_id,
+                    "Timestamp": tag_values[-1].get("Timestamp"),
+                    "TagValues": tag_values,
+                })
+
+        return jsonify({
+            "status": "ok",
+            "accepted": accepted_count,
+        })
+
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(exc),
+        }), 500
+
+
+# =====================================================
 # EDGE DATA RECEIVER
 # =====================================================
 
