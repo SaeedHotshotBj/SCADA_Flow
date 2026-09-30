@@ -1548,11 +1548,7 @@ def receive_edge_live():
             normalized = dict(item)
             normalized["PLC_ID"] = plc_id
             normalized["TagName"] = tag
-            normalized["StorageType"] = (
-                "CALCULATED"
-                if incoming_storage == "CALCULATED"
-                else "TIME"
-            )
+            normalized["StorageType"] = incoming_storage
             accepted_by_company.setdefault(company_id, []).append(normalized)
 
         accepted_count = 0
