@@ -146,6 +146,36 @@ def _flow_tag_plcs(company_id, nodes):
     return result
 
 
+def _flow_storage_lookup(nodes):
+    lookup = {}
+    for node in nodes.values():
+        if not isinstance(node, dict) or node.get("name") != "TagMapper":
+            continue
+        data = _node_config(node)
+        mappings = data.get("mappings", [])
+        if not isinstance(mappings, list):
+            continue
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            tag = str(mapping.get("name", "")).strip()
+            if not tag:
+                continue
+            storage = str(mapping.get("storage", "TIME")).strip().upper()
+            plc_id = _to_plc_id(mapping.get("plc_id", mapping.get("PLC_ID")))
+            if plc_id is not None:
+                lookup[(plc_id, tag.lower())] = storage
+                register = mapping.get("register")
+                if register not in (None, ""):
+                    try:
+                        register_key = str(int(float(register)))
+                    except (TypeError, ValueError):
+                        register_key = str(register).strip()
+                    if register_key:
+                        lookup[(plc_id, register_key.lower())] = storage
+    return lookup
+
+
 def _resolve_widget_plc_id(widget, tag_plcs):
     explicit = _to_plc_id(widget.get("plc_id", widget.get("PLC_ID")))
     if explicit is not None:
@@ -215,6 +245,7 @@ def get_dashboard_widgets(company_id):
         nodes = _get_nodes(company_id)
         tag_plcs = _flow_tag_plcs(company_id, nodes)
         register_lookup = _register_to_tag(nodes, tag_plcs)
+        storage_lookup = _flow_storage_lookup(nodes)
 
         for node in nodes.values():
             if not isinstance(node, dict):
@@ -232,6 +263,10 @@ def get_dashboard_widgets(company_id):
                         item["plc_id"] = _resolve_widget_plc_id(item, tag_plcs)
                         if item["plc_id"] is not None:
                             item["tag"] = _resolve_machine_tag(raw_tag, item["plc_id"], register_lookup)
+                            item["storage"] = storage_lookup.get(
+                                (item["plc_id"], str(item["tag"]).strip().lower()),
+                                storage_lookup.get((item["plc_id"], raw_tag.lower()), ""),
+                            )
                         if not item.get("configured_tag"):
                             item["configured_tag"] = raw_tag
                         widgets.append(item)
@@ -271,12 +306,17 @@ def get_dashboard_widgets(company_id):
                                     continue
                                 label = str(parameter.get("label", "")).strip() or resolved_tag
                                 unit = str(parameter.get("unit", "")).strip()
+                                storage = storage_lookup.get(
+                                    (plc_id, str(resolved_tag).strip().lower()),
+                                    storage_lookup.get((plc_id, raw_tag.lower()), ""),
+                                )
                                 normalized["parameters"].append({
                                     "label": label,
                                     "tag": resolved_tag,
                                     "configured_tag": raw_tag,
                                     "plc_id": plc_id,
                                     "unit": unit,
+                                    "storage": storage,
                                 })
                                 widgets.append({
                                     "tag": resolved_tag,
@@ -284,6 +324,7 @@ def get_dashboard_widgets(company_id):
                                     "plc_id": plc_id,
                                     "title": normalized["name"] + " / " + label,
                                     "unit": unit,
+                                    "storage": storage,
                                     "_dashboard_type": "machine_parameter",
                                 })
                         machines.append(normalized)
