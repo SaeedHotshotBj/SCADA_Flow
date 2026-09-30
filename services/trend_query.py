@@ -125,7 +125,9 @@ def get_trend_stats(company_id, plc_id, tag_name, start, end):
         "resolution": resolution,
         "min": min(values),
         "max": max(values),
-        "weighted_average": None,
+        # These are already Edge-computed bucket averages. The displayed
+        # average is the arithmetic mean of the stored aggregate points.
+        "weighted_average": sum(values) / len(values),
         "sample_count": len(values),
     }
 
