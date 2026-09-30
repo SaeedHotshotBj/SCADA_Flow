@@ -1466,6 +1466,83 @@ def dashboard_latest():
     })
 
 
+@app.route("/dashboard/latest_plc")
+@login_required
+def dashboard_latest_plc():
+    company_id = get_request_company_id()
+    if company_id is None:
+        return jsonify({
+            "Online": False,
+            "Tags": {},
+            "TagValues": [],
+            "Timestamps": {},
+        })
+
+    role = str(session.get("role", "")).strip().lower()
+    is_master_user = role == "master"
+    widgets = get_dashboard_widgets(company_id)
+
+    tags = {}
+    timestamps = {}
+    tag_values = []
+    seen = set()
+
+    for widget in widgets:
+        if not isinstance(widget, dict):
+            continue
+        tag = str(widget.get("tag", "")).strip()
+        if not tag:
+            continue
+        try:
+            plc_id = int(widget.get("plc_id", widget.get("PLC_ID")))
+        except (TypeError, ValueError):
+            continue
+
+        key = (plc_id, tag.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+
+        allowed = widget.get("allowed_roles", "")
+        if isinstance(allowed, (list, tuple, set)):
+            allowed_roles = {
+                str(item).strip().lower()
+                for item in allowed
+                if str(item).strip()
+            }
+        else:
+            allowed_roles = {
+                item.strip().lower()
+                for item in str(allowed or "").replace(";", ",").split(",")
+                if item.strip()
+            }
+        if allowed_roles and not is_master_user and role not in allowed_roles:
+            continue
+
+        value = get_live_value(company_id, plc_id, tag)
+        if value is None:
+            continue
+
+        tags[tag] = value["Value"]
+        timestamps[tag] = value["Timestamp"]
+        tag_values.append({
+            "PLC_ID": plc_id,
+            "TagName": tag,
+            "Value": value["Value"],
+            "Timestamp": value["Timestamp"],
+            "title": widget.get("title", tag),
+            "unit": widget.get("unit", ""),
+        })
+
+    return jsonify({
+        "Online": bool(tag_values),
+        "CompanyID": company_id,
+        "Tags": tags,
+        "TagValues": tag_values,
+        "Timestamps": timestamps,
+    })
+
+
 # =====================================================
 # DASHBOARD
 # =====================================================
