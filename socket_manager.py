@@ -311,6 +311,18 @@ def _install_socket_handlers(socketio):
     if _socket_handlers_registered:
         return True
 
+    @socketio.on("dashboard_socket_ready")
+    def _dashboard_socket_ready(data=None):
+        user_role = str(session.get("role", "")).strip().lower()
+        company_id = session.get("company_id")
+        print(
+            "DASHBOARD SOCKET READY:",
+            "CompanyID=", company_id,
+            "Role=", user_role,
+            "Page=", (data or {}).get("page") if isinstance(data, dict) else "",
+        )
+        return {"ok": True, "CompanyID": company_id}
+
     @socketio.on("connect")
     def _dashboard_socket_connect():
         """Join authenticated company and, for normal users, role rooms."""
