@@ -1409,7 +1409,8 @@ def dashboard_latest_plc():
         if allowed_roles and not is_master_user and role not in allowed_roles:
             continue
 
-        value = get_live_value(company_id, plc_id, tag)
+        storage_type = str(widget.get("storage", get_flow_storage_type(company_id, plc_id, tag) or "")).strip().upper()
+        value = get_live_value(company_id, plc_id, tag, storage_type=storage_type)
         if value is None:
             continue
 
@@ -1420,7 +1421,7 @@ def dashboard_latest_plc():
             "TagName": tag,
             "Value": value["Value"],
             "Timestamp": value["Timestamp"],
-            "StorageType": str(widget.get("storage", get_flow_storage_type(company_id, plc_id, tag) or "")).strip().upper(),
+            "StorageType": storage_type,
             "title": widget.get("title", tag),
             "unit": widget.get("unit", ""),
         })
