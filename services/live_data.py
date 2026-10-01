@@ -148,6 +148,7 @@ def get_live_latest_for_tags(company_id, tag_specs, max_age_seconds=DEFAULT_MAX_
             spec.get("PLC_ID", spec.get("plc_id")),
             spec.get("tag"),
             max_age_seconds=max_age_seconds,
+            storage_type=spec.get("storage", spec.get("StorageType")),
         )
         if item is None:
             continue
@@ -170,6 +171,7 @@ def get_live_register_values(company_id, plc_id, mappings, max_age_seconds=DEFAU
             plc_id,
             mapping.get("name"),
             max_age_seconds=max_age_seconds,
+            storage_type=mapping.get("storage", mapping.get("StorageType")),
         )
         if item is None:
             continue
