@@ -1069,6 +1069,7 @@ def flow_trend():
                     start=start,
                     end=end,
                     default_minutes=10,
+                    storage_type=storage,
                 )
 
                 data = {
