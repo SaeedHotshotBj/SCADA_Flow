@@ -726,6 +726,7 @@ def ingest_items(items):
                     "CALCULATED_MINUTE",
                     "CALCULATED_HOUR",
                     "CALCULATED_DAY",
+                    "CALCULATED_MONTH",
                 }:
                     error = "Unknown calculated aggregate resolution"
                     errors.append({"EventID": event_id, "Error": error})
