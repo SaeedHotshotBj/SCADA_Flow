@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Asia/Tehran")
-MAX_POINTS_PER_TAG = 7200
+LIVE_TREND_RETENTION_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_MAX_AGE_SECONDS = 30
 _LOCK = threading.RLock()
 _BUFFERS = {}
@@ -65,8 +65,12 @@ def record_live_items(company_id, items):
             # Storage type is part of the identity. A calculated value with
             # the same TagName must never overwrite a raw LIVE/TIME value.
             key = (int(company_id), plc_id, tag.lower(), storage_type)
-            buffer = _BUFFERS.setdefault(key, deque(maxlen=MAX_POINTS_PER_TAG))
+            buffer = _BUFFERS.setdefault(key, deque())
             buffer.append((_ts(timestamp), value, tag))
+            _cleanup_key(
+                buffer,
+                now - timedelta(seconds=LIVE_TREND_RETENTION_SECONDS),
+            )
             stored += 1
     return stored
 
@@ -88,11 +92,14 @@ def get_live_value(company_id, plc_id, tag_name, max_age_seconds=DEFAULT_MAX_AGE
         else:
             keys = [(int(company_id), int(plc_id), tag_key, item_storage) for item_storage in ("LIVE", "TIME", "CALCULATED")]
         candidates = []
+        retention_cutoff = datetime.now(TZ).replace(tzinfo=None) - timedelta(
+            seconds=LIVE_TREND_RETENTION_SECONDS
+        )
         for key in keys:
             buffer = _BUFFERS.get(key)
             if not buffer:
                 continue
-            _cleanup_key(buffer, cutoff)
+            _cleanup_key(buffer, retention_cutoff)
             if buffer:
                 candidates.append(buffer[-1])
         if not candidates:
@@ -115,11 +122,16 @@ def get_live_series(company_id, plc_id, tag_name, start=None, end=None, default_
     requested_storage = str(storage_type or "").strip().upper()
     with _LOCK:
         buffers = []
+        retention_cutoff = datetime.now(TZ).replace(tzinfo=None) - timedelta(
+            seconds=LIVE_TREND_RETENTION_SECONDS
+        )
         storages = ((requested_storage,) if requested_storage in {"LIVE", "TIME", "CALCULATED"} else ("LIVE", "TIME", "CALCULATED"))
         for item_storage in storages:
             buffer = _BUFFERS.get((int(company_id), int(plc_id), tag_key, item_storage))
             if buffer:
-                buffers.append(buffer)
+                _cleanup_key(buffer, retention_cutoff)
+                if buffer:
+                    buffers.append(buffer)
         if not buffers:
             return []
         result = []
