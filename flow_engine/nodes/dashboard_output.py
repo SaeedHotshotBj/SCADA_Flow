@@ -38,6 +38,44 @@ class DashboardOutput:
         return (data.get("Tags", {}) or {}).get(tag)
 
     @staticmethod
+    def _storage_type(data, widget, plc_id, tag):
+        configured = str(
+            widget.get("storage", widget.get("StorageType", ""))
+            or ""
+        ).strip().upper()
+        if configured in {"LIVE", "TIME", "CALCULATED", "TRIGGER", "TRIGGER_SIGNAL"}:
+            return configured
+
+        tag_key = str(tag or "").strip().lower()
+        definitions = data.get("TagDefinitions", []) or []
+        for definition in definitions:
+            if not isinstance(definition, dict):
+                continue
+            try:
+                definition_plc = int(
+                    definition.get("plc_id", definition.get("PLC_ID"))
+                )
+            except (TypeError, ValueError):
+                definition_plc = None
+
+            definition_tag = str(
+                definition.get("name", definition.get("TagName", ""))
+            ).strip().lower()
+            storage = str(
+                definition.get("storage", definition.get("StorageType", ""))
+                or ""
+            ).strip().upper()
+
+            if (
+                definition_plc == plc_id
+                and definition_tag == tag_key
+                and storage
+            ):
+                return storage
+
+        return ""
+
+    @staticmethod
     def _allowed_roles(value):
         if isinstance(value, (list, tuple, set)):
             return [str(item).strip() for item in value if str(item).strip()]
@@ -75,6 +113,8 @@ class DashboardOutput:
                 "PLC_ID": plc_id,
                 "TagName": tag,
                 "Value": value,
+                "Timestamp": timestamp,
+                "StorageType": self._storage_type(data, widget, plc_id, tag),
                 "title": widget.get("title", tag),
                 "unit": widget.get("unit", ""),
                 "AllowedRoles": allowed_roles,
@@ -92,6 +132,8 @@ class DashboardOutput:
                     "PLC_ID": data.get("PLC_ID"),
                     "TagName": tag,
                     "Value": value,
+                    "Timestamp": timestamp,
+                    "StorageType": "",
                     "AllowedRoles": [],
                 })
 
