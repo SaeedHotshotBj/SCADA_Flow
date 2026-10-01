@@ -907,20 +907,6 @@ def start_flow_engine():
 
 
 # =====================================================
-# SOCKET.IO EVENTS
-# =====================================================
-
-@socketio.on("connect")
-def socket_connect():
-    print("Dashboard Connected")
-
-
-@socketio.on("disconnect")
-def socket_disconnect():
-    print("Dashboard Disconnected")
-
-
-# =====================================================
 # DATE FILTER
 # =====================================================
 
@@ -1702,6 +1688,7 @@ def receive_edge_data():
                         "TagName": tag,
                         "Value": value,
                         "Timestamp": timestamp,
+                        "StorageType": flow_storage,
                     }],
                 })
 
