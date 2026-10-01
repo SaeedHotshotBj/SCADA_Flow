@@ -207,7 +207,6 @@ except Exception as _service_bootstrap_error:
 
 flow_runner_instance = None
 trend_runtime_tags = []
-_live_edge_debug_last = 0.0
 
 
 # =====================================================
@@ -1357,60 +1356,6 @@ def dashboard_latest():
     return dashboard_latest_plc()
 
 
-@app.route("/dashboard/live_debug")
-@login_required
-def dashboard_live_debug():
-    """Authenticated diagnostics for the process-local LIVE dashboard path."""
-    company_id = get_request_company_id()
-    if company_id is None:
-        return jsonify({"Online": False, "CompanyID": None, "Widgets": []})
-
-    widgets = get_dashboard_widgets(company_id)
-    rows = []
-    for widget in widgets:
-        if not isinstance(widget, dict):
-            continue
-        tag = str(widget.get("tag", "")).strip()
-        if not tag:
-            continue
-        try:
-            plc_id = int(widget.get("plc_id", widget.get("PLC_ID")))
-        except (TypeError, ValueError):
-            continue
-
-        storage = str(
-            widget.get(
-                "storage",
-                get_flow_storage_type(company_id, plc_id, tag) or "",
-            )
-        ).strip().upper()
-
-        live = get_live_value(company_id, plc_id, tag)
-        rows.append({
-            "PLC_ID": plc_id,
-            "TagName": tag,
-            "ConfiguredTag": widget.get("configured_tag", ""),
-            "StorageType": storage,
-            "Value": live.get("Value") if live else None,
-            "Timestamp": live.get("Timestamp") if live else None,
-            "LiveBufferHit": live is not None,
-        })
-
-    print(
-        "DASHBOARD LIVE DEBUG:",
-        "PID=", os.getpid(),
-        "CompanyID=", company_id,
-        "Widgets=", rows,
-    )
-
-    return jsonify({
-        "Online": any(item.get("LiveBufferHit") for item in rows),
-        "CompanyID": company_id,
-        "PID": os.getpid(),
-        "Widgets": rows,
-    })
-
-
 @app.route("/dashboard/latest_plc")
 @login_required
 def dashboard_latest_plc():
@@ -1632,27 +1577,6 @@ def receive_edge_live():
         for company_id, accepted in accepted_by_company.items():
             accepted_count += record_live_items(company_id, accepted)
 
-            global _live_edge_debug_last
-            debug_now = time.monotonic()
-            if debug_now - _live_edge_debug_last >= 5.0:
-                _live_edge_debug_last = debug_now
-                print(
-                    "EDGE LIVE ACCEPTED:",
-                    "CompanyID=", company_id,
-                    "COUNT=", len(accepted),
-                    "SAMPLES=",
-                    [
-                        {
-                            "PLC_ID": item.get("PLC_ID"),
-                            "TagName": item.get("TagName"),
-                            "Value": item.get("Value"),
-                            "Timestamp": item.get("Timestamp"),
-                            "StorageType": item.get("StorageType"),
-                        }
-                        for item in accepted
-                        if str(item.get("StorageType", "")).upper() == "LIVE"
-                    ][:20],
-                )
 
             widget_map = {}
             for widget in get_dashboard_widgets(company_id):
