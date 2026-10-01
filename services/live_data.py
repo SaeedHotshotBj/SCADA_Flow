@@ -101,7 +101,7 @@ def get_live_value(company_id, plc_id, tag_name, max_age_seconds=DEFAULT_MAX_AGE
         return {"PLC_ID": int(plc_id), "TagName": tag, "Value": value, "Timestamp": timestamp}
 
 
-def get_live_series(company_id, plc_id, tag_name, start=None, end=None, default_minutes=10):
+def get_live_series(company_id, plc_id, tag_name, start=None, end=None, default_minutes=10, storage_type=None):
     if company_id is None or plc_id is None or not tag_name:
         return []
 
@@ -112,9 +112,11 @@ def get_live_series(company_id, plc_id, tag_name, start=None, end=None, default_
         return []
 
     tag_key = str(tag_name).strip().lower()
+    requested_storage = str(storage_type or "").strip().upper()
     with _LOCK:
         buffers = []
-        for item_storage in ("LIVE", "TIME", "CALCULATED"):
+        storages = ((requested_storage,) if requested_storage in {"LIVE", "TIME", "CALCULATED"} else ("LIVE", "TIME", "CALCULATED"))
+        for item_storage in storages:
             buffer = _BUFFERS.get((int(company_id), int(plc_id), tag_key, item_storage))
             if buffer:
                 buffers.append(buffer)
