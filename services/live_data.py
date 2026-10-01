@@ -58,8 +58,13 @@ def record_live_items(company_id, items):
                 continue
             if not tag or not math.isfinite(value):
                 continue
+            storage_type = str(item.get("StorageType", "LIVE") or "LIVE").strip().upper()
+            if storage_type not in {"LIVE", "TIME", "CALCULATED"}:
+                continue
             timestamp = _parse_ts(item.get("Timestamp")) or now
-            key = (int(company_id), plc_id, tag.lower())
+            # Storage type is part of the identity. A calculated value with
+            # the same TagName must never overwrite a raw LIVE/TIME value.
+            key = (int(company_id), plc_id, tag.lower(), storage_type)
             buffer = _BUFFERS.setdefault(key, deque(maxlen=MAX_POINTS_PER_TAG))
             buffer.append((_ts(timestamp), value, tag))
             stored += 1
@@ -71,19 +76,28 @@ def _cleanup_key(buffer, cutoff):
         buffer.popleft()
 
 
-def get_live_value(company_id, plc_id, tag_name, max_age_seconds=DEFAULT_MAX_AGE_SECONDS):
+def get_live_value(company_id, plc_id, tag_name, max_age_seconds=DEFAULT_MAX_AGE_SECONDS, storage_type=None):
     if company_id is None or plc_id is None or not tag_name:
         return None
-    key = (int(company_id), int(plc_id), str(tag_name).strip().lower())
+    tag_key = str(tag_name).strip().lower()
+    requested_storage = str(storage_type or "").strip().upper()
     cutoff = datetime.now(TZ).replace(tzinfo=None) - timedelta(seconds=max(1, int(max_age_seconds)))
     with _LOCK:
-        buffer = _BUFFERS.get(key)
-        if not buffer:
+        if requested_storage in {"LIVE", "TIME", "CALCULATED"}:
+            keys = [(int(company_id), int(plc_id), tag_key, requested_storage)]
+        else:
+            keys = [(int(company_id), int(plc_id), tag_key, item_storage) for item_storage in ("LIVE", "TIME", "CALCULATED")]
+        candidates = []
+        for key in keys:
+            buffer = _BUFFERS.get(key)
+            if not buffer:
+                continue
+            _cleanup_key(buffer, cutoff)
+            if buffer:
+                candidates.append(buffer[-1])
+        if not candidates:
             return None
-        _cleanup_key(buffer, cutoff)
-        if not buffer:
-            return None
-        timestamp, value, tag = buffer[-1]
+        timestamp, value, tag = max(candidates, key=lambda item: _parse_ts(item[0]) or datetime.min)
         return {"PLC_ID": int(plc_id), "TagName": tag, "Value": value, "Timestamp": timestamp}
 
 
@@ -97,22 +111,28 @@ def get_live_series(company_id, plc_id, tag_name, start=None, end=None, default_
     if start_dt is None or end_dt is None or start_dt > end_dt:
         return []
 
-    key = (int(company_id), int(plc_id), str(tag_name).strip().lower())
+    tag_key = str(tag_name).strip().lower()
     with _LOCK:
-        buffer = _BUFFERS.get(key)
-        if not buffer:
+        buffers = []
+        for item_storage in ("LIVE", "TIME", "CALCULATED"):
+            buffer = _BUFFERS.get((int(company_id), int(plc_id), tag_key, item_storage))
+            if buffer:
+                buffers.append(buffer)
+        if not buffers:
             return []
         result = []
-        for timestamp, value, tag in buffer:
-            dt = _parse_ts(timestamp)
-            if dt is None or dt < start_dt or dt > end_dt:
-                continue
-            result.append({
-                "Tag": tag,
-                "Timestamp": timestamp,
-                "Value": value,
-                "PLC_ID": int(plc_id),
-            })
+        for buffer in buffers:
+            for timestamp, value, tag in buffer:
+                dt = _parse_ts(timestamp)
+                if dt is None or dt < start_dt or dt > end_dt:
+                    continue
+                result.append({
+                    "Tag": tag,
+                    "Timestamp": timestamp,
+                    "Value": value,
+                    "PLC_ID": int(plc_id),
+                })
+        result.sort(key=lambda item: _parse_ts(item["Timestamp"]) or datetime.min)
         return result
 
 
