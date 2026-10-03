@@ -9,6 +9,8 @@ from database import get_connection, get_company_flow
 _CONTEXT_CONTRACT_ROLES = {"contract", "contract_code", "contractid", "contract_id"}
 _CONTEXT_PRODUCT_ROLES = {"product", "product_code", "productid", "product_id"}
 
+TAGMAPPER_EVENT_NODE_ID = "__TAGMAPPER_EVENT__"
+
 
 def _flow_nodes(company_id):
     flow = get_company_flow(company_id)
@@ -41,6 +43,248 @@ def _allowed(item, user_role):
     if not configured:
         return True
     return str(user_role or "").strip().lower() in configured
+
+
+def _tagmapper_names(company_id, plc_id=None):
+    """Return TagMapper-defined tag names for the report's PLC."""
+    names = set()
+    for node in _flow_nodes(company_id).values():
+        if not isinstance(node, dict) or node.get("name") != "TagMapper":
+            continue
+        data = node.get("data", {}) or {}
+        config = data.get("config", data) or {}
+        mappings = config.get("mappings", []) if isinstance(config, dict) else []
+        if not isinstance(mappings, list):
+            continue
+        for item in mappings:
+            if not isinstance(item, dict):
+                continue
+            mapping_plc_id = _plc_id(item.get("plc_id", item.get("PLC_ID")))
+            if plc_id is not None and mapping_plc_id != plc_id:
+                continue
+            tag_name = str(item.get("name", "")).strip()
+            if tag_name:
+                names.add(tag_name)
+    return names
+
+
+def _collect_tagmapper_values(tags, company_id, plc_id):
+    """Return every numeric TagMapper value available in the report payload."""
+    lookup = {
+        str(key).strip().lower(): value
+        for key, value in (tags or {}).items()
+    }
+    values = []
+    seen = set()
+
+    for tag_name in sorted(_tagmapper_names(company_id, plc_id), key=str.lower):
+        key = tag_name.lower()
+        if key in seen:
+            continue
+        value = lookup.get(key)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(number):
+            continue
+        values.append((tag_name, number))
+        seen.add(key)
+
+    return values
+
+
+def persist_tagmapper_snapshot(
+    company_id,
+    tags,
+    plc_id,
+    timestamp=None,
+    trigger_event_id=None,
+):
+    """Persist numeric TagMapper values independently of ReportOutput."""
+    if company_id is None or not isinstance(tags, dict):
+        return 0
+
+    ensure_report_tables()
+    timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    plc_id = _plc_id(plc_id)
+    contract = tags.get("ContractCode")
+    product = tags.get("ProductCode")
+    tag_values = _collect_tagmapper_values(tags, company_id, plc_id)
+    if not tag_values:
+        return 0
+
+    conn = get_connection()
+    try:
+        saved = 0
+        for name, value in tag_values:
+            latest = conn.execute(
+                """
+                SELECT Value
+                FROM TagMapperValues
+                WHERE CompanyID=?
+                  AND PLC_ID=?
+                  AND LOWER(COALESCE(ContractCode,''))=LOWER(COALESCE(?, ''))
+                  AND LOWER(COALESCE(ProductCode,''))=LOWER(COALESCE(?, ''))
+                  AND LOWER(TagName)=LOWER(?)
+                ORDER BY Timestamp DESC, TagMapperValueID DESC
+                LIMIT 1
+                """,
+                (
+                    int(company_id),
+                    plc_id,
+                    contract,
+                    product,
+                    str(name),
+                ),
+            ).fetchone()
+
+            changed = latest is None
+            if latest is not None:
+                try:
+                    changed = float(latest["Value"]) != float(value)
+                except (TypeError, ValueError):
+                    changed = str(latest["Value"]) != str(value)
+
+            if not changed and not trigger_event_id:
+                continue
+
+            _persist_tagmapper_values(
+                conn,
+                company_id,
+                plc_id,
+                timestamp,
+                contract,
+                product,
+                [(name, value)],
+                trigger_event_id=trigger_event_id,
+                report_node_id=(
+                    TAGMAPPER_EVENT_NODE_ID
+                    if trigger_event_id
+                    else None
+                ),
+            )
+            saved += 1
+
+        conn.commit()
+        return saved
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _persist_tagmapper_values(
+    conn,
+    company_id,
+    plc_id,
+    timestamp,
+    contract_code,
+    product_code,
+    tag_values,
+    trigger_event_id=None,
+    report_node_id=None,
+):
+    if not tag_values:
+        return
+
+    event_id = str(trigger_event_id) if trigger_event_id else None
+    node_id = str(report_node_id) if report_node_id else None
+
+    for name, value in tag_values:
+        tag_name = str(name).strip()
+        if not tag_name:
+            continue
+
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(number):
+            continue
+
+        existing = None
+        if event_id and node_id:
+            existing = conn.execute(
+                """
+                SELECT TagMapperValueID
+                FROM TagMapperValues
+                WHERE CompanyID=?
+                  AND TriggerEventID=?
+                  AND ReportNodeID=?
+                  AND LOWER(TagName)=LOWER(?)
+                ORDER BY TagMapperValueID
+                LIMIT 1
+                """,
+                (int(company_id), event_id, node_id, tag_name),
+            ).fetchone()
+
+        if existing:
+            # The first event snapshot can be written before TagMapper/context
+            # is available. A later SQLWriter pass must enrich that same row
+            # instead of skipping it because the Tag already exists.
+            conn.execute(
+                """
+                UPDATE TagMapperValues
+                SET PLC_ID=?,
+                    Timestamp=?,
+                    ContractCode=CASE
+                        WHEN ? IS NOT NULL AND TRIM(CAST(? AS TEXT))<>'' THEN ?
+                        ELSE ContractCode
+                    END,
+                    ProductCode=CASE
+                        WHEN ? IS NOT NULL AND TRIM(CAST(? AS TEXT))<>'' THEN ?
+                        ELSE ProductCode
+                    END,
+                    Value=?
+                WHERE TagMapperValueID=?
+                """,
+                (
+                    plc_id,
+                    timestamp,
+                    contract_code,
+                    contract_code,
+                    contract_code,
+                    product_code,
+                    product_code,
+                    product_code,
+                    number,
+                    int(existing["TagMapperValueID"]),
+                ),
+            )
+            continue
+
+        conn.execute(
+            """
+            INSERT INTO TagMapperValues
+            (
+                CompanyID,
+                PLC_ID,
+                Timestamp,
+                ContractCode,
+                ProductCode,
+                TagName,
+                Value,
+                TriggerEventID,
+                ReportNodeID
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(company_id),
+                plc_id,
+                timestamp,
+                contract_code,
+                product_code,
+                tag_name,
+                number,
+                event_id,
+                node_id,
+            ),
+        )
 
 
 def _management_calculations(company_id, user_role=None):
@@ -171,6 +415,18 @@ def ensure_report_tables():
                 Value REAL,
                 FOREIGN KEY(ReportID) REFERENCES ReportHistory(ReportID) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS TagMapperValues(
+                TagMapperValueID INTEGER PRIMARY KEY AUTOINCREMENT,
+                CompanyID INTEGER NOT NULL,
+                PLC_ID INTEGER,
+                Timestamp TEXT NOT NULL,
+                ContractCode TEXT,
+                ProductCode TEXT,
+                TagName TEXT NOT NULL,
+                Value REAL,
+                TriggerEventID TEXT,
+                ReportNodeID TEXT
+            );
             """
         )
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(ReportHistory)").fetchall()}
@@ -194,10 +450,148 @@ def ensure_report_tables():
             "ON ReportValues(ReportID, TagName)"
         )
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tagmapper_values_company_context_tag_time "
+            "ON TagMapperValues(CompanyID, ContractCode, ProductCode, TagName, Timestamp)"
+        )
+        conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_event_node "
             "ON ReportHistory(TriggerEventID, ReportNodeID) "
             "WHERE TriggerEventID IS NOT NULL AND ReportNodeID IS NOT NULL"
         )
+
+        # Backfill production-event TagMapper snapshots independently of ReportOutput.
+        production_events = []
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ProductionEvents' LIMIT 1"
+        ).fetchone():
+            production_events = conn.execute(
+                """
+                SELECT EventID, CompanyID, PLC_ID, TriggerTimestamp, TagsJSON
+                FROM ProductionEvents
+                WHERE TagsJSON IS NOT NULL AND TRIM(TagsJSON) <> ''
+                """
+            ).fetchall()
+
+        for event in production_events:
+            existing_event = conn.execute(
+                """
+                SELECT 1
+                FROM TagMapperValues
+                WHERE CompanyID=?
+                  AND TriggerEventID=?
+                  AND ReportNodeID=?
+                LIMIT 1
+                """,
+                (
+                    int(event["CompanyID"]),
+                    str(event["EventID"]),
+                    TAGMAPPER_EVENT_NODE_ID,
+                ),
+            ).fetchone()
+            if existing_event:
+                continue
+
+            try:
+                event_tags = json.loads(event["TagsJSON"] or "{}")
+            except Exception:
+                event_tags = {}
+            if not isinstance(event_tags, dict):
+                continue
+
+            tag_values = _collect_tagmapper_values(
+                event_tags,
+                event["CompanyID"],
+                event["PLC_ID"],
+            )
+            _persist_tagmapper_values(
+                conn,
+                event["CompanyID"],
+                event["PLC_ID"],
+                event["TriggerTimestamp"],
+                event_tags.get("ContractCode"),
+                event_tags.get("ProductCode"),
+                tag_values,
+                trigger_event_id=str(event["EventID"]),
+                report_node_id=TAGMAPPER_EVENT_NODE_ID,
+            )
+
+        # Repair TagMapper rows that were written before the complete event
+        # context was available. ReportHistory is the authoritative event
+        # context for the same TriggerEventID + ReportNodeID.
+        conn.execute(
+            """
+            UPDATE TagMapperValues
+            SET PLC_ID=COALESCE(
+                    PLC_ID,
+                    (
+                        SELECT h.PLC_ID
+                        FROM ReportHistory h
+                        WHERE h.TriggerEventID=TagMapperValues.TriggerEventID
+                          AND h.ReportNodeID=TagMapperValues.ReportNodeID
+                        ORDER BY h.ReportID DESC
+                        LIMIT 1
+                    )
+                ),
+                ContractCode=COALESCE(
+                    NULLIF(TRIM(CAST(ContractCode AS TEXT)), ''),
+                    (
+                        SELECT h.ContractCode
+                        FROM ReportHistory h
+                        WHERE h.TriggerEventID=TagMapperValues.TriggerEventID
+                          AND h.ReportNodeID=TagMapperValues.ReportNodeID
+                        ORDER BY h.ReportID DESC
+                        LIMIT 1
+                    )
+                ),
+                ProductCode=COALESCE(
+                    NULLIF(TRIM(CAST(ProductCode AS TEXT)), ''),
+                    (
+                        SELECT h.ProductCode
+                        FROM ReportHistory h
+                        WHERE h.TriggerEventID=TagMapperValues.TriggerEventID
+                          AND h.ReportNodeID=TagMapperValues.ReportNodeID
+                        ORDER BY h.ReportID DESC
+                        LIMIT 1
+                    )
+                )
+            WHERE TriggerEventID IS NOT NULL
+              AND ReportNodeID IS NOT NULL
+        """
+        )
+
+        legacy_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ReportTagValues' LIMIT 1"
+        ).fetchone()
+        if legacy_exists:
+            conn.execute(
+                """
+                INSERT INTO TagMapperValues
+                (
+                    CompanyID,
+                    PLC_ID,
+                    Timestamp,
+                    ContractCode,
+                    ProductCode,
+                    TagName,
+                    Value,
+                    TriggerEventID,
+                    ReportNodeID
+                )
+                SELECT
+                    h.CompanyID,
+                    v.PLC_ID,
+                    h.Timestamp,
+                    h.ContractCode,
+                    h.ProductCode,
+                    v.TagName,
+                    v.Value,
+                    h.TriggerEventID,
+                    h.ReportNodeID
+                FROM ReportTagValues v
+                INNER JOIN ReportHistory h ON h.ReportID = v.ReportID
+                """
+            )
+            conn.execute("DROP TABLE ReportTagValues")
         conn.commit()
     finally:
         conn.close()
@@ -285,6 +679,7 @@ def save_report_snapshot(
     all_products = [item for item in (report_products or []) if isinstance(item, dict)]
     calculation_definitions = _all_management_calculations(company_id)
 
+    existing_report_id = None
     if trigger_event_id and report_node_id:
         conn = get_connection()
         try:
@@ -293,7 +688,7 @@ def save_report_snapshot(
                 (str(trigger_event_id), str(report_node_id)),
             ).fetchone()
             if row:
-                return int(row["ReportID"])
+                existing_report_id = int(row["ReportID"])
         finally:
             conn.close()
 
@@ -301,6 +696,10 @@ def save_report_snapshot(
     timestamp = timestamp or end_timestamp or start_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     plc_id = _plc_id(plc_id)
     contract, product = _context(all_products, tags)
+    if contract in (None, ""):
+        contract = tags.get("ContractCode")
+    if product in (None, ""):
+        product = tags.get("ProductCode")
     lookup = {str(key).strip().lower(): (key, value) for key, value in tags.items()}
     values = []
     used_names = set()
@@ -323,6 +722,8 @@ def save_report_snapshot(
             used_names.add(tag.lower())
         except (TypeError, ValueError):
             pass
+
+    tagmapper_values = _collect_tagmapper_values(tags, company_id, plc_id)
 
     # Flow-designed ManagementPanel calculations become persisted report columns.
     variables = _formula_variables(tags, duration)
@@ -352,6 +753,41 @@ def save_report_snapshot(
     for name, value in lifecycle_values.items():
         if name.lower() not in {key.lower() for key, _ in values}:
             values.append((name, value))
+
+    if existing_report_id is not None:
+        # The first call for this event may happen before SQLWriter has placed
+        # the current TagMapper/context values into the payload. A later call
+        # has the complete TagMapper payload; use it to finish the independent
+        # TagMapperValues store instead of returning too early.
+        conn = get_connection()
+        try:
+            conn.execute(
+                """
+                UPDATE ReportHistory
+                SET ContractCode=COALESCE(ContractCode, ?),
+                    ProductCode=COALESCE(ProductCode, ?)
+                WHERE ReportID=?
+                """,
+                (contract, product, existing_report_id),
+            )
+            _persist_tagmapper_values(
+                conn,
+                company_id,
+                plc_id,
+                timestamp,
+                contract,
+                product,
+                tagmapper_values,
+                trigger_event_id=trigger_event_id,
+                report_node_id=report_node_id,
+            )
+            conn.commit()
+            return existing_report_id
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     if not values:
         return None
@@ -389,6 +825,17 @@ def save_report_snapshot(
         conn.executemany(
             "INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",
             [(name, value) for name, value in values],
+        )
+        _persist_tagmapper_values(
+            conn,
+            company_id,
+            plc_id,
+            timestamp,
+            contract,
+            product,
+            tagmapper_values,
+            trigger_event_id=trigger_event_id,
+            report_node_id=report_node_id,
         )
         conn.commit()
         return report_id
@@ -496,3 +943,13 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None):
     result["totals"] = [round(value, 3) for value in totals]
     result["grand_total"] = round(sum(totals), 3)
     return result
+
+
+__all__ = [
+    "TAGMAPPER_EVENT_NODE_ID",
+    "persist_tagmapper_snapshot",
+    "ensure_report_tables",
+    "get_report_products",
+    "get_report_data",
+    "save_report_snapshot",
+]
