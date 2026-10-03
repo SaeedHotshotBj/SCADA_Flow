@@ -41,16 +41,22 @@ jobs:
           try:
               database.init_database()
               conn = database.get_connection()
-              conn.execute("INSERT INTO Companies(CompanyID, CompanyName) VALUES(1, 'CI')")
+              company_id = 900001
+              plc_id = 900001
               conn.execute(
-                  "INSERT INTO PLCs(PLC_ID, CompanyID, PLC_Name) VALUES(1, 1, 'PLC')"
+                  "INSERT INTO Companies(CompanyID, CompanyName) VALUES(?, 'CI')",
+                  (company_id,)
+              )
+              conn.execute(
+                  "INSERT INTO PLCs(PLC_ID, CompanyID, PLC_Name) VALUES(?, ?, 'PLC')",
+                  (plc_id, company_id)
               )
 
               flow = {
                   "drawflow": {"Home": {"data": {
                       "1": {
                           "name": "PLCReader",
-                          "data": {"plc_id": 1, "ip": "127.0.0.1", "port": 502, "slave": 1, "register": 100, "count": 10},
+                          "data": {"plc_id": plc_id, "ip": "127.0.0.1", "port": 502, "slave": 1, "register": 100, "count": 10},
                           "outputs": {"output_1": {"connections": [{"node": "2"}]}}
                       },
                       "2": {
@@ -71,7 +77,7 @@ jobs:
               }
               conn.execute(
                   "INSERT INTO Flows(CompanyID, FlowJson) VALUES(?, ?)",
-                  (1, json.dumps(flow))
+                  (company_id, json.dumps(flow))
               )
               conn.commit()
               conn.close()
@@ -81,7 +87,7 @@ jobs:
 
               item = {
                   "EventID": "evt-time-1",
-                  "PLC_ID": 1,
+                  "PLC_ID": plc_id,
                   "TagName": "Weight",
                   "Value": 4.0,
                   "Timestamp": "2026-10-03 11:00:00",
@@ -111,9 +117,9 @@ jobs:
               assert abs(float(trend_row["WeightedAverage"]) - 4.0) < 1e-9
               conn.close()
 
-              assert get_flow_history_resolution(1, 1, "Weight") == "minute"
+              assert get_flow_history_resolution(company_id, plc_id, "Weight") == "minute"
               resolution, rows = get_trend_series(
-                  1, 1, "Weight",
+                  company_id, plc_id, "Weight",
                   "2026-10-03 11:00:00",
                   "2026-10-03 11:02:00",
               )
@@ -122,7 +128,7 @@ jobs:
               assert abs(float(rows[0]["Value"]) - 4.0) < 1e-9
 
               stats = get_trend_stats(
-                  1, 1, "Weight",
+                  company_id, plc_id, "Weight",
                   "2026-10-03 11:00:00",
                   "2026-10-03 11:02:00",
               )
