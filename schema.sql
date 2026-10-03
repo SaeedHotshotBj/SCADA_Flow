@@ -170,3 +170,61 @@ CREATE INDEX IF NOT EXISTS idx_trend_day_lookup ON TrendDay (CompanyID, PLC_ID, 
 CREATE INDEX IF NOT EXISTS idx_tags_lookup ON Tags (CompanyID, PLC_ID, TagName);
 CREATE INDEX IF NOT EXISTS idx_alarm_history_lookup ON AlarmHistory (CompanyID, PLC_ID, Timestamp);
 CREATE INDEX IF NOT EXISTS idx_report_history_lookup ON ReportHistory (CompanyID, PLC_ID, Timestamp);
+
+
+-- =====================================================
+-- Remote Edge Management
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS EdgeDevices (
+    EdgeID TEXT PRIMARY KEY,
+    CompanyID INTEGER NOT NULL,
+    Hostname TEXT NOT NULL DEFAULT '',
+    Platform TEXT NOT NULL DEFAULT '',
+    AgentVersion TEXT NOT NULL DEFAULT '',
+    RootPath TEXT NOT NULL DEFAULT '',
+    AppRunning INTEGER NOT NULL DEFAULT 0,
+    AppPID INTEGER,
+    LastSeen REAL,
+    Status TEXT NOT NULL DEFAULT 'OFFLINE',
+    RegisteredAt REAL NOT NULL,
+    UpdatedAt REAL NOT NULL,
+    TokenHash TEXT NOT NULL,
+    FOREIGN KEY (CompanyID) REFERENCES Companies(CompanyID)
+);
+
+CREATE TABLE IF NOT EXISTS EdgePairingTokens (
+    TokenID INTEGER PRIMARY KEY AUTOINCREMENT,
+    CompanyID INTEGER NOT NULL,
+    TokenHash TEXT NOT NULL,
+    CreatedAt REAL NOT NULL,
+    ExpiresAt REAL NOT NULL,
+    UsedAt REAL,
+    Enabled INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (CompanyID) REFERENCES Companies(CompanyID)
+);
+
+CREATE TABLE IF NOT EXISTS EdgeCommands (
+    CommandID INTEGER PRIMARY KEY AUTOINCREMENT,
+    EdgeID TEXT NOT NULL,
+    CompanyID INTEGER NOT NULL,
+    CommandType TEXT NOT NULL,
+    Path TEXT NOT NULL DEFAULT '',
+    PayloadJson TEXT NOT NULL DEFAULT '{}',
+    Status TEXT NOT NULL DEFAULT 'QUEUED',
+    RequestedAt REAL NOT NULL,
+    SentAt REAL,
+    CompletedAt REAL,
+    ResultJson TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY (EdgeID) REFERENCES EdgeDevices(EdgeID),
+    FOREIGN KEY (CompanyID) REFERENCES Companies(CompanyID)
+);
+
+CREATE INDEX IF NOT EXISTS idx_edge_devices_company
+    ON EdgeDevices (CompanyID, Status, LastSeen);
+
+CREATE INDEX IF NOT EXISTS idx_edge_commands_edge_status
+    ON EdgeCommands (EdgeID, Status, RequestedAt);
+
+CREATE INDEX IF NOT EXISTS idx_edge_pairing_company
+    ON EdgePairingTokens (CompanyID, Enabled, ExpiresAt);

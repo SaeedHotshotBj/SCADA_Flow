@@ -56,6 +56,7 @@ from services.edge_ingest import (
     get_flow_storage_type,
     get_flow_historical_tags,
 )
+from services.edge_management import ensure_edge_management_schema
 
 
 
@@ -135,6 +136,12 @@ try:
     init_database()
 except Exception as _database_bootstrap_error:
     print("DATABASE BOOTSTRAP ERROR:", _database_bootstrap_error)
+
+try:
+    ensure_edge_management_schema()
+    print("EDGE MANAGEMENT SCHEMA BOOTSTRAP OK")
+except Exception as _edge_management_bootstrap_error:
+    print("EDGE MANAGEMENT SCHEMA BOOTSTRAP ERROR:", _edge_management_bootstrap_error)
 
 try:
     from services.plc_identity import ensure_plc_identity_schema
@@ -1967,6 +1974,226 @@ def master_companies():
                 conn.close()
             except Exception:
                 pass
+
+
+
+# =====================================================
+# MASTER EDGE MANAGEMENT
+# =====================================================
+
+@app.get("/api/master/edge/overview")
+@login_required
+def master_edge_overview():
+    if not is_master():
+        return jsonify({
+            "status": "error",
+            "message": "Master access required"
+        }), 403
+
+    try:
+        company_id = request.args.get("company_id", type=int)
+        if company_id is None:
+            return jsonify({
+                "status": "error",
+                "message": "Company is required"
+            }), 400
+
+        from services.edge_management import get_company_edges
+
+        return jsonify({
+            "status": "ok",
+            "company_id": company_id,
+            "edges": get_company_edges(company_id)
+        })
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 400
+
+
+@app.post("/api/master/edge/pairing-token")
+@login_required
+def master_edge_pairing_token():
+    if not is_master():
+        return jsonify({
+            "status": "error",
+            "message": "Master access required"
+        }), 403
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        company_id = int(payload.get("company_id"))
+        from services.edge_management import generate_pairing_token
+
+        return jsonify({
+            "status": "ok",
+            "company_id": company_id,
+            **generate_pairing_token(company_id)
+        })
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 400
+
+
+@app.post("/api/master/edge/command")
+@login_required
+def master_edge_command():
+    if not is_master():
+        return jsonify({
+            "status": "error",
+            "message": "Master access required"
+        }), 403
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        company_id = int(payload.get("company_id"))
+        edge_id = str(payload.get("edge_id") or "").strip()
+        command = str(payload.get("command") or "").strip().upper()
+        path = str(payload.get("path") or "").strip()
+        command_payload = payload.get("payload") or {}
+
+        from services.edge_management import queue_command
+
+        command_id = queue_command(
+            company_id,
+            edge_id,
+            command,
+            path,
+            command_payload,
+        )
+
+        return jsonify({
+            "status": "ok",
+            "command_id": command_id,
+            "edge_id": edge_id,
+            "command": command,
+        }), 201
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 400
+
+
+@app.get("/api/master/edge/command/<int:command_id>")
+@login_required
+def master_edge_command_status(command_id):
+    if not is_master():
+        return jsonify({
+            "status": "error",
+            "message": "Master access required"
+        }), 403
+
+    try:
+        company_id = request.args.get("company_id", type=int)
+        if company_id is None:
+            return jsonify({
+                "status": "error",
+                "message": "Company is required"
+            }), 400
+
+        from services.edge_management import get_command_status
+
+        return jsonify(get_command_status(company_id, command_id))
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 400
+
+
+# =====================================================
+# EDGE MANAGEMENT AGENT API
+# =====================================================
+
+def _edge_management_token_from_request(payload):
+    token = request.headers.get("Authorization", "")
+    if token.lower().startswith("bearer "):
+        return token[7:].strip()
+    return str((payload or {}).get("token") or "").strip()
+
+
+@app.post("/api/edge/management/heartbeat")
+def edge_management_heartbeat():
+    try:
+        payload = request.get_json(silent=True) or {}
+        token = _edge_management_token_from_request(payload)
+        payload["token"] = token
+
+        from services.edge_management import register_or_heartbeat
+
+        return jsonify({
+            "status": "ok",
+            **register_or_heartbeat(payload)
+        })
+    except PermissionError as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 403
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 400
+
+
+@app.post("/api/edge/management/poll")
+def edge_management_poll():
+    try:
+        payload = request.get_json(silent=True) or {}
+        token = _edge_management_token_from_request(payload)
+        edge_id = str(payload.get("edge_id") or "").strip()
+
+        from services.edge_management import poll_command
+
+        command = poll_command(edge_id, token)
+        return jsonify({
+            "status": "ok",
+            "command": command
+        })
+    except PermissionError as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 403
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 400
+
+
+@app.post("/api/edge/management/result")
+def edge_management_result():
+    try:
+        payload = request.get_json(silent=True) or {}
+        token = _edge_management_token_from_request(payload)
+
+        from services.edge_management import record_command_result
+
+        record_command_result(
+            str(payload.get("edge_id") or "").strip(),
+            token,
+            payload.get("command_id"),
+            bool(payload.get("success")),
+            payload.get("result") or {},
+        )
+
+        return jsonify({"status": "ok"})
+    except PermissionError as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 403
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc)
+        }), 400
 
 
 # =====================================================
