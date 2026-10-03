@@ -146,33 +146,48 @@ def _flow_tag_plcs(company_id, nodes):
     return result
 
 
-def _flow_storage_lookup(nodes):
+def _flow_storage_lookup(nodes, tag_plcs=None):
+    """Resolve TagMapper storage for every Flow tag, including implicit PLC links."""
     lookup = {}
+    tag_plcs = tag_plcs or {}
+
     for node in nodes.values():
         if not isinstance(node, dict) or node.get("name") != "TagMapper":
             continue
+
         data = _node_config(node)
         mappings = data.get("mappings", [])
         if not isinstance(mappings, list):
             continue
+
         for mapping in mappings:
             if not isinstance(mapping, dict):
                 continue
+
             tag = str(mapping.get("name", "")).strip()
             if not tag:
                 continue
-            storage = str(mapping.get("storage", "TIME")).strip().upper()
-            plc_id = _to_plc_id(mapping.get("plc_id", mapping.get("PLC_ID")))
-            if plc_id is not None:
+
+            storage = str(mapping.get("storage", "TIME") or "TIME").strip().upper()
+            explicit_plc = _to_plc_id(mapping.get("plc_id", mapping.get("PLC_ID")))
+            if explicit_plc is not None:
+                plc_ids = [explicit_plc]
+            else:
+                plc_ids = sorted(tag_plcs.get(tag.lower(), set()))
+
+            register = mapping.get("register")
+            register_key = None
+            if register not in (None, ""):
+                try:
+                    register_key = str(int(float(register)))
+                except (TypeError, ValueError):
+                    register_key = str(register).strip()
+
+            for plc_id in plc_ids:
                 lookup[(plc_id, tag.lower())] = storage
-                register = mapping.get("register")
-                if register not in (None, ""):
-                    try:
-                        register_key = str(int(float(register)))
-                    except (TypeError, ValueError):
-                        register_key = str(register).strip()
-                    if register_key:
-                        lookup[(plc_id, register_key.lower())] = storage
+                if register_key:
+                    lookup[(plc_id, register_key.lower())] = storage
+
     return lookup
 
 
@@ -245,7 +260,7 @@ def get_dashboard_widgets(company_id):
         nodes = _get_nodes(company_id)
         tag_plcs = _flow_tag_plcs(company_id, nodes)
         register_lookup = _register_to_tag(nodes, tag_plcs)
-        storage_lookup = _flow_storage_lookup(nodes)
+        storage_lookup = _flow_storage_lookup(nodes, tag_plcs)
 
         for node in nodes.values():
             if not isinstance(node, dict):

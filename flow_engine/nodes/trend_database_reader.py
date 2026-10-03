@@ -53,44 +53,109 @@ class TrendDatabaseReader:
 
     @staticmethod
     def _flow_tag_plcs(company_id):
-        """Read TagMapper PLC identity from the saved company Flow."""
+        """Resolve every Flow tag to its PLC using explicit IDs or graph connections."""
         try:
-            from database import get_company_flow
+            from database import get_company_flow, get_connection
+
             flow_json = get_company_flow(company_id)
             if not flow_json:
                 return {}
+
             flow = json.loads(flow_json) if isinstance(flow_json, str) else flow_json
             nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
+            if not isinstance(nodes, dict):
+                return {}
+
+            conn = get_connection()
+            try:
+                rows = conn.execute(
+                    "SELECT PLC_ID FROM PLCs WHERE CompanyID=? ORDER BY PLC_ID",
+                    (int(company_id),),
+                ).fetchall()
+            finally:
+                conn.close()
+
+            company_plc_ids = [int(row["PLC_ID"]) for row in rows]
+
+            def node_config(node):
+                raw = node.get("data", {}) if isinstance(node, dict) else {}
+                config = raw.get("config", raw) if isinstance(raw, dict) else {}
+                return config if isinstance(config, dict) else {}
+
+            def output_connections(node_id):
+                node = nodes.get(str(node_id), {})
+                outputs = node.get("outputs", {}) if isinstance(node, dict) else {}
+                if not isinstance(outputs, dict):
+                    return []
+                result = []
+                for output in outputs.values():
+                    if not isinstance(output, dict):
+                        continue
+                    for connection in output.get("connections", []) or []:
+                        if isinstance(connection, dict) and connection.get("node") is not None:
+                            result.append(str(connection["node"]))
+                return result
+
+            fallback_id = company_plc_ids[0] if len(company_plc_ids) == 1 else None
+            reader_plcs = {}
+
+            for node_id, node in nodes.items():
+                if not isinstance(node, dict) or node.get("name") != "PLCReader":
+                    continue
+                config = node_config(node)
+                raw = config.get("plc_id", config.get("PLC_ID"))
+                try:
+                    plc_id = int(raw) if raw not in (None, "") else fallback_id
+                except (TypeError, ValueError):
+                    plc_id = fallback_id
+                if plc_id in company_plc_ids:
+                    reader_plcs[str(node_id)] = plc_id
+
             result = {}
-            for node in nodes.values():
+
+            for node_id, node in nodes.items():
                 if not isinstance(node, dict) or node.get("name") != "TagMapper":
                     continue
-                raw = node.get("data", {}) or {}
-                config = raw.get("config", raw) or {}
+
+                config = node_config(node)
+                upstream_ids = []
+                for source_id, plc_id in reader_plcs.items():
+                    if str(node_id) in output_connections(source_id):
+                        upstream_ids.append(plc_id)
+                upstream_ids = list(dict.fromkeys(upstream_ids))
+
                 mappings = config.get("mappings", [])
                 if not isinstance(mappings, list):
                     continue
+
                 for mapping in mappings:
                     if not isinstance(mapping, dict):
                         continue
                     name = str(mapping.get("name", "")).strip()
                     if not name:
                         continue
-                    plc_id = TrendDatabaseReader._plc_id(
+
+                    explicit = TrendDatabaseReader._plc_id(
                         mapping.get("plc_id", mapping.get("PLC_ID"))
                     )
-                    if plc_id is not None:
-                        result[TrendDatabaseReader._normalize_tag(name)] = plc_id
-                # TagMapper is the canonical tag-definition node.
-                if result:
-                    break
+                    plc_ids = [explicit] if explicit is not None else list(upstream_ids)
+                    if not plc_ids and len(company_plc_ids) == 1:
+                        plc_ids = [company_plc_ids[0]]
 
-            # Historical Trend also exposes ExpressionNode result tags.
+                    for plc_id in plc_ids:
+                        if plc_id in company_plc_ids:
+                            result.setdefault(
+                                TrendDatabaseReader._normalize_tag(name),
+                                plc_id,
+                            )
+
             try:
                 from services.edge_ingest import get_flow_calculated_tags
                 for item in get_flow_calculated_tags(company_id):
                     name = TrendDatabaseReader._normalize_tag(item.get("tag"))
-                    plc_id = TrendDatabaseReader._plc_id(item.get("PLC_ID", item.get("plc_id")))
+                    plc_id = TrendDatabaseReader._plc_id(
+                        item.get("PLC_ID", item.get("plc_id"))
+                    )
                     if name and plc_id is not None:
                         result.setdefault(name, plc_id)
             except Exception as calc_exc:
