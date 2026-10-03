@@ -1019,8 +1019,9 @@ def flow_trend():
         selected = str(trend_request.get("Tag", "")).strip()
         requested_tags = trend_request.get("Tags") or ([selected] if selected else [])
 
-        # TIME tags are live-only. Historical calculated tags continue through
-        # the existing Flow-driven TrendDatabaseReader path.
+        # LIVE tags are live-only. TIME tags use the Flow-driven historical
+        # TrendDatabaseReader path so Edge-precomputed aggregates are read
+        # from the exact Trend table selected by the Flow.
         if selected and len(requested_tags) <= 1:
             from flow_engine.nodes.trend_database_reader import TrendDatabaseReader
             from flow_engine.nodes.trend_output import TrendOutput
@@ -1043,7 +1044,7 @@ def flow_trend():
                 else None
             )
 
-            if storage in {"TIME", "LIVE"}:
+            if storage == "LIVE":
                 calendar = trend_request.get("Calendar", "Gregorian")
                 start = reader.normalize_date(trend_request.get("Start"), calendar)
                 end = reader.normalize_date(trend_request.get("End"), calendar)

@@ -1,6 +1,6 @@
 """Atomic and idempotent ingestion for SCADA_FLOW_EDGE Store & Forward."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import math
 import sqlite3
@@ -11,6 +11,16 @@ from database import get_connection, get_company_flow
 
 _EDGE_SCHEMA_LOCK = threading.Lock()
 _EDGE_SCHEMA_READY = False
+
+_TREND_TABLE_BY_STORAGE = {
+    "CALCULATED_MINUTE": "TrendMinute",
+    "CALCULATED_HOUR": "TrendHour",
+    "CALCULATED_DAY": "TrendDay",
+    "CALCULATED_MONTH": "TrendMonth",
+}
+
+_ALLOWED_HISTORY_RESOLUTIONS = {"minute", "hour", "day", "month"}
+
 
 
 def ensure_edge_event_schema():
@@ -28,6 +38,7 @@ def ensure_edge_event_schema():
             conn.execute("PRAGMA busy_timeout = 30000")
             conn.execute("BEGIN IMMEDIATE")
 
+            _ensure_trend_tables(conn)
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
             if "PLC_Data" in tables:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(PLC_Data)").fetchall()}
@@ -67,6 +78,92 @@ def ensure_edge_event_schema():
             raise
         finally:
             conn.close()
+
+
+def _ensure_trend_tables(conn):
+    for table in ("TrendMinute", "TrendHour", "TrendDay", "TrendMonth"):
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                CompanyID INTEGER NOT NULL,
+                PLC_ID INTEGER,
+                TagName TEXT NOT NULL,
+                PeriodStart TEXT NOT NULL,
+                PeriodEnd TEXT NOT NULL,
+                FirstValue REAL,
+                LastValue REAL,
+                MinValue REAL,
+                MaxValue REAL,
+                WeightedAverage REAL,
+                DurationSeconds REAL NOT NULL DEFAULT 0,
+                SampleCount INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "PLC_ID" not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN PLC_ID INTEGER")
+        suffix = table.replace("Trend", "").lower()
+        conn.execute(
+            f"DROP INDEX IF EXISTS uq_trend_{suffix}_company_tag_period"
+        )
+        canonical = f"uq_trend_{suffix}_company_plc_tag_period"
+        try:
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {canonical} "
+                f"ON {table}(CompanyID, PLC_ID, TagName, PeriodStart)"
+            )
+        except sqlite3.IntegrityError:
+            conn.execute(
+                f"""
+                DELETE FROM {table}
+                WHERE ID NOT IN (
+                    SELECT MIN(ID)
+                    FROM {table}
+                    GROUP BY CompanyID, PLC_ID, TagName, PeriodStart
+                )
+                """
+            )
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {canonical} "
+                f"ON {table}(CompanyID, PLC_ID, TagName, PeriodStart)"
+            )
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_trend_{suffix}_company_plc_tag_time "
+            f"ON {table}(CompanyID, PLC_ID, TagName, PeriodStart)"
+        )
+
+
+def _normalize_history_resolution(value):
+    raw = str(value or "ALL").strip().upper()
+    if raw in {"", "ALL"}:
+        return "ALL"
+    if raw in {"NONE", "OFF"}:
+        return "NONE"
+    normalized = raw.lower()
+    return normalized if normalized in _ALLOWED_HISTORY_RESOLUTIONS else None
+
+
+def _period_end(timestamp, resolution):
+    dt = _parse_timestamp(timestamp)
+    if dt is None:
+        raise ValueError("Invalid aggregate PeriodStart")
+    resolution = str(resolution).lower()
+    if resolution == "minute":
+        end = dt + timedelta(minutes=1)
+    elif resolution == "hour":
+        end = dt + timedelta(hours=1)
+    elif resolution == "day":
+        end = dt + timedelta(days=1)
+    elif resolution == "month":
+        if dt.month == 12:
+            end = dt.replace(year=dt.year + 1, month=1, day=1)
+        else:
+            end = dt.replace(month=dt.month + 1, day=1)
+    else:
+        raise ValueError("Unsupported aggregate resolution")
+    return end.strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
 
 
 def _parse_timestamp(value):
@@ -486,6 +583,9 @@ def get_flow_time_tags(company_id):
                     "unit": str(mapping.get("unit", "")).strip(),
                     "PLC_ID": int(plc_id),
                     "plc_id": int(plc_id),
+                    "history_resolution": _normalize_history_resolution(
+                        mapping.get("history_resolution", mapping.get("HistoryResolution", "ALL"))
+                    ) or "ALL",
                 })
 
     return result
@@ -605,9 +705,114 @@ def get_flow_calculated_tags(company_id):
                     "unit": str(expression.get("unit", "")).strip(),
                     "PLC_ID": int(plc_id),
                     "plc_id": int(plc_id),
+                    "history_resolution": _normalize_history_resolution(
+                        expression.get("history_resolution", expression.get("HistoryResolution", "ALL"))
+                    ) or "ALL",
                 })
 
     return result
+
+
+def get_flow_history_resolution(company_id, plc_id, tag_name):
+    try:
+        plc_id = int(plc_id)
+    except (TypeError, ValueError):
+        return None
+    wanted = str(tag_name or "").strip().lower()
+    if not wanted:
+        return None
+
+    try:
+        for item in get_flow_time_tags(company_id):
+            try:
+                item_plc = int(item.get("PLC_ID", item.get("plc_id")))
+            except (TypeError, ValueError):
+                continue
+            if item_plc == plc_id and str(item.get("tag", "")).strip().lower() == wanted:
+                return _normalize_history_resolution(item.get("history_resolution"))
+
+        for item in get_flow_calculated_tags(company_id):
+            try:
+                item_plc = int(item.get("PLC_ID", item.get("plc_id")))
+            except (TypeError, ValueError):
+                continue
+            if item_plc == plc_id and str(item.get("tag", "")).strip().lower() == wanted:
+                return _normalize_history_resolution(item.get("history_resolution")) or "ALL"
+    except Exception as exc:
+        print("EDGE FLOW HISTORY RESOLUTION ERROR:", repr(exc))
+    return None
+
+
+def _insert_trend_aggregate(conn, company_id, plc_id, tag, value, timestamp, storage_type, item):
+    table = _TREND_TABLE_BY_STORAGE.get(str(storage_type or "").strip().upper())
+    if table is None:
+        raise ValueError("Unknown calculated aggregate resolution")
+
+    resolution = {
+        "TrendMinute": "minute",
+        "TrendHour": "hour",
+        "TrendDay": "day",
+        "TrendMonth": "month",
+    }[table]
+    period_start = timestamp
+    period_end = str(item.get("PeriodEnd") or "").strip() or _period_end(period_start, resolution)
+
+    def optional_float(key, fallback):
+        raw = item.get(key)
+        if raw in (None, ""):
+            return fallback
+        return _validate_numeric(raw)
+
+    try:
+        sample_count = int(item.get("SampleCount", 1) or 1)
+    except (TypeError, ValueError):
+        raise ValueError("SampleCount must be an integer")
+    if sample_count < 1:
+        sample_count = 1
+
+    average_value = optional_float("AverageValue", value)
+    minimum = optional_float("MinValue", value)
+    maximum = optional_float("MaxValue", value)
+
+    duration_raw = item.get("DurationSeconds")
+    if duration_raw in (None, ""):
+        start_dt = _parse_timestamp(period_start)
+        end_dt = _parse_timestamp(period_end)
+        duration_seconds = (
+            (end_dt - start_dt).total_seconds()
+            if start_dt is not None and end_dt is not None and end_dt > start_dt
+            else 0.0
+        )
+    else:
+        duration_seconds = _validate_numeric(duration_raw)
+
+    first_value = optional_float("FirstValue", value)
+    last_value = optional_float("LastValue", value)
+
+    conn.execute(
+        f"""
+        INSERT INTO {table}
+        (CompanyID, PLC_ID, TagName, PeriodStart, PeriodEnd,
+         FirstValue, LastValue, MinValue, MaxValue, WeightedAverage,
+         DurationSeconds, SampleCount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(CompanyID, PLC_ID, TagName, PeriodStart) DO UPDATE SET
+            PeriodEnd=excluded.PeriodEnd,
+            FirstValue=excluded.FirstValue,
+            LastValue=excluded.LastValue,
+            MinValue=excluded.MinValue,
+            MaxValue=excluded.MaxValue,
+            WeightedAverage=excluded.WeightedAverage,
+            DurationSeconds=excluded.DurationSeconds,
+            SampleCount=excluded.SampleCount
+        """,
+        (
+            int(company_id), int(plc_id), str(tag), period_start, period_end,
+            first_value, last_value, minimum, maximum, average_value,
+            duration_seconds, sample_count,
+        ),
+    )
+    return "upserted"
 
 
 def _insert_or_ack_existing(conn, event_id, company_id, plc_id, tag, value, timestamp, storage_type):
@@ -735,6 +940,21 @@ def ingest_items(items):
                     error = "Calculated aggregate is not defined by the company Flow"
                     errors.append({"EventID": event_id, "Error": error})
                     continue
+
+                flow_resolution = get_flow_history_resolution(company_id, plc_id, tag)
+                incoming_resolution = incoming_storage.split("_", 1)[1].lower()
+                if flow_resolution is None:
+                    error = "History resolution is not defined for this tag by the company Flow"
+                    errors.append({"EventID": event_id, "Error": error})
+                    continue
+                if flow_resolution == "NONE" or (
+                    flow_resolution != "ALL"
+                    and flow_resolution != incoming_resolution
+                ):
+                    error = "Calculated aggregate resolution does not match the company Flow"
+                    errors.append({"EventID": event_id, "Error": error})
+                    continue
+
                 storage_type = incoming_storage
 
             elif storage_type == "CALCULATED":
@@ -752,33 +972,36 @@ def ingest_items(items):
                 (event_id,),
             ).fetchone()
             if existing is not None:
-                stored = conn.execute(
-                    "SELECT ID FROM PLC_Data WHERE EventID=? LIMIT 1",
-                    (event_id,),
-                ).fetchone()
-                if stored is not None:
-                    acks.append(event_id)
-                    continue
-                conn.execute(
-                    "DELETE FROM EdgeEventLedger WHERE EventID=?",
-                    (event_id,),
-                )
+                acks.append(event_id)
+                continue
 
             savepoint = "edge_event"
             try:
                 conn.execute(f"SAVEPOINT {savepoint}")
                 received_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
 
-                insert_state = _insert_or_ack_existing(
-                    conn,
-                    event_id,
-                    company_id,
-                    plc_id,
-                    tag,
-                    value,
-                    timestamp,
-                    storage_type,
-                )
+                if storage_type.startswith("CALCULATED_"):
+                    insert_state = _insert_trend_aggregate(
+                        conn,
+                        company_id,
+                        plc_id,
+                        tag,
+                        value,
+                        timestamp,
+                        storage_type,
+                        item,
+                    )
+                else:
+                    insert_state = _insert_or_ack_existing(
+                        conn,
+                        event_id,
+                        company_id,
+                        plc_id,
+                        tag,
+                        value,
+                        timestamp,
+                        storage_type,
+                    )
 
                 if insert_state == "existing":
                     conn.execute(f"RELEASE SAVEPOINT {savepoint}")
@@ -851,4 +1074,5 @@ __all__ = [
     "get_flow_time_tags",
     "get_flow_calculated_tags",
     "get_flow_historical_tags",
+    "get_flow_history_resolution",
 ]
