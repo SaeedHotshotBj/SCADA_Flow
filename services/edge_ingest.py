@@ -19,6 +19,7 @@ _TREND_TABLE_BY_RESOLUTION = {
 }
 
 _ALLOWED_HISTORY_RESOLUTIONS = {"minute", "hour", "day"}
+_HISTORY_RESOLUTION_RANK = {"minute": 0, "hour": 1, "day": 2}
 
 
 
@@ -900,10 +901,15 @@ def ingest_items(items):
                         "Error": "TIME history resolution is not defined by the company Flow",
                     })
                     continue
-                if resolution != flow_resolution:
+                if (
+                    resolution not in _HISTORY_RESOLUTION_RANK
+                    or flow_resolution not in _HISTORY_RESOLUTION_RANK
+                    or _HISTORY_RESOLUTION_RANK[resolution]
+                    < _HISTORY_RESOLUTION_RANK[flow_resolution]
+                ):
                     errors.append({
                         "EventID": event_id,
-                        "Error": "TIME history resolution does not match the company Flow",
+                        "Error": "TIME history resolution must be the Flow resolution or a higher resolution",
                     })
                     continue
 
