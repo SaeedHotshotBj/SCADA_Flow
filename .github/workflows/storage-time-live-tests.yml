@@ -131,7 +131,7 @@ jobs:
               stats = get_trend_stats(
                   company_id, plc_id, "Weight",
                   "2026-10-03 11:00:00",
-                  "2026-10-03 11:02:00",
+                  "2026-10-03 12:00:00",
               )
               assert abs(float(stats["weighted_average"]) - 4.0) < 1e-9, stats
 
