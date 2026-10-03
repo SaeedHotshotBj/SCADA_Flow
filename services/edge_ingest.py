@@ -713,6 +713,52 @@ def get_flow_calculated_tags(company_id):
     return result
 
 
+def get_flow_aggregate_spec(company_id, plc_id, tag_name):
+    """Return the Flow-defined historical output specification.
+
+    Calculated ExpressionNode outputs are checked before raw TIME mappings so
+    an aggregate output is not confused with a same-named raw tag.
+    """
+    try:
+        plc_id = int(plc_id)
+    except (TypeError, ValueError):
+        return None
+
+    wanted = str(tag_name or "").strip().lower()
+    if not wanted:
+        return None
+
+    try:
+        for item in get_flow_calculated_tags(company_id):
+            try:
+                item_plc = int(item.get("PLC_ID", item.get("plc_id")))
+            except (TypeError, ValueError):
+                continue
+            if item_plc == plc_id and str(item.get("tag", "")).strip().lower() == wanted:
+                return {
+                    "storage_type": "CALCULATED",
+                    "history_resolution": _normalize_history_resolution(
+                        item.get("history_resolution")
+                    ) or "ALL",
+                }
+
+        for item in get_flow_time_tags(company_id):
+            try:
+                item_plc = int(item.get("PLC_ID", item.get("plc_id")))
+            except (TypeError, ValueError):
+                continue
+            if item_plc == plc_id and str(item.get("tag", "")).strip().lower() == wanted:
+                return {
+                    "storage_type": "TIME",
+                    "history_resolution": _normalize_history_resolution(
+                        item.get("history_resolution")
+                    ) or "ALL",
+                }
+    except Exception as exc:
+        print("EDGE FLOW AGGREGATE SPEC ERROR:", repr(exc))
+    return None
+
+
 def get_flow_history_resolution(company_id, plc_id, tag_name):
     try:
         plc_id = int(plc_id)
@@ -936,12 +982,27 @@ def ingest_items(items):
                     error = "Unknown calculated aggregate resolution"
                     errors.append({"EventID": event_id, "Error": error})
                     continue
-                if storage_type not in {"TIME", "CALCULATED"}:
+                flow_spec = get_flow_aggregate_spec(
+                    company_id,
+                    plc_id,
+                    tag,
+                )
+                if flow_spec is None:
                     error = "Calculated aggregate is not defined by the company Flow"
                     errors.append({"EventID": event_id, "Error": error})
                     continue
 
-                flow_resolution = get_flow_history_resolution(company_id, plc_id, tag)
+                flow_storage_type = str(
+                    flow_spec.get("storage_type", "")
+                ).upper()
+                if flow_storage_type not in {"TIME", "CALCULATED"}:
+                    error = "Calculated aggregate is not defined by the company Flow"
+                    errors.append({"EventID": event_id, "Error": error})
+                    continue
+
+                flow_resolution = _normalize_history_resolution(
+                    flow_spec.get("history_resolution")
+                )
                 incoming_resolution = incoming_storage.split("_", 1)[1].lower()
                 if flow_resolution is None:
                     error = "History resolution is not defined for this tag by the company Flow"
@@ -1075,4 +1136,5 @@ __all__ = [
     "get_flow_calculated_tags",
     "get_flow_historical_tags",
     "get_flow_history_resolution",
+    "get_flow_aggregate_spec",
 ]
