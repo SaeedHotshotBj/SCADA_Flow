@@ -1526,7 +1526,7 @@ def receive_edge_live():
             incoming_storage = str(
                 item.get("StorageType", "LIVE") or "LIVE"
             ).strip().upper()
-            if incoming_storage not in {"LIVE", "CALCULATED", "TIME"}:
+            if incoming_storage not in {"LIVE", "TIME"}:
                 continue
 
             if plc_id not in company_by_plc:
@@ -1541,7 +1541,7 @@ def receive_edge_live():
                 tag,
             )
 
-            if flow_storage not in {"TIME", "LIVE", "CALCULATED"}:
+            if flow_storage not in {"TIME", "LIVE"}:
                 continue
 
             if incoming_storage != flow_storage:
@@ -1671,7 +1671,7 @@ def receive_edge_data():
             tag,
         )
 
-        if flow_storage in {"TIME", "LIVE", "CALCULATED"}:
+        if flow_storage in {"TIME", "LIVE"}:
             live_item = dict(data)
             live_item["PLC_ID"] = plc_id
             live_item["TagName"] = tag

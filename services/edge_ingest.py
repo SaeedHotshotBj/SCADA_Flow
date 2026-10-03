@@ -12,14 +12,13 @@ from database import get_connection, get_company_flow
 _EDGE_SCHEMA_LOCK = threading.Lock()
 _EDGE_SCHEMA_READY = False
 
-_TREND_TABLE_BY_STORAGE = {
-    "CALCULATED_MINUTE": "TrendMinute",
-    "CALCULATED_HOUR": "TrendHour",
-    "CALCULATED_DAY": "TrendDay",
-    "CALCULATED_MONTH": "TrendMonth",
+_TREND_TABLE_BY_RESOLUTION = {
+    "minute": "TrendMinute",
+    "hour": "TrendHour",
+    "day": "TrendDay",
 }
 
-_ALLOWED_HISTORY_RESOLUTIONS = {"minute", "hour", "day", "month"}
+_ALLOWED_HISTORY_RESOLUTIONS = {"minute", "hour", "day"}
 
 
 
@@ -81,7 +80,7 @@ def ensure_edge_event_schema():
 
 
 def _ensure_trend_tables(conn):
-    for table in ("TrendMinute", "TrendHour", "TrendDay", "TrendMonth"):
+    for table in ("TrendMinute", "TrendHour", "TrendDay"):
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {table} (
@@ -136,14 +135,14 @@ def _ensure_trend_tables(conn):
 
 
 def _normalize_history_resolution(value):
-    raw = str(value or "ALL").strip().upper()
-    if raw in {"", "ALL"}:
-        return "ALL"
-    if raw in {"NONE", "OFF"}:
-        return "NONE"
-    normalized = raw.lower()
-    return normalized if normalized in _ALLOWED_HISTORY_RESOLUTIONS else None
-
+    raw = str(value or "MINUTE").strip().upper()
+    if raw in {"MINUTE", "HOUR", "DAY"}:
+        return raw.lower()
+    # Older flows used ALL/NONE. New TIME storage requires one concrete
+    # server-upload resolution; legacy ALL is kept operational as minute.
+    if raw in {"", "ALL", "NONE", "OFF"}:
+        return "minute"
+    return None
 
 def _period_end(timestamp, resolution):
     dt = _parse_timestamp(timestamp)
@@ -584,49 +583,16 @@ def get_flow_time_tags(company_id):
                     "PLC_ID": int(plc_id),
                     "plc_id": int(plc_id),
                     "history_resolution": _normalize_history_resolution(
-                        mapping.get("history_resolution", mapping.get("HistoryResolution", "ALL"))
-                    ) or "ALL",
+                        mapping.get("history_resolution", mapping.get("HistoryResolution", "MINUTE"))
+                    ) or "minute",
                 })
 
     return result
 
 
 def get_flow_historical_tags(company_id):
-    """Return raw TIME and calculated tags available in Historical Trend."""
-    result = []
-    seen = set()
-
-    for item in (
-        get_flow_time_tags(company_id)
-        + get_flow_calculated_tags(company_id)
-    ):
-        if not isinstance(item, dict):
-            continue
-
-        tag = str(item.get("tag", "")).strip()
-        try:
-            plc_id = int(item.get("PLC_ID", item.get("plc_id")))
-        except (TypeError, ValueError):
-            continue
-
-        if not tag:
-            continue
-
-        key = (plc_id, tag.lower())
-        if key in seen:
-            continue
-        seen.add(key)
-
-        result.append({
-            "tag": tag,
-            "title": item.get("title", tag),
-            "unit": item.get("unit", ""),
-            "PLC_ID": plc_id,
-            "plc_id": plc_id,
-        })
-
-    return result
-
+    """Return Flow-defined TIME tags available in Historical Trend."""
+    return get_flow_time_tags(company_id)
 
 def get_flow_calculated_tags(company_id):
     flow_json = get_company_flow(company_id)
@@ -718,76 +684,57 @@ def get_flow_history_resolution(company_id, plc_id, tag_name):
         plc_id = int(plc_id)
     except (TypeError, ValueError):
         return None
+
     wanted = str(tag_name or "").strip().lower()
     if not wanted:
         return None
 
-    try:
-        for item in get_flow_time_tags(company_id):
-            try:
-                item_plc = int(item.get("PLC_ID", item.get("plc_id")))
-            except (TypeError, ValueError):
-                continue
-            if item_plc == plc_id and str(item.get("tag", "")).strip().lower() == wanted:
-                return _normalize_history_resolution(item.get("history_resolution"))
-
-        for item in get_flow_calculated_tags(company_id):
-            try:
-                item_plc = int(item.get("PLC_ID", item.get("plc_id")))
-            except (TypeError, ValueError):
-                continue
-            if item_plc == plc_id and str(item.get("tag", "")).strip().lower() == wanted:
-                return _normalize_history_resolution(item.get("history_resolution")) or "ALL"
-    except Exception as exc:
-        print("EDGE FLOW HISTORY RESOLUTION ERROR:", repr(exc))
+    for item in get_flow_time_tags(company_id):
+        try:
+            item_plc = int(item.get("PLC_ID", item.get("plc_id")))
+        except (TypeError, ValueError):
+            continue
+        if item_plc == plc_id and str(item.get("tag", "")).strip().lower() == wanted:
+            return _normalize_history_resolution(item.get("history_resolution"))
     return None
 
-
-def _insert_trend_aggregate(conn, company_id, plc_id, tag, value, timestamp, storage_type, item):
-    table = _TREND_TABLE_BY_STORAGE.get(str(storage_type or "").strip().upper())
+def _insert_trend_aggregate(conn, company_id, plc_id, tag, value, timestamp, resolution, item):
+    table = _TREND_TABLE_BY_RESOLUTION.get(str(resolution or "").strip().lower())
     if table is None:
-        raise ValueError("Unknown calculated aggregate resolution")
+        raise ValueError("Unsupported TIME aggregate resolution")
 
-    resolution = {
-        "TrendMinute": "minute",
-        "TrendHour": "hour",
-        "TrendDay": "day",
-        "TrendMonth": "month",
-    }[table]
-    period_start = timestamp
-    period_end = str(item.get("PeriodEnd") or "").strip() or _period_end(period_start, resolution)
+    period_start = str(item.get("PeriodStart") or timestamp).strip()
+    period_end = str(item.get("PeriodEnd") or "").strip()
+    if not period_start or not period_end:
+        raise ValueError("TIME aggregate requires PeriodStart and PeriodEnd")
 
-    def optional_float(key, fallback):
+    def required_number(key, fallback=None):
         raw = item.get(key)
         if raw in (None, ""):
-            return fallback
+            if fallback is not None:
+                return float(fallback)
+            raise ValueError(f"{key} is required")
         return _validate_numeric(raw)
 
     try:
-        sample_count = int(item.get("SampleCount", 1) or 1)
+        sample_count = int(item.get("SampleCount"))
     except (TypeError, ValueError):
         raise ValueError("SampleCount must be an integer")
     if sample_count < 1:
-        sample_count = 1
+        raise ValueError("SampleCount must be greater than zero")
 
-    average_value = optional_float("AverageValue", value)
-    minimum = optional_float("MinValue", value)
-    maximum = optional_float("MaxValue", value)
+    duration_seconds = _validate_numeric(item.get("DurationSeconds"))
+    if duration_seconds <= 0:
+        raise ValueError("DurationSeconds must be greater than zero")
 
-    duration_raw = item.get("DurationSeconds")
-    if duration_raw in (None, ""):
-        start_dt = _parse_timestamp(period_start)
-        end_dt = _parse_timestamp(period_end)
-        duration_seconds = (
-            (end_dt - start_dt).total_seconds()
-            if start_dt is not None and end_dt is not None and end_dt > start_dt
-            else 0.0
-        )
-    else:
-        duration_seconds = _validate_numeric(duration_raw)
-
-    first_value = optional_float("FirstValue", value)
-    last_value = optional_float("LastValue", value)
+    first_value = required_number("FirstValue", value)
+    last_value = required_number("LastValue", value)
+    minimum = required_number("MinValue", value)
+    maximum = required_number("MaxValue", value)
+    weighted_average = required_number(
+        "WeightedAverage",
+        item.get("Value", value),
+    )
 
     conn.execute(
         f"""
@@ -807,13 +754,21 @@ def _insert_trend_aggregate(conn, company_id, plc_id, tag, value, timestamp, sto
             SampleCount=excluded.SampleCount
         """,
         (
-            int(company_id), int(plc_id), str(tag), period_start, period_end,
-            first_value, last_value, minimum, maximum, average_value,
-            duration_seconds, sample_count,
+            int(company_id),
+            int(plc_id),
+            str(tag),
+            period_start,
+            period_end,
+            first_value,
+            last_value,
+            minimum,
+            maximum,
+            weighted_average,
+            duration_seconds,
+            sample_count,
         ),
     )
     return "upserted"
-
 
 def _insert_or_ack_existing(conn, event_id, company_id, plc_id, tag, value, timestamp, storage_type):
     try:
@@ -854,6 +809,12 @@ def _insert_or_ack_existing(conn, event_id, company_id, plc_id, tag, value, time
 
 
 def ingest_items(items):
+    """Ingest Edge Store & Forward records.
+
+    TIME records are precomputed aggregates and are stored only in their
+    Flow-selected Trend table. TRIGGER records retain their existing durable
+    PLC_Data/TagHistory behavior. LIVE records never belong in this endpoint.
+    """
     ensure_edge_event_schema()
     if not isinstance(items, list):
         raise ValueError("items must be a list")
@@ -861,6 +822,7 @@ def ingest_items(items):
     acks = []
     errors = []
     inserted = 0
+
     conn = get_connection()
     flow_cache = {}
     try:
@@ -882,7 +844,9 @@ def ingest_items(items):
                 if not tag:
                     raise ValueError("TagName is required")
                 value = _validate_numeric(item.get("Value"))
-                timestamp = _parse_timestamp(item.get("Timestamp"))
+                timestamp = _parse_timestamp(
+                    item.get("PeriodStart", item.get("Timestamp"))
+                )
             except Exception as exc:
                 errors.append({"EventID": event_id, "Error": str(exc)})
                 continue
@@ -896,7 +860,6 @@ def ingest_items(items):
                 continue
 
             company_id = int(plc["CompanyID"])
-
             if company_id not in flow_cache:
                 flow_cache[company_id] = _flow_tag_storage(company_id)
             storage_map = flow_cache[company_id]
@@ -904,67 +867,61 @@ def ingest_items(items):
             if storage_type is None:
                 storage_type = storage_map.get((plc_id, tag))
 
-            incoming_storage = str(item.get("StorageType", "") or "").strip().upper()
+            incoming_storage = str(
+                item.get("StorageType", storage_type or "")
+            ).strip().upper()
 
-            if incoming_storage in {"LIVE", "TIME", "CALCULATED"}:
-                # LIVE and raw CALCULATED samples are delivered through the
-                # live endpoint and are intentionally never persisted here.
-                if storage_type in {"TIME", "CALCULATED"} or incoming_storage in {"LIVE", "TIME"}:
-                    acks.append(event_id)
+            if incoming_storage == "LIVE":
+                errors.append({
+                    "EventID": event_id,
+                    "Error": "LIVE data must use the live endpoint",
+                })
+                continue
+
+            if incoming_storage == "TIME":
+                if storage_type != "TIME":
+                    errors.append({
+                        "EventID": event_id,
+                        "Error": "TIME tag is not defined by the company Flow",
+                    })
                     continue
 
-            if storage_type is None:
-                error = "Tag is not defined for this PLC by the company Flow"
-                errors.append({"EventID": event_id, "Error": error})
-                print(
-                    "EDGE INGEST REJECTED:",
-                    "CompanyID=", company_id,
-                    "PLC_ID=", plc_id,
-                    "Tag=", tag,
-                    "EventID=", event_id,
-                    "Reason=", error,
+                resolution = _normalize_history_resolution(
+                    item.get("HistoryResolution")
                 )
-                continue
+                flow_resolution = get_flow_history_resolution(
+                    company_id,
+                    plc_id,
+                    tag,
+                )
+                if resolution is None or flow_resolution is None:
+                    errors.append({
+                        "EventID": event_id,
+                        "Error": "TIME history resolution is not defined by the company Flow",
+                    })
+                    continue
+                if resolution != flow_resolution:
+                    errors.append({
+                        "EventID": event_id,
+                        "Error": "TIME history resolution does not match the company Flow",
+                    })
+                    continue
 
-            if incoming_storage.startswith("CALCULATED_"):
-                if incoming_storage not in {
-                    "CALCULATED_MINUTE",
-                    "CALCULATED_HOUR",
-                    "CALCULATED_DAY",
-                    "CALCULATED_MONTH",
-                }:
-                    error = "Unknown calculated aggregate resolution"
-                    errors.append({"EventID": event_id, "Error": error})
-                    continue
-                if storage_type not in {"TIME", "CALCULATED"}:
-                    error = "Calculated aggregate is not defined by the company Flow"
-                    errors.append({"EventID": event_id, "Error": error})
-                    continue
-
-                flow_resolution = get_flow_history_resolution(company_id, plc_id, tag)
-                incoming_resolution = incoming_storage.split("_", 1)[1].lower()
-                if flow_resolution is None:
-                    error = "History resolution is not defined for this tag by the company Flow"
-                    errors.append({"EventID": event_id, "Error": error})
-                    continue
-                if flow_resolution == "NONE" or (
-                    flow_resolution != "ALL"
-                    and flow_resolution != incoming_resolution
+            elif incoming_storage in {"TRIGGER", "TRIGGER_SIGNAL"}:
+                if storage_type != "TRIGGER" and not (
+                    incoming_storage == "TRIGGER_SIGNAL"
+                    and tag.startswith("__TRIGGER_REGISTER_")
                 ):
-                    error = "Calculated aggregate resolution does not match the company Flow"
-                    errors.append({"EventID": event_id, "Error": error})
+                    errors.append({
+                        "EventID": event_id,
+                        "Error": "TRIGGER tag is not defined by the company Flow",
+                    })
                     continue
-
-                storage_type = incoming_storage
-
-            elif storage_type == "CALCULATED":
-                # Raw formula samples are live-only and are never persisted
-                # through Store & Forward.
-                acks.append(event_id)
-                continue
-
-            if incoming_storage in {"LIVE", "TIME"}:
-                acks.append(event_id)
+            else:
+                errors.append({
+                    "EventID": event_id,
+                    "Error": "StorageType must be TIME or TRIGGER for Store & Forward",
+                })
                 continue
 
             existing = conn.execute(
@@ -978,9 +935,8 @@ def ingest_items(items):
             savepoint = "edge_event"
             try:
                 conn.execute(f"SAVEPOINT {savepoint}")
-                received_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
 
-                if storage_type.startswith("CALCULATED_"):
+                if incoming_storage == "TIME":
                     insert_state = _insert_trend_aggregate(
                         conn,
                         company_id,
@@ -988,7 +944,7 @@ def ingest_items(items):
                         tag,
                         value,
                         timestamp,
-                        storage_type,
+                        resolution,
                         item,
                     )
                 else:
@@ -1000,13 +956,12 @@ def ingest_items(items):
                         tag,
                         value,
                         timestamp,
-                        storage_type,
+                        "TRIGGER" if incoming_storage == "TRIGGER" else "TRIGGER_SIGNAL",
                     )
 
-                if insert_state == "existing":
-                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-                    acks.append(event_id)
-                    continue
+                received_at = datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S.%f"
+                ).rstrip("0").rstrip(".")
 
                 conn.execute(
                     """
@@ -1017,7 +972,7 @@ def ingest_items(items):
                     (event_id, company_id, plc_id, tag, timestamp, received_at),
                 )
 
-                if storage_type in {"TRIGGER", "TRIGGER_SIGNAL"}:
+                if incoming_storage in {"TRIGGER", "TRIGGER_SIGNAL"}:
                     try:
                         conn.execute(
                             """
@@ -1032,7 +987,8 @@ def ingest_items(items):
 
                 conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 acks.append(event_id)
-                inserted += 1
+                if insert_state != "existing":
+                    inserted += 1
 
             except Exception as exc:
                 try:
@@ -1040,7 +996,6 @@ def ingest_items(items):
                     conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 except Exception:
                     pass
-
                 errors.append({"EventID": event_id, "Error": str(exc)})
                 print(
                     "EDGE INGEST WRITE ERROR:",
@@ -1065,7 +1020,6 @@ def ingest_items(items):
         raise
     finally:
         conn.close()
-
 
 __all__ = [
     "ensure_edge_event_schema",

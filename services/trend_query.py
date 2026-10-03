@@ -3,7 +3,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from services.trend_aggregation import get_resolution
 from services.edge_ingest import ensure_edge_event_schema, get_flow_history_resolution
 from database import get_connection
 
@@ -55,8 +54,8 @@ def _resolution_for_tag(company_id, plc_id, start, end, tag_name):
         return "none"
     if flow_resolution in TABLE_BY_RESOLUTION:
         return flow_resolution
-    # ALL/legacy Flow mappings keep the existing range-based Trend selection.
-    return get_resolution(start, end)
+    # TIME history is always read at the resolution selected by the Flow.
+    return "none"
 
 
 def get_trend_series(company_id, plc_id, tag_name, start, end):

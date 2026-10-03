@@ -82,6 +82,63 @@ CREATE TABLE IF NOT EXISTS TagHistory (
     FOREIGN KEY (PLC_ID) REFERENCES PLCs(PLC_ID)
 );
 
+CREATE TABLE IF NOT EXISTS TrendMinute (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    CompanyID INTEGER NOT NULL,
+    PLC_ID INTEGER NOT NULL,
+    TagName TEXT NOT NULL,
+    PeriodStart TEXT NOT NULL,
+    PeriodEnd TEXT NOT NULL,
+    FirstValue REAL,
+    LastValue REAL,
+    MinValue REAL,
+    MaxValue REAL,
+    WeightedAverage REAL,
+    DurationSeconds REAL NOT NULL DEFAULT 0,
+    SampleCount INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (CompanyID, PLC_ID, TagName, PeriodStart),
+    FOREIGN KEY (CompanyID) REFERENCES Companies(CompanyID),
+    FOREIGN KEY (PLC_ID) REFERENCES PLCs(PLC_ID)
+);
+
+CREATE TABLE IF NOT EXISTS TrendHour (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    CompanyID INTEGER NOT NULL,
+    PLC_ID INTEGER NOT NULL,
+    TagName TEXT NOT NULL,
+    PeriodStart TEXT NOT NULL,
+    PeriodEnd TEXT NOT NULL,
+    FirstValue REAL,
+    LastValue REAL,
+    MinValue REAL,
+    MaxValue REAL,
+    WeightedAverage REAL,
+    DurationSeconds REAL NOT NULL DEFAULT 0,
+    SampleCount INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (CompanyID, PLC_ID, TagName, PeriodStart),
+    FOREIGN KEY (CompanyID) REFERENCES Companies(CompanyID),
+    FOREIGN KEY (PLC_ID) REFERENCES PLCs(PLC_ID)
+);
+
+CREATE TABLE IF NOT EXISTS TrendDay (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    CompanyID INTEGER NOT NULL,
+    PLC_ID INTEGER NOT NULL,
+    TagName TEXT NOT NULL,
+    PeriodStart TEXT NOT NULL,
+    PeriodEnd TEXT NOT NULL,
+    FirstValue REAL,
+    LastValue REAL,
+    MinValue REAL,
+    MaxValue REAL,
+    WeightedAverage REAL,
+    DurationSeconds REAL NOT NULL DEFAULT 0,
+    SampleCount INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (CompanyID, PLC_ID, TagName, PeriodStart),
+    FOREIGN KEY (CompanyID) REFERENCES Companies(CompanyID),
+    FOREIGN KEY (PLC_ID) REFERENCES PLCs(PLC_ID)
+);
+
 CREATE TABLE IF NOT EXISTS ReportHistory (
     ReportID INTEGER PRIMARY KEY AUTOINCREMENT,
     CompanyID INTEGER,
@@ -107,6 +164,9 @@ CREATE TABLE IF NOT EXISTS ReportValues (
 CREATE INDEX IF NOT EXISTS idx_plc_data_lookup ON PLC_Data (CompanyID, PLC_ID, TagName, Timestamp);
 CREATE INDEX IF NOT EXISTS idx_plc_data_cleanup ON PLC_Data (StorageType, Timestamp);
 CREATE INDEX IF NOT EXISTS idx_tag_history_lookup ON TagHistory (CompanyID, PLC_ID, TagName, Timestamp);
+CREATE INDEX IF NOT EXISTS idx_trend_minute_lookup ON TrendMinute (CompanyID, PLC_ID, TagName, PeriodStart);
+CREATE INDEX IF NOT EXISTS idx_trend_hour_lookup ON TrendHour (CompanyID, PLC_ID, TagName, PeriodStart);
+CREATE INDEX IF NOT EXISTS idx_trend_day_lookup ON TrendDay (CompanyID, PLC_ID, TagName, PeriodStart);
 CREATE INDEX IF NOT EXISTS idx_tags_lookup ON Tags (CompanyID, PLC_ID, TagName);
 CREATE INDEX IF NOT EXISTS idx_alarm_history_lookup ON AlarmHistory (CompanyID, PLC_ID, Timestamp);
 CREATE INDEX IF NOT EXISTS idx_report_history_lookup ON ReportHistory (CompanyID, PLC_ID, Timestamp);
