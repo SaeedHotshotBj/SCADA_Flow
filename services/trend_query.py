@@ -4,13 +4,15 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from services.trend_aggregation import get_resolution
+from services.edge_ingest import ensure_edge_event_schema, get_flow_history_resolution
 from database import get_connection
 
 TZ = ZoneInfo("Asia/Tehran")
-STORAGE_BY_RESOLUTION = {
-    "minute": "CALCULATED_MINUTE",
-    "hour": "CALCULATED_HOUR",
-    "day": "CALCULATED_DAY",
+TABLE_BY_RESOLUTION = {
+    "minute": "TrendMinute",
+    "hour": "TrendHour",
+    "day": "TrendDay",
+    "month": "TrendMonth",
 }
 
 
@@ -47,36 +49,53 @@ def _ts(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
 
 
+def _resolution_for_tag(company_id, plc_id, start, end, tag_name):
+    flow_resolution = get_flow_history_resolution(company_id, plc_id, tag_name)
+    if flow_resolution == "NONE":
+        return "none"
+    if flow_resolution in TABLE_BY_RESOLUTION:
+        return flow_resolution
+    # ALL/legacy Flow mappings keep the existing range-based Trend selection.
+    return get_resolution(start, end)
+
+
 def get_trend_series(company_id, plc_id, tag_name, start, end):
     start = _parse_ts(start)
     end = _parse_ts(end)
     if start is None or end is None or start >= end:
         return "calculated", []
 
-    resolution = get_resolution(start, end)
-    storage_type = STORAGE_BY_RESOLUTION.get(resolution)
-    if storage_type is None:
+    resolution = _resolution_for_tag(company_id, plc_id, start, end, tag_name)
+    table = TABLE_BY_RESOLUTION.get(resolution)
+    if table is None:
         return resolution, []
 
+    # Trend tables are the server historian for Edge-precomputed aggregates.
+    # The server never rebuilds these values from raw PLC samples.
+    ensure_edge_event_schema()
     conn = get_connection()
     try:
         rows = conn.execute(
-            """
-            SELECT Timestamp, Value
-            FROM PLC_Data
+            f"""
+            SELECT PeriodStart AS Timestamp,
+                   WeightedAverage AS Value,
+                   MinValue,
+                   MaxValue,
+                   WeightedAverage,
+                   DurationSeconds,
+                   SampleCount
+            FROM {table}
             WHERE CompanyID=?
               AND PLC_ID=?
               AND LOWER(TagName)=LOWER(?)
-              AND StorageType=?
-              AND Timestamp >= ?
-              AND Timestamp < ?
-            ORDER BY Timestamp ASC, ID ASC
+              AND PeriodStart >= ?
+              AND PeriodEnd <= ?
+            ORDER BY PeriodStart ASC
             """,
             (
                 int(company_id),
                 int(plc_id),
                 str(tag_name),
-                storage_type,
                 _ts(start),
                 _ts(end),
             ),
@@ -103,14 +122,50 @@ def get_trend_stats(company_id, plc_id, tag_name, start, end):
             "sample_count": 0,
         }
 
-    values = []
+    minimum_values = []
+    maximum_values = []
+    weighted_sum = 0.0
+    duration = 0.0
+    sample_count = 0
+
     for row in rows:
         try:
-            values.append(float(row["Value"]))
+            value = float(row["Value"])
         except (TypeError, ValueError):
-            pass
+            continue
 
-    if not values:
+        try:
+            minimum_values.append(
+                float(row["MinValue"])
+                if row["MinValue"] is not None
+                else value
+            )
+        except (TypeError, ValueError):
+            minimum_values.append(value)
+
+        try:
+            maximum_values.append(
+                float(row["MaxValue"])
+                if row["MaxValue"] is not None
+                else value
+            )
+        except (TypeError, ValueError):
+            maximum_values.append(value)
+
+        try:
+            row_duration = float(row["DurationSeconds"] or 0)
+        except (TypeError, ValueError):
+            row_duration = 0.0
+        if row_duration > 0:
+            weighted_sum += value * row_duration
+            duration += row_duration
+
+        try:
+            sample_count += int(row["SampleCount"] or 0)
+        except (TypeError, ValueError):
+            sample_count += 1
+
+    if not minimum_values:
         return {
             "resolution": resolution,
             "min": None,
@@ -119,17 +174,23 @@ def get_trend_stats(company_id, plc_id, tag_name, start, end):
             "sample_count": 0,
         }
 
-    # Values are already averages calculated on Edge. VPS only reads those
-    # stored values; it does not recompute the underlying PLC samples.
+    if duration <= 0:
+        averages = []
+        for row in rows:
+            try:
+                averages.append(float(row["Value"]))
+            except (TypeError, ValueError):
+                pass
+        weighted_average = sum(averages) / len(averages) if averages else None
+    else:
+        weighted_average = weighted_sum / duration
+
     return {
         "resolution": resolution,
-        "min": min(values),
-        "max": max(values),
-        # These are already Edge-computed bucket averages. The displayed
-        # average is the arithmetic mean of the stored aggregate points.
-        "weighted_average": sum(values) / len(values),
-        "sample_count": len(values),
+        "min": min(minimum_values),
+        "max": max(maximum_values),
+        "weighted_average": weighted_average,
+        "sample_count": sample_count,
     }
-
 
 __all__ = ["get_trend_series", "get_trend_stats"]
