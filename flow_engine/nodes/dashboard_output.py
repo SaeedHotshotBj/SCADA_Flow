@@ -43,7 +43,7 @@ class DashboardOutput:
             widget.get("storage", widget.get("StorageType", ""))
             or ""
         ).strip().upper()
-        if configured in {"LIVE", "TIME", "CALCULATED", "TRIGGER", "TRIGGER_SIGNAL"}:
+        if configured in {"LIVE", "TIME", "TRIGGER", "TRIGGER_SIGNAL"}:
             return configured
 
         tag_key = str(tag or "").strip().lower()

@@ -1858,60 +1858,45 @@ def cleanup_old_trend_data():
 
     conn = get_connection()
     cursor = conn.cursor()
+    deleted = 0
 
+    # Legacy raw TIME data is retained only for a bounded migration window.
     cursor.execute(
         """
         DELETE FROM PLC_Data
         WHERE StorageType = 'TIME'
-          AND Timestamp <
-              datetime(
-                  'now',
-                  'localtime',
-                  '-3 months'
-              )
+          AND Timestamp < datetime('now', 'localtime', '-3 months')
         """
     )
+    deleted += cursor.rowcount
 
-    deleted = cursor.rowcount
-
-    # Historical calculated values are already aggregated on Edge.
-    # Keep only the resolution windows needed by Historical Trend.
+    # Historical values now live in Edge-precomputed Trend tables.
     cursor.execute(
         """
-        DELETE FROM PLC_Data
-        WHERE StorageType = 'CALCULATED_MINUTE'
-          AND Timestamp <
-              datetime('now', 'localtime', '-2 hours')
+        DELETE FROM TrendMinute
+        WHERE PeriodEnd < datetime('now', 'localtime', '-2 hours')
         """
     )
     deleted += cursor.rowcount
 
     cursor.execute(
         """
-        DELETE FROM PLC_Data
-        WHERE StorageType = 'CALCULATED_HOUR'
-          AND Timestamp <
-              datetime('now', 'localtime', '-2 days')
+        DELETE FROM TrendHour
+        WHERE PeriodEnd < datetime('now', 'localtime', '-2 days')
         """
     )
     deleted += cursor.rowcount
 
     cursor.execute(
         """
-        DELETE FROM PLC_Data
-        WHERE StorageType = 'CALCULATED_DAY'
-          AND Timestamp <
-              datetime('now', 'localtime', '-600 days')
+        DELETE FROM TrendDay
+        WHERE PeriodEnd < datetime('now', 'localtime', '-600 days')
         """
     )
     deleted += cursor.rowcount
 
     conn.commit()
-
     cursor.close()
     conn.close()
 
-    print(
-        "OLD TREND DATA DELETED:",
-        deleted
-    )
+    print("OLD TREND DATA DELETED:", deleted)

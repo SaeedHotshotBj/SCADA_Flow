@@ -1,0 +1,152 @@
+name: Storage TIME LIVE pipeline tests
+
+on:
+  pull_request:
+  push:
+    branches: ["refactor/storage-time-live-architecture"]
+
+permissions:
+  contents: read
+
+jobs:
+  storage-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile server Python modules
+        run: python -m compileall -q .
+
+      - name: Verify TIME aggregate ingestion and resolution routing
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import tempfile
+          import database
+
+          fd, db_path = tempfile.mkstemp(suffix=".db")
+          os.close(fd)
+          database.DB_CONFIG["path"] = db_path
+
+          try:
+              database.init_database()
+              conn = database.get_connection()
+              company_id = 900001
+              plc_id = 900001
+              conn.execute(
+                  "INSERT INTO Companies(CompanyID, CompanyName) VALUES(?, 'CI')",
+                  (company_id,)
+              )
+              conn.execute(
+                  "INSERT INTO PLCs(PLC_ID, CompanyID, PLC_Name) VALUES(?, ?, 'PLC')",
+                  (plc_id, company_id)
+              )
+
+              flow = {
+                  "drawflow": {"Home": {"data": {
+                      "1": {
+                          "name": "PLCReader",
+                          "data": {"plc_id": plc_id, "ip": "127.0.0.1", "port": 502, "slave": 1, "register": 100, "count": 10},
+                          "outputs": {"output_1": {"connections": [{"node": "2"}]}}
+                      },
+                      "2": {
+                          "name": "TagMapper",
+                          "data": {"mappings": [{
+                              "plc_id": plc_id,
+                              "register": 100,
+                              "name": "Weight",
+                              "datatype": "FLOAT",
+                              "scale": 1,
+                              "storage": "TIME",
+                              "history_resolution": "MINUTE",
+                              "interval": 1
+                          }]}
+                      },
+                      "3": {"name": "TrendOutput", "data": {}}
+                  }}}
+              }
+              conn.execute(
+                  "INSERT INTO Flows(CompanyID, FlowJson) VALUES(?, ?)",
+                  (company_id, json.dumps(flow))
+              )
+              conn.commit()
+              conn.close()
+
+              from services.edge_ingest import ingest_items
+              from services.trend_query import get_trend_series, get_trend_stats, get_flow_history_resolution
+
+              item = {
+                  "EventID": "evt-time-1",
+                  "PLC_ID": plc_id,
+                  "TagName": "Weight",
+                  "Value": 4.0,
+                  "Timestamp": "2026-10-03 11:00:00",
+                  "StorageType": "TIME",
+                  "HistoryResolution": "minute",
+                  "PeriodStart": "2026-10-03 11:00:00",
+                  "PeriodEnd": "2026-10-03 11:01:00",
+                  "FirstValue": 0.0,
+                  "LastValue": 10.0,
+                  "MinValue": 0.0,
+                  "MaxValue": 10.0,
+                  "WeightedAverage": 4.0,
+                  "DurationSeconds": 60.0,
+                  "SampleCount": 2,
+              }
+              result = ingest_items([item])
+              assert result["acks"] == ["evt-time-1"], result
+              assert not result["errors"], result
+              assert result["inserted"] == 1, result
+
+              conn = database.get_connection()
+              assert conn.execute("SELECT COUNT(*) FROM PLC_Data").fetchone()[0] == 0
+              trend_row = conn.execute(
+                  "SELECT WeightedAverage FROM TrendMinute WHERE CompanyID=? AND PLC_ID=? AND TagName='Weight'",
+                  (company_id, plc_id)
+              ).fetchone()
+              assert trend_row is not None
+              assert abs(float(trend_row["WeightedAverage"]) - 4.0) < 1e-9
+              conn.close()
+
+              assert get_flow_history_resolution(company_id, plc_id, "Weight") == "minute"
+              resolution, rows = get_trend_series(
+                  company_id, plc_id, "Weight",
+                  "2026-10-03 11:00:00",
+                  "2026-10-03 11:02:00",
+              )
+              assert resolution == "minute", resolution
+              assert len(rows) == 1, rows
+              assert abs(float(rows[0]["Value"]) - 4.0) < 1e-9
+
+              stats = get_trend_stats(
+                  company_id, plc_id, "Weight",
+                  "2026-10-03 11:00:00",
+                  "2026-10-03 11:02:00",
+              )
+              assert abs(float(stats["weighted_average"]) - 4.0) < 1e-9, stats
+
+              bad = dict(item)
+              bad["EventID"] = "evt-time-bad"
+              bad["HistoryResolution"] = "hour"
+              bad["PeriodEnd"] = "2026-10-03 12:00:00"
+              bad_result = ingest_items([bad])
+              assert bad_result["acks"] == [], bad_result
+              assert bad_result["errors"], bad_result
+
+              print("SERVER TIME ROUTING TEST OK")
+          finally:
+              try:
+                  os.remove(db_path)
+              except OSError:
+                  pass
+          PY

@@ -123,15 +123,24 @@ class HistorianService:
             value = tags[name]
             if value is None:
                 continue
+            # TIME values are sampled, persisted, and aggregated on Edge.
+            # The Server must never persist the raw TIME sample.
             mode = str(definition.get("storage", "TIME")).upper()
-            save = (
-                self.check_time(company_id, plc_id, definition)
-                if mode == "TIME"
-                else self.check_trigger(company_id, plc_id, definition, registers)
-                if mode == "TRIGGER"
-                else False
+            if mode != "TRIGGER":
+                continue
+            save = self.check_trigger(
+                company_id,
+                plc_id,
+                definition,
+                registers,
             )
-            if save and self._insert_changed(company_id, plc_id, name, value, mode):
+            if save and self._insert_changed(
+                company_id,
+                plc_id,
+                name,
+                value,
+                mode,
+            ):
                 written += 1
         return written
 

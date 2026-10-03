@@ -59,7 +59,7 @@ def record_live_items(company_id, items):
             if not tag or not math.isfinite(value):
                 continue
             storage_type = str(item.get("StorageType", "LIVE") or "LIVE").strip().upper()
-            if storage_type not in {"LIVE", "TIME", "CALCULATED"}:
+            if storage_type not in {"LIVE", "TIME"}:
                 continue
             timestamp = _parse_ts(item.get("Timestamp")) or now
             # Storage type is part of the identity. A calculated value with
@@ -87,10 +87,10 @@ def get_live_value(company_id, plc_id, tag_name, max_age_seconds=DEFAULT_MAX_AGE
     requested_storage = str(storage_type or "").strip().upper()
     cutoff = datetime.now(TZ).replace(tzinfo=None) - timedelta(seconds=max(1, int(max_age_seconds)))
     with _LOCK:
-        if requested_storage in {"LIVE", "TIME", "CALCULATED"}:
+        if requested_storage in {"LIVE", "TIME"}:
             keys = [(int(company_id), int(plc_id), tag_key, requested_storage)]
         else:
-            keys = [(int(company_id), int(plc_id), tag_key, item_storage) for item_storage in ("LIVE", "TIME", "CALCULATED")]
+            keys = [(int(company_id), int(plc_id), tag_key, item_storage) for item_storage in ("LIVE", "TIME")]
         candidates = []
         retention_cutoff = datetime.now(TZ).replace(tzinfo=None) - timedelta(
             seconds=LIVE_TREND_RETENTION_SECONDS
@@ -125,7 +125,7 @@ def get_live_series(company_id, plc_id, tag_name, start=None, end=None, default_
         retention_cutoff = datetime.now(TZ).replace(tzinfo=None) - timedelta(
             seconds=LIVE_TREND_RETENTION_SECONDS
         )
-        storages = ((requested_storage,) if requested_storage in {"LIVE", "TIME", "CALCULATED"} else ("LIVE", "TIME", "CALCULATED"))
+        storages = ((requested_storage,) if requested_storage in {"LIVE", "TIME"} else ("LIVE", "TIME", "CALCULATED"))
         for item_storage in storages:
             buffer = _BUFFERS.get((int(company_id), int(plc_id), tag_key, item_storage))
             if buffer:

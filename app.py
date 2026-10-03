@@ -1206,13 +1206,13 @@ def machine_trend_data():
         if plc_id is None:
             return jsonify({"status": "error", "message": "PLC_ID is required", "datasets": []}), 400
 
-        from services.plc_identity import get_trend_data as get_plc_trend_data
-        rows = get_plc_trend_data(
+        from services.trend_query import get_trend_series
+        resolution, rows = get_trend_series(
             company_id,
             plc_id,
             tag,
-            start=start_gregorian,
-            end=end_gregorian
+            start_gregorian,
+            end_gregorian,
         )
 
         dataset = []
@@ -1261,6 +1261,7 @@ def machine_trend_data():
             "tag": tag,
             "start": start_gregorian,
             "end": end_gregorian,
+            "resolution": resolution,
             "datasets": [{
                 "tag": tag,
                 "title": tag,
@@ -1526,7 +1527,7 @@ def receive_edge_live():
             incoming_storage = str(
                 item.get("StorageType", "LIVE") or "LIVE"
             ).strip().upper()
-            if incoming_storage not in {"LIVE", "CALCULATED", "TIME"}:
+            if incoming_storage not in {"LIVE", "TIME"}:
                 continue
 
             if plc_id not in company_by_plc:
@@ -1541,7 +1542,7 @@ def receive_edge_live():
                 tag,
             )
 
-            if flow_storage not in {"TIME", "LIVE", "CALCULATED"}:
+            if flow_storage not in {"TIME", "LIVE"}:
                 continue
 
             if incoming_storage != flow_storage:
@@ -1671,7 +1672,7 @@ def receive_edge_data():
             tag,
         )
 
-        if flow_storage in {"TIME", "LIVE", "CALCULATED"}:
+        if flow_storage in {"TIME", "LIVE"}:
             live_item = dict(data)
             live_item["PLC_ID"] = plc_id
             live_item["TagName"] = tag
