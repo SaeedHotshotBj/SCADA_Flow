@@ -106,9 +106,29 @@ def _ensure_trend_tables(conn):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN PLC_ID INTEGER")
         suffix = table.replace("Trend", "").lower()
         conn.execute(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS uq_trend_{suffix}_company_plc_tag_period "
-            f"ON {table}(CompanyID, PLC_ID, TagName, PeriodStart)"
+            f"DROP INDEX IF EXISTS uq_trend_{suffix}_company_tag_period"
         )
+        canonical = f"uq_trend_{suffix}_company_plc_tag_period"
+        try:
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {canonical} "
+                f"ON {table}(CompanyID, PLC_ID, TagName, PeriodStart)"
+            )
+        except sqlite3.IntegrityError:
+            conn.execute(
+                f"""
+                DELETE FROM {table}
+                WHERE ID NOT IN (
+                    SELECT MIN(ID)
+                    FROM {table}
+                    GROUP BY CompanyID, PLC_ID, TagName, PeriodStart
+                )
+                """
+            )
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {canonical} "
+                f"ON {table}(CompanyID, PLC_ID, TagName, PeriodStart)"
+            )
         conn.execute(
             f"CREATE INDEX IF NOT EXISTS idx_trend_{suffix}_company_plc_tag_time "
             f"ON {table}(CompanyID, PLC_ID, TagName, PeriodStart)"
