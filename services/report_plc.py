@@ -75,6 +75,39 @@ def _management_calculations(company_id, user_role=None):
     return result
 
 
+def _report_calculations(company_id, user_role=None):
+    result = []
+    seen = set()
+    for node_id, node in _flow_nodes(company_id).items():
+        if not isinstance(node, dict) or node.get("name") != "ReportOutput":
+            continue
+        data = node.get("data", {}) or {}
+        config = data.get("config", data) or {}
+        calculations = config.get("calculations", []) if isinstance(config, dict) else []
+        if not isinstance(calculations, list):
+            continue
+        for item in calculations:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", item.get("result_name", ""))).strip()
+            expression = str(item.get("expression", "")).strip()
+            if not name or not expression or name.lower() in seen:
+                continue
+            if not _allowed(item, user_role):
+                continue
+            seen.add(name.lower())
+            result.append({
+                "name": name,
+                "label": str(item.get("label", name)).strip() or name,
+                "expression": expression,
+                "unit": str(item.get("unit", "")).strip(),
+                "allowed_roles": item.get("allowed_roles", ""),
+                "source": "report_calculation",
+                "report_node_id": str(node_id),
+                "storage_tag": "__REPORT_CALC__:" + name,
+            })
+    return result
+
 def _all_management_calculations(company_id):
     return _management_calculations(company_id, None)
 
@@ -235,8 +268,8 @@ def get_report_products(company_id, user_role=None):
                     seen.add(key)
                     products.append(result)
 
-        for calculation in _management_calculations(company_id, user_role):
-            key = (calculation["name"].lower(), None, "")
+        for calculation in _report_calculations(company_id, user_role):
+            key = (calculation["name"].lower(), None, "report_calculation")
             if key in seen:
                 continue
             seen.add(key)
@@ -261,154 +294,14 @@ def _context(report_products, tags):
     return contract, product
 
 
-def save_report_snapshot(
-    company_id,
-    tags,
-    report_products,
-    timestamp=None,
-    trigger_tag=None,
-    trigger_register=None,
-    trigger_value=None,
-    plc_id=None,
-    trigger_edge=None,
-    start_timestamp=None,
-    end_timestamp=None,
-    duration_seconds=0,
-    start_complete=1,
-    trigger_event_id=None,
-    report_node_id=None,
-):
-    if company_id is None or not isinstance(tags, dict):
-        return None
-
-    ensure_report_tables()
-    all_products = [item for item in (report_products or []) if isinstance(item, dict)]
-    calculation_definitions = _all_management_calculations(company_id)
-
-    if trigger_event_id and report_node_id:
-        conn = get_connection()
-        try:
-            row = conn.execute(
-                "SELECT ReportID FROM ReportHistory WHERE TriggerEventID=? AND ReportNodeID=? LIMIT 1",
-                (str(trigger_event_id), str(report_node_id)),
-            ).fetchone()
-            if row:
-                return int(row["ReportID"])
-        finally:
-            conn.close()
-
-    duration = float(duration_seconds or 0.0)
-    timestamp = timestamp or end_timestamp or start_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    plc_id = _plc_id(plc_id)
-    contract, product = _context(all_products, tags)
-    lookup = {str(key).strip().lower(): (key, value) for key, value in tags.items()}
-    values = []
-    used_names = set()
-
-    # Normal ReportOutput columns.
-    for item in all_products:
-        tag = str(item.get("tag", "")).strip()
-        role = str(item.get("context_role", item.get("context", ""))).strip().lower()
-        source = item.get("source")
-        item_plc = _plc_id(item.get("plc_id", item.get("PLC_ID", plc_id)))
-        if role or source == "management_calculation" or not tag:
-            continue
-        if item_plc is not None and plc_id is not None and item_plc != plc_id:
-            continue
-        found = lookup.get(tag.lower())
-        if found is None or found[1] is None:
-            continue
-        try:
-            values.append((str(item.get("name", tag)).strip() or tag, float(found[1])))
-            used_names.add(tag.lower())
-        except (TypeError, ValueError):
-            pass
-
-    # Flow-designed ManagementPanel calculations become persisted report columns.
-    variables = _formula_variables(tags, duration)
-    for calculation in calculation_definitions:
-        try:
-            result = _safe_eval(calculation["expression"], variables)
-            values.append((calculation["name"], result))
-            variables[calculation["name"]] = result
-            alias = "".join(char if (char.isalnum() or char == "_") else "_" for char in calculation["name"])
-            if alias:
-                variables[alias] = result
-        except Exception as exc:
-            print(
-                "REPORT CALCULATION ERROR:",
-                calculation["name"],
-                calculation["expression"],
-                exc,
-            )
-
-    # Persist common lifecycle values as report values too, so they are
-    # available to older report layouts even when not explicitly configured.
-    lifecycle_values = {
-        "WorkTimeSeconds": duration,
-        "WorkTimeMinutes": duration / 60.0,
-        "WorkTimeHours": duration / 3600.0,
-    }
-    for name, value in lifecycle_values.items():
-        if name.lower() not in {key.lower() for key, _ in values}:
-            values.append((name, value))
-
-    if not values:
-        return None
-
-    conn = get_connection()
-    try:
-        cur = conn.execute(
-            """
-            INSERT INTO ReportHistory
-            (CompanyID, PLC_ID, Timestamp, TriggerTag, TriggerRegister,
-             TriggerValue, TriggerEdge, StartTimestamp, EndTimestamp,
-             DurationSeconds, StartComplete, TriggerEventID, ReportNodeID,
-             ContractCode, ProductCode)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                company_id,
-                plc_id,
-                timestamp,
-                trigger_tag,
-                trigger_register,
-                trigger_value,
-                trigger_edge,
-                start_timestamp,
-                end_timestamp,
-                duration,
-                int(bool(start_complete)),
-                str(trigger_event_id) if trigger_event_id else None,
-                str(report_node_id) if report_node_id else None,
-                contract,
-                product,
-            ),
-        )
-        report_id = cur.lastrowid
-        conn.executemany(
-            "INSERT INTO ReportValues(ReportID,TagName,Value) VALUES(?,?,?)",
-            [(name, value) for name, value in values],
-        )
-        conn.commit()
-        return report_id
-    except sqlite3.IntegrityError:
-        conn.rollback()
-        if trigger_event_id and report_node_id:
-            row = conn.execute(
-                "SELECT ReportID FROM ReportHistory WHERE TriggerEventID=? AND ReportNodeID=? LIMIT 1",
-                (str(trigger_event_id), str(report_node_id)),
-            ).fetchone()
-            return int(row["ReportID"]) if row else None
-        raise
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+def save_report_snapshot(*args, **kwargs):
+    """Compatibility wrapper; the event-driven writer lives in report_snapshot_runtime."""
+    from services.report_snapshot_runtime import save_report_snapshot as runtime_save_report_snapshot
+    return runtime_save_report_snapshot(*args, **kwargs)
 
 
-def get_report_data(company_id, start, end, plc_id=None, user_role=None):
+
+def get_report_data(company_id, start, end, plc_id=None, user_role=None, contract_code=None, product_code=None):
     products = [item for item in get_report_products(company_id, user_role) if not item.get("context_role")]
     if plc_id is not None:
         products = [item for item in products if item.get("plc_id") in (None, int(plc_id))]
@@ -423,11 +316,29 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None):
         return result
 
     ensure_report_tables()
-    keys = [str(item.get("name", item.get("tag", ""))).strip().lower() for item in products]
+    keys = [str(item.get("storage_tag", item.get("name", item.get("tag", "")))).strip().lower() for item in products]
     placeholders = ",".join("?" for _ in keys)
 
     conn = get_connection()
     try:
+        
+        report_where = [
+            "h.CompanyID=?",
+            "datetime(h.Timestamp)>=datetime(?)",
+            "datetime(h.Timestamp)<=datetime(?)",
+        ]
+        query_args = [
+            company_id,
+            start.strftime("%Y-%m-%d %H:%M:%S"),
+            end.strftime("%Y-%m-%d %H:%M:%S"),
+        ]
+        if str(contract_code or "").strip():
+            report_where.append("LOWER(TRIM(COALESCE(h.ContractCode,''))) LIKE LOWER(?)")
+            query_args.append("%" + str(contract_code).strip() + "%")
+        if str(product_code or "").strip():
+            report_where.append("LOWER(TRIM(COALESCE(h.ProductCode,''))) LIKE LOWER(?)")
+            query_args.append("%" + str(product_code).strip() + "%")
+
         rows = conn.execute(
             f"""
             SELECT h.ReportID, h.Timestamp, h.ContractCode, h.ProductCode,
@@ -437,17 +348,11 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None):
                    v.TagName, v.Value, v.ReportValueID
             FROM ReportHistory h
             LEFT JOIN ReportValues v ON v.ReportID=h.ReportID
-            WHERE h.CompanyID=?
-              AND datetime(h.Timestamp)>=datetime(?)
-              AND datetime(h.Timestamp)<=datetime(?)
+            WHERE {" AND ".join(report_where)}
               AND (v.TagName IS NULL OR LOWER(v.TagName) IN ({placeholders}))
             ORDER BY datetime(h.Timestamp), h.ReportID, COALESCE(v.ReportValueID,0)
             """,
-            [
-                company_id,
-                start.strftime("%Y-%m-%d %H:%M:%S"),
-                end.strftime("%Y-%m-%d %H:%M:%S"),
-            ] + keys,
+            query_args + keys,
         ).fetchall()
     finally:
         conn.close()

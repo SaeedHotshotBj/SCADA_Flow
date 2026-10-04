@@ -11,6 +11,7 @@ from datetime import datetime
 
 from database import get_connection
 from services import report_plc as _report_plc
+from services.flow_calculations import enrich_with_flow_expressions, evaluate_calculations, safe_numeric_eval
 from services.edge_ingest_policy import install as _install_edge_ingest_policy
 
 # Edge trigger samples are part of the same Flow-defined production-event
@@ -20,41 +21,7 @@ _install_edge_ingest_policy()
 
 
 def safe_flow_eval(expression, variables):
-    tree = ast.parse(str(expression or ""), mode="eval")
-    allowed_nodes = {
-        ast.Expression,
-        ast.Constant,
-        ast.Name,
-        ast.Load,
-        ast.BinOp,
-        ast.UnaryOp,
-        ast.Add,
-        ast.Sub,
-        ast.Mult,
-        ast.Div,
-        ast.Mod,
-        ast.Pow,
-        ast.USub,
-        ast.UAdd,
-        ast.FloorDiv,
-    }
-    for node in ast.walk(tree):
-        if not isinstance(node, tuple(allowed_nodes)):
-            raise ValueError("Unsupported expression operation")
-        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
-            raise ValueError("Expression must contain numeric constants only")
-        if isinstance(node, ast.Name) and node.id not in variables:
-            raise ValueError(f"Unknown variable: {node.id}")
-
-    value = eval(
-        compile(tree, "<flow-report-expression>", "eval"),
-        {"__builtins__": {}},
-        variables,
-    )
-    value = float(value)
-    if not math.isfinite(value):
-        raise ValueError("Expression result is not finite")
-    return value
+    return safe_numeric_eval(expression, variables)
 
 
 # Keep every caller that reaches report_plc internals on the corrected
@@ -97,7 +64,9 @@ def save_report_snapshot(
 
     _report_plc.ensure_report_tables()
     all_products = [item for item in (report_products or []) if isinstance(item, dict)]
-    calculation_definitions = _report_plc._all_management_calculations(company_id)
+    report_calculations = [
+        item for item in all_products if item.get("source") == "report_calculation"
+    ]
 
     if trigger_event_id and report_node_id:
         conn = get_connection()
@@ -114,8 +83,9 @@ def save_report_snapshot(
     duration = float(duration_seconds or 0.0)
     timestamp = timestamp or end_timestamp or start_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     plc_id = _plc_id(plc_id)
-    contract, product = _snapshot_context(all_products, tags)
-    lookup = {str(key).strip().lower(): (key, value) for key, value in tags.items()}
+    flow_tags = enrich_with_flow_expressions(company_id, tags)
+    contract, product = _snapshot_context(all_products, flow_tags)
+    lookup = {str(key).strip().lower(): (key, value) for key, value in flow_tags.items()}
     values = []
 
     for item in all_products:
@@ -123,7 +93,7 @@ def save_report_snapshot(
         role = str(item.get("context_role", item.get("context", ""))).strip().lower()
         source = item.get("source")
         item_plc = _plc_id(item.get("plc_id", item.get("PLC_ID", plc_id)))
-        if role or source == "management_calculation" or not tag:
+        if role or source in {"management_calculation", "report_calculation"} or not tag:
             continue
         if item_plc is not None and plc_id is not None and item_plc != plc_id:
             continue
@@ -135,25 +105,21 @@ def save_report_snapshot(
         except (TypeError, ValueError):
             pass
 
-    variables = _report_plc._formula_variables(tags, duration)
-    for calculation in calculation_definitions:
-        try:
-            result = safe_flow_eval(calculation["expression"], variables)
-            values.append((calculation["name"], result))
-            variables[calculation["name"]] = result
-            alias = "".join(
-                char if (char.isalnum() or char == "_") else "_"
-                for char in calculation["name"]
-            )
-            if alias:
-                variables[alias] = result
-        except Exception as exc:
-            print(
-                "REPORT CALCULATION ERROR:",
-                calculation["name"],
-                calculation["expression"],
-                exc,
-            )
+    # ReportOutput calculations are stored as Report-only columns.
+    calculated = evaluate_calculations(
+        report_calculations,
+        flow_tags,
+        company_id=company_id,
+        duration_seconds=duration,
+    )
+    for calculation in report_calculations:
+        name = str(calculation.get("name", "")).strip()
+        if not name or name not in calculated:
+            continue
+        storage_tag = str(
+            calculation.get("storage_tag") or ("__REPORT_CALC__:" + name)
+        ).strip()
+        values.append((storage_tag, calculated[name]))
 
     existing_names = {key.lower() for key, _ in values}
     for name, value in (

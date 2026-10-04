@@ -23,6 +23,7 @@ class ReportOutput:
         self.company_id = self.config.get("company_id")
         self.date_picker = self.config.get("DatePicker", "JalaliPicker")
         self.products = self.config.get("products", [])
+        self.calculations = self.config.get("calculations", [])
 
     @staticmethod
     def _plc_id(value):
@@ -92,6 +93,8 @@ class ReportOutput:
                 end,
                 plc_id=plc_id,
                 user_role=role,
+                contract_code=request.get("ContractCode"),
+                product_code=request.get("ProductCode"),
             )
 
         data["ReportData"] = report

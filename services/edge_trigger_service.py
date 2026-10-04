@@ -118,13 +118,27 @@ def _report_configs(nodes):
         )
         if not connected:
             continue
-        products = _node_config(node).get("products", [])
+        config = _node_config(node)
+        products = config.get("products", [])
         clean = [
             item for item in products
             if isinstance(item, dict) and str(item.get("tag", "")).strip()
         ]
-        if clean:
-            configs.append((str(node_id), clean))
+        calculations = config.get("calculations", [])
+        clean_calculations = [
+            {
+                **item,
+                "source": "report_calculation",
+                "storage_tag": "__REPORT_CALC__:" + str(item.get("name", "")).strip(),
+            }
+            for item in calculations
+            if isinstance(item, dict)
+            and str(item.get("name", "")).strip()
+            and str(item.get("expression", "")).strip()
+        ]
+        combined = clean + clean_calculations
+        if combined:
+            configs.append((str(node_id), combined))
     return configs
 
 
