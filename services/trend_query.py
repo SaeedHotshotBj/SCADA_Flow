@@ -88,7 +88,7 @@ def get_trend_series(company_id, plc_id, tag_name, start, end):
               AND PLC_ID=?
               AND LOWER(TagName)=LOWER(?)
               AND PeriodStart >= ?
-              AND PeriodEnd <= ?
+              AND PeriodStart < ?
             ORDER BY PeriodStart ASC
             """,
             (
