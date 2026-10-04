@@ -9,7 +9,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>پنل مدیریت قرارداد و محصولات</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#15191d;color:#eee;font-family:Tahoma,Arial,sans-serif}.top{padding:18px 24px;background:#1d2329;border-bottom:1px solid #39414a;display:flex;justify-content:space-between;align-items:center;gap:16px}.top h1{margin:0;font-size:21px}.top small{color:#9aa5af}.wrap{padding:20px;max-width:1800px;margin:auto}.toolbar,.filters,.modal-card{background:#20262c;border:1px solid #3d4650;border-radius:10px;padding:16px;margin-bottom:16px}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid #52606d;background:#2c353e;color:#fff;border-radius:7px;padding:9px 14px;cursor:pointer}.btn:hover{filter:brightness(1.08)}.btn.primary{background:#1677ff;border-color:#1677ff}.btn.good{background:#216e48}.btn.danger{background:#8f3030;border-color:#a44040}.btn.small{padding:6px 9px;font-size:12px}.grid{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:10px}.field label{display:block;color:#b9c1c8;font-size:12px;margin-bottom:5px}.field input,.field select,.field textarea{width:100%;padding:9px;border-radius:6px;border:1px solid #505b65;background:#13171b;color:#fff}.field textarea{min-height:70px;resize:vertical}.filter-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}..table-wrap{overflow:auto;background:#20262c;border:1px solid #3d4650;border-radius:10px}.table{width:100%;border-collapse:collapse;min-width:1200px}.table th,.table td{border-bottom:1px solid #343d46;padding:8px;text-align:right;vertical-align:top}.table th{background:#2a323a;color:#cfd6dc;position:sticky;top:0;z-index:2}.muted{color:#8e99a3}.tag-list{white-space:pre-wrap;max-width:260px}.actions-cell{white-space:nowrap}.modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;padding:20px;z-index:50}.modal.open{display:flex}.modal-card{width:min(1150px,100%);max-height:92vh;overflow:auto}.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.modal-head h2{margin:0;font-size:18px}.products-table{width:100%;border-collapse:collapse;margin-top:12px}.products-table th,.products-table td{border:1px solid #3b444d;padding:6px}.products-table input{width:100%;padding:7px;background:#15191d;border:1px solid #4b5661;color:#fff;border-radius:5px}.summary{padding:8px 0;color:#9ca7b0;font-size:13px}.status{position:fixed;left:18px;bottom:18px;padding:10px 14px;border-radius:8px;background:#252d34;border:1px solid #48545f;display:none;z-index:100}.status.show{display:block}.jalali-date{direction:ltr;text-align:center;cursor:pointer}.datepicker-plot-area{z-index:10000!important}.date-cell{direction:ltr;text-align:center}
+*{box-sizing:border-box}body{margin:0;background:#15191d;color:#eee;font-family:Tahoma,Arial,sans-serif}.top{padding:18px 24px;background:#1d2329;border-bottom:1px solid #39414a;display:flex;justify-content:space-between;align-items:center;gap:16px}.top h1{margin:0;font-size:21px}.top small{color:#9aa5af}.wrap{padding:20px;max-width:1800px;margin:auto}.toolbar,.filters,.modal-card{background:#20262c;border:1px solid #3d4650;border-radius:10px;padding:16px;margin-bottom:16px}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid #52606d;background:#2c353e;color:#fff;border-radius:7px;padding:9px 14px;cursor:pointer}.btn:hover{filter:brightness(1.08)}.btn.primary{background:#1677ff;border-color:#1677ff}.btn.good{background:#216e48}.btn.danger{background:#8f3030;border-color:#a44040}.btn.small{padding:6px 9px;font-size:12px}.grid{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:10px}.field label{display:block;color:#b9c1c8;font-size:12px;margin-bottom:5px}.field input,.field select,.field textarea{width:100%;padding:9px;border-radius:6px;border:1px solid #505b65;background:#13171b;color:#fff}.field textarea{min-height:70px;resize:vertical}.filter-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}..table-wrap{overflow:auto;background:#20262c;border:1px solid #3d4650;border-radius:10px}.table{width:100%;border-collapse:collapse;min-width:1200px}.table th,.table td{border-bottom:1px solid #343d46;padding:8px;text-align:right;vertical-align:top}.table th{background:#2a323a;color:#cfd6dc;position:sticky;top:0;z-index:2}.muted{color:#8e99a3}.tag-list{white-space:pre-wrap;max-width:260px}.actions-cell{white-space:nowrap}.modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;padding:20px;z-index:50}.modal.open{display:flex}.modal-card{width:min(1150px,100%);max-height:92vh;overflow:auto}.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.modal-head h2{margin:0;font-size:18px}.products-table{width:100%;border-collapse:collapse;margin-top:12px}.products-table th,.products-table td{border:1px solid #3b444d;padding:6px}.products-table input{width:100%;padding:7px;background:#15191d;border:1px solid #4b5661;color:#fff;border-radius:5px}.summary{padding:8px 0;color:#9ca7b0;font-size:13px}.management-calculation-filters{margin-top:10px}.status{position:fixed;left:18px;bottom:18px;padding:10px 14px;border-radius:8px;background:#252d34;border:1px solid #48545f;display:none;z-index:100}.status.show{display:block}.jalali-date{direction:ltr;text-align:center;cursor:pointer}.datepicker-plot-area{z-index:10000!important}.date-cell{direction:ltr;text-align:center}
 @media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(160px,1fr))}}@media(max-width:600px){.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
@@ -40,6 +40,7 @@
       <div class="field"><label>حداکثر مقدار سفارش</label><input id="max_ordered" type="number" step="any"></div>
       <div class="field"><label>توضیحات</label><input id="description"></div>
     </div>
+    <div id="managementCalculationFilters" class="grid management-calculation-filters"></div>
     <div class="filter-actions">
       <button class="btn primary" type="button" onclick="loadData()">اعمال فیلتر</button>
       <button class="btn" type="button" onclick="clearFilters()">پاک کردن</button>
@@ -370,6 +371,7 @@ async function loadConfig(){
   config=data;
   productCache=Array.isArray(data.products)?data.products:[];
   renderProducts();
+  renderManagementCalculationFilters();
 }
 
 function renderProducts(){
@@ -390,6 +392,22 @@ function renderProducts(){
   ).join('');
 }
 
+function renderManagementCalculationFilters(){
+  const wrap=byId('managementCalculationFilters');
+  if(!wrap) return;
+  const calculations=Array.isArray(config.calculations)?config.calculations:[];
+  wrap.innerHTML=calculations.map((calc,index)=>{
+    const name=String(calc.name || calc.result_name || '').trim();
+    if(!name) return '';
+    const label=String(calc.label || name).trim();
+    const unit=String(calc.unit || '').trim();
+    return '<div class="field">'+
+      '<label>فیلتر '+esc(label)+(unit?' ('+esc(unit)+')':'')+'</label>'+
+      '<input id="management_calc_filter_'+index+'" type="number" step="any" data-calc-filter-key="'+esc(name)+'">'+
+    '</div>';
+  }).join('');
+}
+
 function buildFilterParams(){
   const params=new URLSearchParams();
   const ids=['contract_code','contract_name','product_code','product_name','contract_date_from','contract_date_to','delivery_date_from','delivery_date_to','min_ordered','max_ordered','description'];
@@ -397,6 +415,11 @@ function buildFilterParams(){
     const input=byId(id);
     const value=input ? input.value.trim() : '';
     if(value) params.set(id,value);
+  });
+  document.querySelectorAll('[data-calc-filter-key]').forEach(input=>{
+    const value=input.value.trim();
+    const key=input.dataset.calcFilterKey;
+    if(value && key) params.set('calc_'+key,value);
   });
   params.set('company_id',String(COMPANY_ID));
   return params;
@@ -466,7 +489,11 @@ function formatValue(value){
 }
 
 function clearFilters(){
-  ['contract_code','contract_name','product_code','product_name','contract_date_from','contract_date_to','delivery_date_from','delivery_date_to','min_ordered','max_ordered','description'].forEach(id=>byId(id).value='');
+  ['contract_code','contract_name','product_code','product_name','contract_date_from','contract_date_to','delivery_date_from','delivery_date_to','min_ordered','max_ordered','description'].forEach(id=>{
+    const input=byId(id);
+    if(input) input.value='';
+  });
+  document.querySelectorAll('[data-calc-filter-key]').forEach(input=>input.value='');
   console.log('[MANAGEMENT] FILTERS CLEARED');
   loadData();
 }
