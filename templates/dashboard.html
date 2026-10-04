@@ -120,7 +120,7 @@ function parseTimestamp(value){if(!value)return null;const text=String(value).tr
 function setOnline(){const s=document.getElementById("status");s.textContent="ONLINE";s.className="status online";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="ONLINE";e.classList.add("online-state")});}
 function setOffline(){const s=document.getElementById("status");s.textContent="OFFLINE";s.className="status offline";document.querySelectorAll("[data-machine-state]").forEach(e=>{e.textContent="OFFLINE";e.classList.remove("online-state")});}
 function apply(tag,value,plcId,storageType,timestamp,source){if(value===null||value===undefined)return;const normal=normalizeTag(tag);const pid=plcId==null?"":String(plcId);const incomingStorage=normalizeStorage(storageType);const ts=parseTimestamp(timestamp);const sourceName=source||"socket";document.querySelectorAll("[data-tag]").forEach(row=>{const rowPid=String(row.dataset.plcId||"");const rowTag=normalizeTag(row.dataset.tag);const configured=normalizeTag(row.dataset.configuredTag);const rowStorage=normalizeStorage(row.dataset.storage);if(!((normal===rowTag||normal===configured)&&(rowPid===""||pid===""||rowPid===pid)))return;
-if(sourceName==="socket" && rowStorage==="LIVE" && incomingStorage!=="LIVE")return;
+if(sourceName==="socket" && rowStorage==="LIVE" && incomingStorage && incomingStorage!=="LIVE")return;
 const key=valueKey(rowPid||pid,normal||rowTag);
 const previous=dashboardLastUpdate[key];
 if(sourceName==="socket" && previous && previous.ts!==null && ts!==null && ts<=previous.ts)return;
