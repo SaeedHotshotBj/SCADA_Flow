@@ -1093,9 +1093,41 @@ def flow_trend():
         flow = json.loads(flow_json)
         runner = FlowRunner(flow, company_id)
         result = runner.execute_request(request_data)
+        chart_data = result.get("ChartData", {}) if isinstance(result, dict) else {}
 
+        if isinstance(chart_data, dict) and isinstance(chart_data.get("datasets"), list) and chart_data.get("datasets"):
+            return jsonify(chart_data)
+
+        # Some company Flows contain a valid Trend definition but their
+        # historical branch is not wired as a complete executable path.
+        # In that case, stay Flow-driven by reading the same Flow-selected
+        # aggregate resolution directly through TrendDatabaseReader.
+        from flow_engine.nodes.trend_database_reader import TrendDatabaseReader
+        from flow_engine.nodes.trend_output import TrendOutput
+
+        fallback_reader = TrendDatabaseReader({"company_id": company_id})
+        fallback_data = {
+            "CompanyID": company_id,
+            "UserRole": session.get("role"),
+            "TrendRequest": dict(trend_request),
+        }
+        fallback_data = fallback_reader.execute(fallback_data)
+
+        output_config = {}
+        nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
+        if isinstance(nodes, dict):
+            for node in nodes.values():
+                if not isinstance(node, dict) or node.get("name") != "TrendOutput":
+                    continue
+                raw_config = node.get("data", {}) or {}
+                raw_config = raw_config.get("config", raw_config)
+                if isinstance(raw_config, dict):
+                    output_config = dict(raw_config)
+                break
+
+        fallback_result = TrendOutput(output_config).execute(fallback_data)
         return jsonify(
-            result.get("ChartData", {"datasets": []})
+            fallback_result.get("ChartData", {"datasets": []})
         )
 
     except Exception as e:
@@ -1371,7 +1403,11 @@ def dashboard_machine_trend_live():
         for widget in widgets:
             if not isinstance(widget, dict):
                 continue
-            if widget.get("_dashboard_type") != "machine_parameter":
+
+            dashboard_type = widget.get("_dashboard_type")
+            if dashboard_type == "machine":
+                continue
+            if dashboard_type not in (None, "machine_parameter"):
                 continue
 
             try:
@@ -1389,7 +1425,7 @@ def dashboard_machine_trend_live():
         if matched is None:
             return jsonify({
                 "status": "error",
-                "message": "MachineCard parameter not found in Dashboard Flow",
+                "message": "Dashboard parameter not found in Dashboard Flow",
                 "datasets": [],
             }), 404
 
