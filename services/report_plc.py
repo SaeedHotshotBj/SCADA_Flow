@@ -5,7 +5,6 @@ import sqlite3
 from datetime import datetime
 
 from database import get_connection, get_company_flow
-from services.flow_calculations import evaluate_calculations
 
 _CONTEXT_CONTRACT_ROLES = {"contract", "contract_code", "contractid", "contract_id"}
 _CONTEXT_PRODUCT_ROLES = {"product", "product_code", "productid", "product_id"}
