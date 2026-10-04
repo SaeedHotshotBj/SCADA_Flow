@@ -11,8 +11,16 @@ REALTIME_SKIP_NODE_TYPES = {
     "TrendReader",
     "TrendDatabaseReader",
     "TrendOutput",
-    "ExpressionNode",
     "SQLWriter",
+}
+
+REALTIME_PASSTHROUGH_NODE_TYPES = {
+    "SQLWriter",
+}
+
+REALTIME_SQLWRITER_TARGET_TYPES = {
+    "MachineCard",
+    "DashboardOutput",
 }
 
 
@@ -97,14 +105,22 @@ class FlowRunner:
         all_nodes = {
             node_id for node_id, node in self.nodes.items()
             if node["type"] not in ignored
-            and not (realtime and node["type"] in REALTIME_SKIP_NODE_TYPES)
+            and not (
+                realtime
+                and node["type"] in REALTIME_SKIP_NODE_TYPES
+                and node["type"] not in REALTIME_PASSTHROUGH_NODE_TYPES
+            )
         }
         targets = set()
         for source_id, children in self.connections.items():
             source = self.nodes.get(str(source_id))
             if not source or source["type"] in ignored:
                 continue
-            if realtime and source["type"] in REALTIME_SKIP_NODE_TYPES:
+            if (
+                realtime
+                and source["type"] in REALTIME_SKIP_NODE_TYPES
+                and source["type"] not in REALTIME_PASSTHROUGH_NODE_TYPES
+            ):
                 continue
             targets.update(child for child in children if child in all_nodes)
         return sorted(all_nodes - targets)
@@ -139,19 +155,34 @@ class FlowRunner:
             return data
         visited.add(node_id)
         info = self.nodes[node_id]
-        if realtime and info["type"] in REALTIME_SKIP_NODE_TYPES:
+        is_realtime_passthrough = (
+            realtime
+            and info["type"] in REALTIME_PASSTHROUGH_NODE_TYPES
+        )
+        if (
+            realtime
+            and info["type"] in REALTIME_SKIP_NODE_TYPES
+            and not is_realtime_passthrough
+        ):
             return data
 
         payload = self._prepare_payload(data)
-        try:
-            payload = self._execute_single(node_id, payload)
-            flow_status.node_ok(node_id)
-        except Exception as exc:
-            flow_status.node_error(node_id, exc)
-            print("FLOW NODE ERROR:", "Node=", node_id, "Type=", info["type"], "Error=", repr(exc))
-            return payload
+        if not is_realtime_passthrough:
+            try:
+                payload = self._execute_single(node_id, payload)
+                flow_status.node_ok(node_id)
+            except Exception as exc:
+                flow_status.node_error(node_id, exc)
+                print("FLOW NODE ERROR:", "Node=", node_id, "Type=", info["type"], "Error=", repr(exc))
+                return payload
 
         children = self.next_nodes(node_id)
+        if is_realtime_passthrough and info["type"] == "SQLWriter":
+            children = [
+                child
+                for child in children
+                if self.nodes.get(str(child), {}).get("type") in REALTIME_SQLWRITER_TARGET_TYPES
+            ]
         if not children:
             return payload
 
@@ -161,7 +192,11 @@ class FlowRunner:
             child_info = self.nodes.get(child_id)
             if not child_info:
                 continue
-            if realtime and child_info["type"] in REALTIME_SKIP_NODE_TYPES:
+            if (
+                realtime
+                and child_info["type"] in REALTIME_SKIP_NODE_TYPES
+                and child_info["type"] not in REALTIME_PASSTHROUGH_NODE_TYPES
+            ):
                 continue
             child_result = self.execute_node(
                 child_id,
