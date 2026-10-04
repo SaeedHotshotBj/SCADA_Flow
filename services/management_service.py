@@ -570,20 +570,6 @@ def _normalize_filter_text(value):
     return _normalize_digits(value).strip().lower()
 
 
-def _calculation_filter_match(value, wanted):
-    wanted = _normalize_filter_text(wanted)
-    if not wanted:
-        return True
-    if value is None:
-        return False
-    try:
-        left = float(value)
-        right = float(wanted)
-        return abs(left - right) < 1e-9
-    except (TypeError, ValueError):
-        return wanted in _normalize_filter_text(value)
-
-
 def get_management_data(company_id, filters=None):
     filters = filters or {}
     ensure_management_tables()
@@ -610,13 +596,20 @@ def get_management_data(company_id, filters=None):
             return {"columns": [], "rows": [], "count": 0}
 
         report_products = get_report_products(company_id)
-        report_tag_names = [
-            item.get("name", item.get("tag", ""))
-            for item in report_products
-            if item.get("source") != "report_calculation"
-            and not item.get("context_role")
-            and str(item.get("name", item.get("tag", ""))).strip()
-        ]
+        # Management calculations use the same Flow-defined raw report tags
+        # as ReportOutput. Accept both the TagMapper tag and the display name
+        # so storage naming cannot make a valid calculation lose its inputs.
+        report_tag_names = []
+        seen_report_tags = set()
+        for item in report_products:
+            if item.get("source") == "report_calculation" or item.get("context_role"):
+                continue
+            for value in (item.get("tag"), item.get("name")):
+                tag = str(value or "").strip()
+                key = tag.lower()
+                if tag and key not in seen_report_tags:
+                    seen_report_tags.add(key)
+                    report_tag_names.append(tag)
         legacy_groups = _report_values_for_pairs(
             conn,
             company_id,
@@ -694,29 +687,6 @@ def get_management_data(company_id, filters=None):
                 key = str(item["name"])
                 display[key] = calculated.get(key)
             output_rows.append(display)
-
-        # Apply ManagementPanel calculation filters after calculation, so the
-        # filter operates on exactly the value produced by the Flow expression.
-        calc_filters = {
-            str(key)[5:]: value
-            for key, value in filters.items()
-            if str(key).startswith("calc_") and str(value).strip()
-        }
-        if calc_filters:
-            filtered_rows = []
-            for row in output_rows:
-                keep = True
-                for calc in calculations:
-                    key = str(calc["name"])
-                    wanted = calc_filters.get(key)
-                    if wanted is not None and not _calculation_filter_match(row.get(key), wanted):
-                        keep = False
-                        break
-                if keep:
-                    # Ignore unknown calc filters; only defined Flow calculations
-                    # are allowed to filter this table.
-                    filtered_rows.append(row)
-            output_rows = filtered_rows
 
         return {"columns": columns, "rows": output_rows, "count": len(output_rows)}
     finally:
