@@ -1091,27 +1091,22 @@ def flow_trend():
         request_data["TrendRequest"] = trend_request
 
         flow = json.loads(flow_json)
-        runner = FlowRunner(flow, company_id)
-        result = runner.execute_request(request_data)
-        chart_data = result.get("ChartData", {}) if isinstance(result, dict) else {}
 
-        if isinstance(chart_data, dict) and isinstance(chart_data.get("datasets"), list) and chart_data.get("datasets"):
-            return jsonify(chart_data)
-
-        # Some company Flows contain a valid Trend definition but their
-        # historical branch is not wired as a complete executable path.
-        # In that case, stay Flow-driven by reading the same Flow-selected
-        # aggregate resolution directly through TrendDatabaseReader.
+        # Historical Trend is resolved from the authenticated company's Flow:
+        # TrendDatabaseReader resolves each tag's PLC and Flow-selected
+        # aggregate resolution, while TrendOutput preserves the Flow's
+        # labels, units and role restrictions. This keeps the request
+        # independent of company-specific Drawflow branch wiring.
         from flow_engine.nodes.trend_database_reader import TrendDatabaseReader
         from flow_engine.nodes.trend_output import TrendOutput
 
-        fallback_reader = TrendDatabaseReader({"company_id": company_id})
-        fallback_data = {
+        reader = TrendDatabaseReader({"company_id": company_id})
+        data = {
             "CompanyID": company_id,
             "UserRole": session.get("role"),
             "TrendRequest": dict(trend_request),
         }
-        fallback_data = fallback_reader.execute(fallback_data)
+        data = reader.execute(data)
 
         output_config = {}
         nodes = flow.get("drawflow", {}).get("Home", {}).get("data", {}) or {}
@@ -1125,9 +1120,9 @@ def flow_trend():
                     output_config = dict(raw_config)
                 break
 
-        fallback_result = TrendOutput(output_config).execute(fallback_data)
+        output = TrendOutput(output_config).execute(data)
         return jsonify(
-            fallback_result.get("ChartData", {"datasets": []})
+            output.get("ChartData", {"datasets": []})
         )
 
     except Exception as e:
