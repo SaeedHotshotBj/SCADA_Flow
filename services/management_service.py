@@ -10,7 +10,7 @@ import jdatetime
 
 from database import get_connection, get_company_flow
 from services.flow_calculations import enrich_with_flow_expressions, evaluate_calculations
-from services.report_service import get_report_products, ensure_report_tables
+from services.report_service import ensure_report_tables
 
 TABLES_READY = False
 
@@ -446,6 +446,32 @@ def _query_base(company_id, filters):
     return where, args
 
 
+def _tagmapper_tag_names(company_id):
+    """Return all non-empty TagMapper names available to Management calculations."""
+    names = []
+    seen = set()
+    for node in _flow_nodes(company_id).values():
+        if not isinstance(node, dict) or str(node.get("name", "")).strip() != "TagMapper":
+            continue
+        data = node.get("data", {}) or {}
+        config = data.get("config", data) or {}
+        mappings = config.get("mappings", []) if isinstance(config, dict) else []
+        if not isinstance(mappings, list):
+            continue
+        for item in mappings:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(name)
+    return names
+
+
 def _report_values_for_pairs(conn, company_id, base_rows, allowed_tags=None):
     pairs = []
     seen = set()
@@ -595,26 +621,14 @@ def get_management_data(company_id, filters=None):
         if not base_rows:
             return {"columns": [], "rows": [], "count": 0}
 
-        report_products = get_report_products(company_id)
-        # Management calculations use the same Flow-defined raw report tags
-        # as ReportOutput. Accept both the TagMapper tag and the display name
-        # so storage naming cannot make a valid calculation lose its inputs.
-        report_tag_names = []
-        seen_report_tags = set()
-        for item in report_products:
-            if item.get("source") == "report_calculation" or item.get("context_role"):
-                continue
-            for value in (item.get("tag"), item.get("name")):
-                tag = str(value or "").strip()
-                key = tag.lower()
-                if tag and key not in seen_report_tags:
-                    seen_report_tags.add(key)
-                    report_tag_names.append(tag)
+        # Management calculations are independent of ReportOutput. Their
+        # calculation inputs come directly from the Flow-defined TagMapper.
+        tagmapper_names = _tagmapper_tag_names(company_id)
         legacy_groups = _report_values_for_pairs(
             conn,
             company_id,
             base_rows,
-            allowed_tags=report_tag_names,
+            allowed_tags=tagmapper_names,
         )
         event_groups = _event_values_for_pairs(conn, company_id, base_rows)
         groups = _merge_management_value_sources(event_groups, legacy_groups)
