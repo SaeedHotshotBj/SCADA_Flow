@@ -85,7 +85,6 @@
         unit: String(item.unit || '').trim()
       }));
     log('FLOW calculations:', state.calculations);
-    renderCalculationFilters();
   }
 
   function optionsFor(input) {
@@ -278,7 +277,6 @@
     });
     installRenderWrapper();
     installClearWrapper();
-    if (!document.querySelector('.management-flow-calculation-filter')) renderCalculationFilters();
   });
 
   if (document.body) observer.observe(document.body, {childList: true, subtree: true});
@@ -286,7 +284,6 @@
   (async function boot() {
     try {
       await loadOptions();
-      await loadFlowConfig();
       scan(document);
       installRenderWrapper();
       installClearWrapper();
