@@ -316,7 +316,14 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None, contrac
         return result
 
     ensure_report_tables()
-    keys = [str(item.get("storage_tag", item.get("name", item.get("tag", "")))).strip().lower() for item in products]
+    keys = [
+        str(
+            item.get("storage_tag")
+            or item.get("tag")
+            or item.get("name", "")
+        ).strip().lower()
+        for item in products
+    ]
     placeholders = ",".join("?" for _ in keys)
 
     conn = get_connection()
