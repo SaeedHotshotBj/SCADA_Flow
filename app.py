@@ -56,6 +56,7 @@ from services.edge_ingest import (
     get_flow_storage_type,
     get_flow_historical_tags,
 )
+from services.edge_trigger_service import EdgeTriggerService
 from services.edge_management import ensure_edge_management_schema
 
 
@@ -1623,6 +1624,44 @@ def receive_edge_store_forward():
 
         from services.edge_ingest import ingest_items
         result = ingest_items(items)
+
+        # Process newly ingested trigger signals immediately instead of waiting
+        # for the next generic FlowRunner scan. The Store & Forward order is
+        # already committed, so the server can reconstruct the exact snapshot
+        # and handle Rise/Fall even when a trigger pulse is shorter than the
+        # normal Flow scan interval.
+        trigger_targets = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            storage = str(item.get("StorageType", "") or "").strip().upper()
+            if storage != "TRIGGER_SIGNAL":
+                continue
+            try:
+                plc_id = int(item.get("PLC_ID"))
+            except (TypeError, ValueError):
+                continue
+            company_id = _company_id_for_plc(plc_id)
+            if company_id is not None:
+                trigger_targets.add((int(company_id), plc_id))
+
+        if trigger_targets:
+            trigger_service = EdgeTriggerService()
+            for company_id, plc_id in sorted(trigger_targets):
+                try:
+                    trigger_service.enrich({
+                        "CompanyID": company_id,
+                        "PLC_ID": plc_id,
+                    })
+                except Exception as trigger_exc:
+                    # The signal is already durable in PLC_Data; the existing
+                    # FlowRunner enrichment path remains available as fallback.
+                    print(
+                        "IMMEDIATE TRIGGER PROCESSING WARNING:",
+                        "CompanyID=", company_id,
+                        "PLC_ID=", plc_id,
+                        "Reason=", trigger_exc,
+                    )
 
         return jsonify({
             "status": "ok",
