@@ -9,7 +9,7 @@ from datetime import datetime
 import jdatetime
 
 from database import get_connection, get_company_flow
-from flow_engine.nodes.expression_node import ExpressionNode
+from services.flow_calculations import enrich_with_flow_expressions, evaluate_calculations
 from services.report_service import get_report_products, ensure_report_tables
 
 TABLES_READY = False
@@ -446,7 +446,7 @@ def _query_base(company_id, filters):
     return where, args
 
 
-def _report_values_for_pairs(conn, company_id, base_rows):
+def _report_values_for_pairs(conn, company_id, base_rows, allowed_tags=None):
     pairs = []
     seen = set()
     for row in base_rows:
@@ -457,6 +457,8 @@ def _report_values_for_pairs(conn, company_id, base_rows):
         pairs.append((row["ContractCode"], row["ProductCode"]))
     if not pairs:
         return {}
+
+    allowed = {str(tag).strip().lower() for tag in (allowed_tags or []) if str(tag).strip()}
     args = [int(company_id)]
     conditions = []
     for contract_code, product_code in pairs:
@@ -464,23 +466,105 @@ def _report_values_for_pairs(conn, company_id, base_rows):
             "(LOWER(COALESCE(h.ContractCode,''))=LOWER(?) AND LOWER(COALESCE(h.ProductCode,''))=LOWER(?))"
         )
         args.extend([contract_code, product_code])
-    rows = conn.execute(f"""
+
+    tag_clause = ""
+    if allowed:
+        tag_clause = " AND LOWER(v.TagName) IN (" + ",".join("?" for _ in allowed) + ")"
+        args.extend(sorted(allowed))
+
+    rows = conn.execute(
+        f"""
         SELECT h.ReportID, h.ContractCode, h.ProductCode, h.Timestamp,
                v.TagName, v.Value, v.ReportValueID
         FROM ReportHistory h
         INNER JOIN ReportValues v ON v.ReportID=h.ReportID
-        WHERE h.CompanyID=? AND ({' OR '.join(conditions)})
+        WHERE h.CompanyID=? AND ({' OR '.join(conditions)}){tag_clause}
         ORDER BY h.ReportID ASC, v.ReportValueID ASC
-    """, args).fetchall()
+        """,
+        args,
+    ).fetchall()
+
     grouped = {}
     for row in rows:
-        key = (str(row["ContractCode"] or "").strip().lower(), str(row["ProductCode"] or "").strip().lower())
+        key = (
+            str(row["ContractCode"] or "").strip().lower(),
+            str(row["ProductCode"] or "").strip().lower(),
+        )
         group = grouped.setdefault(key, {"tags": {}})
         tag = str(row["TagName"] or "").strip()
         if tag:
             group["tags"].setdefault(tag, []).append(row["Value"])
     return grouped
 
+
+def _event_values_for_pairs(conn, company_id, base_rows):
+    pairs = {
+        (str(row["ContractCode"]).strip().lower(), str(row["ProductCode"]).strip().lower())
+        for row in base_rows
+    }
+    if not pairs:
+        return {}
+
+    try:
+        table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ProductionEvents' LIMIT 1"
+        ).fetchone()
+        if table is None:
+            return {}
+        rows = conn.execute(
+            """
+            SELECT TriggerTimestamp, TagsJSON
+            FROM ProductionEvents
+            WHERE CompanyID=?
+            ORDER BY datetime(TriggerTimestamp) DESC
+            """,
+            (int(company_id),),
+        ).fetchall()
+    except Exception as exc:
+        print("MANAGEMENT EVENT VALUES ERROR:", exc)
+        return {}
+
+    grouped = {}
+    remaining = set(pairs)
+    for row in rows:
+        try:
+            raw = json.loads(row["TagsJSON"] or "{}")
+        except Exception:
+            continue
+        if not isinstance(raw, dict):
+            continue
+
+        contract = _normalize_filter_text(raw.get("ContractCode"))
+        product = _normalize_filter_text(raw.get("ProductCode"))
+        pair_key = (contract, product)
+        if pair_key not in pairs or pair_key in grouped:
+            continue
+
+        flow_tags = enrich_with_flow_expressions(company_id, raw)
+        numeric_tags = {}
+        for name, value in flow_tags.items():
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            numeric_tags[str(name).strip()] = [numeric]
+
+        grouped[pair_key] = {"tags": numeric_tags}
+        remaining.discard(pair_key)
+        if not remaining:
+            break
+
+    return grouped
+
+
+def _merge_management_value_sources(event_groups, report_groups):
+    merged = {key: {"tags": dict(value.get("tags", {}))} for key, value in (report_groups or {}).items()}
+    for key, source in (event_groups or {}).items():
+        target = merged.setdefault(key, {"tags": {}})
+        target_tags = target.setdefault("tags", {})
+        for tag, values in (source.get("tags", {}) or {}).items():
+            target_tags[tag] = list(values) if isinstance(values, list) else [values]
+    return merged
 
 def _normalize_filter_text(value):
     return _normalize_digits(value).strip().lower()
@@ -525,9 +609,23 @@ def get_management_data(company_id, filters=None):
         if not base_rows:
             return {"columns": [], "rows": [], "count": 0}
 
-        groups = _report_values_for_pairs(conn, company_id, base_rows)
+        report_products = get_report_products(company_id)
+        report_tag_names = [
+            item.get("name", item.get("tag", ""))
+            for item in report_products
+            if item.get("source") != "report_calculation"
+            and not item.get("context_role")
+            and str(item.get("name", item.get("tag", ""))).strip()
+        ]
+        legacy_groups = _report_values_for_pairs(
+            conn,
+            company_id,
+            base_rows,
+            allowed_tags=report_tag_names,
+        )
+        event_groups = _event_values_for_pairs(conn, company_id, base_rows)
+        groups = _merge_management_value_sources(event_groups, legacy_groups)
         calculations = _management_calculations(company_id)
-        expression_node = ExpressionNode({"expressions": calculations}) if calculations else None
 
         columns = [
             {"key": "ContractCode", "label": "کد قرارداد", "unit": ""},
@@ -574,14 +672,11 @@ def get_management_data(company_id, filters=None):
             tags["ContractCode"] = row["ContractCode"]
             tags["ProductCode"] = row["ProductCode"]
 
-            calculated = {}
-            if expression_node:
-                try:
-                    calc_input = {"Tags": dict(tags)}
-                    result = expression_node.execute(calc_input) or {}
-                    calculated = dict(result.get("Tags", {}))
-                except Exception as exc:
-                    print("MANAGEMENT CALCULATION ERROR:", exc)
+            calculated = evaluate_calculations(
+                calculations,
+                tags,
+                company_id=company_id,
+            )
 
             display = {
                 "ContractCode": row["ContractCode"],
