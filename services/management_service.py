@@ -4,6 +4,7 @@
 # =====================================================
 
 import json
+import re
 from datetime import datetime
 
 import jdatetime
@@ -476,7 +477,10 @@ def _report_values_for_pairs(conn, company_id, base_rows, allowed_tags=None):
     pairs = []
     seen = set()
     for row in base_rows:
-        key = (str(row["ContractCode"]).strip().lower(), str(row["ProductCode"]).strip().lower())
+        key = (
+            _management_code_key(row["ContractCode"]),
+            _management_code_key(row["ProductCode"]),
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -487,11 +491,26 @@ def _report_values_for_pairs(conn, company_id, base_rows, allowed_tags=None):
     allowed = {str(tag).strip().lower() for tag in (allowed_tags or []) if str(tag).strip()}
     args = [int(company_id)]
     conditions = []
+
+    # ReportHistory context values can be written as strings ("1") or as the
+    # string representation of PLC numeric context ("1.0"). Build only the
+    # safe variants for the requested Management codes.
     for contract_code, product_code in pairs:
-        conditions.append(
-            "(LOWER(COALESCE(h.ContractCode,''))=LOWER(?) AND LOWER(COALESCE(h.ProductCode,''))=LOWER(?))"
-        )
-        args.extend([contract_code, product_code])
+        contract_variants = _management_code_variants(contract_code)
+        product_variants = _management_code_variants(product_code)
+        pair_conditions = []
+        for contract_variant in contract_variants:
+            for product_variant in product_variants:
+                pair_conditions.append(
+                    "(LOWER(COALESCE(h.ContractCode,''))=LOWER(?) "
+                    "AND LOWER(COALESCE(h.ProductCode,''))=LOWER(?))"
+                )
+                args.extend([contract_variant, product_variant])
+        if pair_conditions:
+            conditions.append("(" + " OR ".join(pair_conditions) + ")")
+
+    if not conditions:
+        return {}
 
     tag_clause = ""
     if allowed:
@@ -513,8 +532,8 @@ def _report_values_for_pairs(conn, company_id, base_rows, allowed_tags=None):
     grouped = {}
     for row in rows:
         key = (
-            str(row["ContractCode"] or "").strip().lower(),
-            str(row["ProductCode"] or "").strip().lower(),
+            _management_code_key(row["ContractCode"]),
+            _management_code_key(row["ProductCode"]),
         )
         group = grouped.setdefault(key, {"tags": {}})
         tag = str(row["TagName"] or "").strip()
@@ -525,7 +544,10 @@ def _report_values_for_pairs(conn, company_id, base_rows, allowed_tags=None):
 
 def _event_values_for_pairs(conn, company_id, base_rows):
     pairs = {
-        (str(row["ContractCode"]).strip().lower(), str(row["ProductCode"]).strip().lower())
+        (
+            _management_code_key(row["ContractCode"]),
+            _management_code_key(row["ProductCode"]),
+        )
         for row in base_rows
     }
     if not pairs:
@@ -560,8 +582,8 @@ def _event_values_for_pairs(conn, company_id, base_rows):
         if not isinstance(raw, dict):
             continue
 
-        contract = _normalize_filter_text(raw.get("ContractCode"))
-        product = _normalize_filter_text(raw.get("ProductCode"))
+        contract = _management_code_key(raw.get("ContractCode"))
+        product = _management_code_key(raw.get("ProductCode"))
         pair_key = (contract, product)
         if pair_key not in pairs or pair_key in grouped:
             continue
@@ -573,7 +595,11 @@ def _event_values_for_pairs(conn, company_id, base_rows):
                 numeric = float(value)
             except (TypeError, ValueError):
                 continue
-            numeric_tags[str(name).strip()] = [numeric]
+            clean_name = str(name).strip()
+            if not clean_name:
+                continue
+            numeric_tags[clean_name] = [numeric]
+            numeric_tags.setdefault(clean_name.lower(), [numeric])
 
         grouped[pair_key] = {"tags": numeric_tags}
         remaining.discard(pair_key)
@@ -594,6 +620,35 @@ def _merge_management_value_sources(event_groups, report_groups):
 
 def _normalize_filter_text(value):
     return _normalize_digits(value).strip().lower()
+
+
+def _management_code_key(value):
+    """Normalize Management contract/product codes for cross-source matching."""
+    normalized = _normalize_filter_text(value)
+    if re.fullmatch(r"[+-]?\d+\.0+", normalized):
+        return normalized.split(".", 1)[0]
+    return normalized
+
+
+def _management_code_variants(value):
+    """Return exact + integer-float variants without collapsing leading-zero text."""
+    normalized = _normalize_filter_text(value)
+    if not normalized:
+        return []
+
+    variants = [normalized]
+    if re.fullmatch(r"[+-]?\d+", normalized):
+        variants.append(normalized + ".0")
+    elif re.fullmatch(r"[+-]?\d+\.0+", normalized):
+        variants.append(normalized.split(".", 1)[0])
+
+    result = []
+    seen = set()
+    for item in variants:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
 
 
 def get_management_data(company_id, filters=None):
@@ -660,8 +715,8 @@ def get_management_data(company_id, filters=None):
         output_rows = []
         for row in base_rows:
             pair_key = (
-                _normalize_filter_text(row["ContractCode"]),
-                _normalize_filter_text(row["ProductCode"]),
+                _management_code_key(row["ContractCode"]),
+                _management_code_key(row["ProductCode"]),
             )
             source = groups.get(pair_key, {"tags": {}})
             tags = {}
@@ -676,9 +731,15 @@ def get_management_data(company_id, filters=None):
                 tags[f"{tag}_values"] = numeric_values
                 tags[f"{tag}_last"] = numeric_values[-1] if numeric_values else 0
 
-            tags["OrderedQuantity"] = row["OrderedQuantity"]
-            tags["CostPerKg"] = row["CostPerKg"]
-            tags["CostPerMeter"] = row["CostPerMeter"]
+            fixed_values = {
+                "OrderedQuantity": row["OrderedQuantity"],
+                "CostPerKg": row["CostPerKg"],
+                "CostPerMeter": row["CostPerMeter"],
+            }
+            for name, value in fixed_values.items():
+                tags[name] = value
+                tags.setdefault(name.lower(), value)
+
             tags["ContractCode"] = row["ContractCode"]
             tags["ProductCode"] = row["ProductCode"]
 
