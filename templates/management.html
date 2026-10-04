@@ -40,7 +40,6 @@
       <div class="field"><label>حداکثر مقدار سفارش</label><input id="max_ordered" type="number" step="any"></div>
       <div class="field"><label>توضیحات</label><input id="description"></div>
     </div>
-    <div id="managementCalculationFilters" class="grid management-calculation-filters"></div>
     <div class="filter-actions">
       <button class="btn primary" type="button" onclick="loadData()">اعمال فیلتر</button>
       <button class="btn" type="button" onclick="clearFilters()">پاک کردن</button>
@@ -371,7 +370,6 @@ async function loadConfig(){
   config=data;
   productCache=Array.isArray(data.products)?data.products:[];
   renderProducts();
-  renderManagementCalculationFilters();
 }
 
 function renderProducts(){
@@ -392,22 +390,6 @@ function renderProducts(){
   ).join('');
 }
 
-function renderManagementCalculationFilters(){
-  const wrap=byId('managementCalculationFilters');
-  if(!wrap) return;
-  const calculations=Array.isArray(config.calculations)?config.calculations:[];
-  wrap.innerHTML=calculations.map((calc,index)=>{
-    const name=String(calc.name || calc.result_name || '').trim();
-    if(!name) return '';
-    const label=String(calc.label || name).trim();
-    const unit=String(calc.unit || '').trim();
-    return '<div class="field">'+
-      '<label>فیلتر '+esc(label)+(unit?' ('+esc(unit)+')':'')+'</label>'+
-      '<input id="management_calc_filter_'+index+'" type="number" step="any" data-calc-filter-key="'+esc(name)+'">'+
-    '</div>';
-  }).join('');
-}
-
 function buildFilterParams(){
   const params=new URLSearchParams();
   const ids=['contract_code','contract_name','product_code','product_name','contract_date_from','contract_date_to','delivery_date_from','delivery_date_to','min_ordered','max_ordered','description'];
@@ -415,11 +397,6 @@ function buildFilterParams(){
     const input=byId(id);
     const value=input ? input.value.trim() : '';
     if(value) params.set(id,value);
-  });
-  document.querySelectorAll('[data-calc-filter-key]').forEach(input=>{
-    const value=input.value.trim();
-    const key=input.dataset.calcFilterKey;
-    if(value && key) params.set('calc_'+key,value);
   });
   params.set('company_id',String(COMPANY_ID));
   return params;
@@ -493,7 +470,6 @@ function clearFilters(){
     const input=byId(id);
     if(input) input.value='';
   });
-  document.querySelectorAll('[data-calc-filter-key]').forEach(input=>input.value='');
   console.log('[MANAGEMENT] FILTERS CLEARED');
   loadData();
 }
