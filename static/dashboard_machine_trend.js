@@ -108,6 +108,7 @@
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || data.error || ("HTTP " + response.status));
+            if (mode !== "live") return;
             draw(data, "live");
         } catch (err) {
             console.error("MACHINE LIVE TREND ERROR:", err);
