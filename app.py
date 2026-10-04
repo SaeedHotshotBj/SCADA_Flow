@@ -1343,6 +1343,129 @@ def trend_request():
 
 
 # =====================================================
+# MACHINE CARD LIVE TREND
+# =====================================================
+
+@app.route("/dashboard/machine_trend_live")
+@login_required
+def dashboard_machine_trend_live():
+    """Return the recent process-local live series for one Dashboard MachineCard parameter."""
+    try:
+        company_id = get_request_company_id()
+        if company_id is None:
+            return jsonify({"datasets": []}), 403
+
+        tag = str(request.args.get("tag", "")).strip()
+        plc_id = request.args.get("PLC_ID", type=int)
+
+        if not tag or plc_id is None:
+            return jsonify({
+                "status": "error",
+                "message": "tag and PLC_ID are required",
+                "datasets": [],
+            }), 400
+
+        widgets = get_dashboard_widgets(company_id)
+        matched = None
+
+        for widget in widgets:
+            if not isinstance(widget, dict):
+                continue
+            if widget.get("_dashboard_type") != "machine_parameter":
+                continue
+
+            try:
+                widget_plc_id = int(
+                    widget.get("plc_id", widget.get("PLC_ID"))
+                )
+            except (TypeError, ValueError):
+                continue
+
+            widget_tag = str(widget.get("tag", "")).strip()
+            if widget_plc_id == plc_id and widget_tag.lower() == tag.lower():
+                matched = widget
+                break
+
+        if matched is None:
+            return jsonify({
+                "status": "error",
+                "message": "MachineCard parameter not found in Dashboard Flow",
+                "datasets": [],
+            }), 404
+
+        role = str(session.get("role", "")).strip().lower()
+        allowed = matched.get("allowed_roles", "")
+        if isinstance(allowed, (list, tuple, set)):
+            allowed_roles = {
+                str(item).strip().lower()
+                for item in allowed
+                if str(item).strip()
+            }
+        else:
+            allowed_roles = {
+                item.strip().lower()
+                for item in str(allowed or "").replace(";", ",").split(",")
+                if item.strip()
+            }
+
+        if allowed_roles and role != "master" and role not in allowed_roles:
+            return jsonify({
+                "status": "error",
+                "message": "Access denied",
+                "datasets": [],
+            }), 403
+
+        storage = str(
+            matched.get(
+                "storage",
+                get_flow_storage_type(company_id, plc_id, tag) or "",
+            )
+            or ""
+        ).strip().upper()
+
+        rows = get_live_series(
+            company_id,
+            plc_id,
+            tag,
+            default_minutes=10,
+            storage_type=storage or None,
+        )
+
+        from flow_engine.nodes.trend_output import TrendOutput
+
+        data = {
+            "CompanyID": company_id,
+            "PLC_ID": plc_id,
+            "TrendRequest": {
+                "Tag": tag,
+                "Tags": [tag],
+                "CompanyID": company_id,
+                "PLC_ID": plc_id,
+            },
+            "TrendData": rows,
+            "TrendStats": {},
+            "TrendResolution": {tag: "live"},
+        }
+
+        output = TrendOutput({}).execute(data)
+        chart_data = output.get("ChartData", {"datasets": []})
+        chart_data["live"] = True
+        chart_data["window_minutes"] = 10
+        chart_data["storage"] = storage
+
+        return jsonify(chart_data)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "datasets": [],
+        }), 500
+
+
+# =====================================================
 # DASHBOARD LATEST VALUES
 # =====================================================
 
