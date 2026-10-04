@@ -226,6 +226,56 @@ class FlowRunner:
             time.sleep(remaining if remaining > 0 else 0.01)
 
     def execute_request(self, request):
+        # Report requests must be routed directly to Flow-defined ReportOutput
+        # nodes. Generic request traversal can reach TrendOutput first because
+        # Roles/RolesEngaged nodes are intentionally ignored by start-node
+        # discovery, causing a valid report request to return an empty Trend
+        # ChartData response before ReportOutput is reached.
+        if isinstance(request, dict) and isinstance(request.get("ReportRequest"), dict):
+            report_nodes = []
+            fallback_nodes = []
+
+            for node_id, info in self.nodes.items():
+                if info["type"] != "ReportOutput":
+                    continue
+
+                config = info.get("config", {}) or {}
+                configured = bool(
+                    config.get("products")
+                    or config.get("calculations")
+                )
+                if configured:
+                    report_nodes.append(node_id)
+                else:
+                    fallback_nodes.append(node_id)
+
+            for node_id in report_nodes + fallback_nodes:
+                try:
+                    result = self._execute_single(
+                        node_id,
+                        copy.deepcopy(request),
+                    )
+                    flow_status.node_ok(node_id)
+                except Exception as exc:
+                    flow_status.node_error(node_id, exc)
+                    print(
+                        "REPORT FLOW NODE ERROR:",
+                        "Node=", node_id,
+                        "Type=", self.nodes[node_id]["type"],
+                        "Error=", repr(exc),
+                    )
+                    continue
+
+                chart_data = result.get("ChartData")
+                if not isinstance(chart_data, dict):
+                    continue
+
+                report = chart_data.get("report", result.get("ReportData"))
+                if isinstance(report, dict):
+                    return result
+
+            return request
+
         start_nodes = self.get_start_nodes(realtime=False)
         requested_tag = request.get("TrendRequest", {}).get("Tag") if isinstance(request, dict) else None
         print("TREND FLOW START:", "Company=", self.company_id, "Tag=", requested_tag, "StartNodes=", start_nodes)
