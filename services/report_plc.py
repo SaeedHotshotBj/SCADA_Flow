@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 
 from database import get_connection, get_company_flow
+from services.flow_calculations import evaluate_calculations
 
 _CONTEXT_CONTRACT_ROLES = {"contract", "contract_code", "contractid", "contract_id"}
 _CONTEXT_PRODUCT_ROLES = {"product", "product_code", "productid", "product_id"}
@@ -74,6 +75,39 @@ def _management_calculations(company_id, user_role=None):
             })
     return result
 
+
+def _report_calculations(company_id, user_role=None):
+    result = []
+    seen = set()
+    for node_id, node in _flow_nodes(company_id).items():
+        if not isinstance(node, dict) or node.get("name") != "ReportOutput":
+            continue
+        data = node.get("data", {}) or {}
+        config = data.get("config", data) or {}
+        calculations = config.get("calculations", []) if isinstance(config, dict) else []
+        if not isinstance(calculations, list):
+            continue
+        for item in calculations:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", item.get("result_name", ""))).strip()
+            expression = str(item.get("expression", "")).strip()
+            if not name or not expression or name.lower() in seen:
+                continue
+            if not _allowed(item, user_role):
+                continue
+            seen.add(name.lower())
+            result.append({
+                "name": name,
+                "label": str(item.get("label", name)).strip() or name,
+                "expression": expression,
+                "unit": str(item.get("unit", "")).strip(),
+                "allowed_roles": item.get("allowed_roles", ""),
+                "source": "report_calculation",
+                "report_node_id": str(node_id),
+                "storage_tag": "__REPORT_CALC__:" + name,
+            })
+    return result
 
 def _all_management_calculations(company_id):
     return _management_calculations(company_id, None)
@@ -235,8 +269,8 @@ def get_report_products(company_id, user_role=None):
                     seen.add(key)
                     products.append(result)
 
-        for calculation in _management_calculations(company_id, user_role):
-            key = (calculation["name"].lower(), None, "")
+        for calculation in _report_calculations(company_id, user_role):
+            key = (calculation["name"].lower(), None, "report_calculation")
             if key in seen:
                 continue
             seen.add(key)
@@ -408,7 +442,7 @@ def save_report_snapshot(
         conn.close()
 
 
-def get_report_data(company_id, start, end, plc_id=None, user_role=None):
+def get_report_data(company_id, start, end, plc_id=None, user_role=None, contract_code=None, product_code=None):
     products = [item for item in get_report_products(company_id, user_role) if not item.get("context_role")]
     if plc_id is not None:
         products = [item for item in products if item.get("plc_id") in (None, int(plc_id))]
@@ -423,11 +457,29 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None):
         return result
 
     ensure_report_tables()
-    keys = [str(item.get("name", item.get("tag", ""))).strip().lower() for item in products]
+    keys = [str(item.get("storage_tag", item.get("name", item.get("tag", "")))).strip().lower() for item in products]
     placeholders = ",".join("?" for _ in keys)
 
     conn = get_connection()
     try:
+        
+        report_where = [
+            "h.CompanyID=?",
+            "datetime(h.Timestamp)>=datetime(?)",
+            "datetime(h.Timestamp)<=datetime(?)",
+        ]
+        query_args = [
+            company_id,
+            start.strftime("%Y-%m-%d %H:%M:%S"),
+            end.strftime("%Y-%m-%d %H:%M:%S"),
+        ]
+        if str(contract_code or "").strip():
+            report_where.append("LOWER(TRIM(COALESCE(h.ContractCode,''))) LIKE LOWER(?)")
+            query_args.append("%" + str(contract_code).strip() + "%")
+        if str(product_code or "").strip():
+            report_where.append("LOWER(TRIM(COALESCE(h.ProductCode,''))) LIKE LOWER(?)")
+            query_args.append("%" + str(product_code).strip() + "%")
+
         rows = conn.execute(
             f"""
             SELECT h.ReportID, h.Timestamp, h.ContractCode, h.ProductCode,
@@ -437,17 +489,11 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None):
                    v.TagName, v.Value, v.ReportValueID
             FROM ReportHistory h
             LEFT JOIN ReportValues v ON v.ReportID=h.ReportID
-            WHERE h.CompanyID=?
-              AND datetime(h.Timestamp)>=datetime(?)
-              AND datetime(h.Timestamp)<=datetime(?)
+            WHERE {" AND ".join(report_where)}
               AND (v.TagName IS NULL OR LOWER(v.TagName) IN ({placeholders}))
             ORDER BY datetime(h.Timestamp), h.ReportID, COALESCE(v.ReportValueID,0)
             """,
-            [
-                company_id,
-                start.strftime("%Y-%m-%d %H:%M:%S"),
-                end.strftime("%Y-%m-%d %H:%M:%S"),
-            ] + keys,
+            query_args + keys,
         ).fetchall()
     finally:
         conn.close()
