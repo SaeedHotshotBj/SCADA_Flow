@@ -659,7 +659,10 @@ def get_management_data(company_id, filters=None):
 
         output_rows = []
         for row in base_rows:
-            pair_key = (str(row["ContractCode"]).strip().lower(), str(row["ProductCode"]).strip().lower())
+            pair_key = (
+                _normalize_filter_text(row["ContractCode"]),
+                _normalize_filter_text(row["ProductCode"]),
+            )
             source = groups.get(pair_key, {"tags": {}})
             tags = {}
             for tag, values in source["tags"].items():
