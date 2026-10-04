@@ -2,7 +2,11 @@
     "use strict";
 
     let chart = null;
+    let liveTimer = null;
+    let liveLoading = false;
+    let mode = "live";
     let selected = { tag: "", title: "", unit: "", plc_id: null };
+    const LIVE_WINDOW_MINUTES = 10;
 
     function loadScript(src) {
         return new Promise(function (resolve, reject) {
@@ -61,19 +65,65 @@
         selected = { tag:tag, title:title || tag, unit:unit || "", plc_id:plcId };
         document.getElementById("machineTrendTitle").textContent = selected.title + (selected.unit ? " (" + selected.unit + ")" : "") + (selected.plc_id != null ? " • PLC " + selected.plc_id : "");
         const modal = document.getElementById("machineTrendModal"); modal.classList.add("open"); modal.setAttribute("aria-hidden", "false");
-        setupJalaliPicker(); document.getElementById("machineTrendStart").value = ""; document.getElementById("machineTrendEnd").value = ""; document.getElementById("machineTrendStatus").textContent = "در حال خواندن داده...";
-        loadTrend();
+        setupJalaliPicker();
+        document.getElementById("machineTrendStart").value = "";
+        document.getElementById("machineTrendEnd").value = "";
+        document.getElementById("machineTrendStatus").textContent = "در حال خواندن داده زنده...";
+        mode = "live";
+        stopLive();
+        loadLiveTrend();
+        liveTimer = window.setInterval(loadLiveTrend, 1000);
     }
 
     function closeModal() {
         const modal = document.getElementById("machineTrendModal"); if (!modal) return;
         modal.classList.remove("open"); modal.setAttribute("aria-hidden", "true");
+        stopLive();
         if (chart) { chart.destroy(); chart = null; }
+    }
+
+    function stopLive() {
+        if (liveTimer !== null) {
+            window.clearInterval(liveTimer);
+            liveTimer = null;
+        }
+        liveLoading = false;
+    }
+
+    async function loadLiveTrend() {
+        if (!selected.tag || selected.plc_id == null || mode !== "live" || liveLoading) return;
+        liveLoading = true;
+        const status = document.getElementById("machineTrendStatus");
+        try {
+            const params = new URLSearchParams({
+                tag: selected.tag,
+                PLC_ID: String(selected.plc_id),
+                _: String(Date.now())
+            });
+            const response = await fetch("/dashboard/machine_trend_live?" + params.toString(), {
+                method: "GET",
+                credentials: "same-origin",
+                cache: "no-store",
+                headers: {"Accept": "application/json"}
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || data.error || ("HTTP " + response.status));
+            if (mode !== "live") return;
+            draw(data, "live");
+        } catch (err) {
+            console.error("MACHINE LIVE TREND ERROR:", err);
+            status.textContent = "خطای Live: " + err.message;
+        } finally {
+            liveLoading = false;
+        }
     }
 
     async function loadTrend() {
         if (!selected.tag) return;
-        const status = document.getElementById("machineTrendStatus"); status.textContent = "در حال خواندن داده از همان موتور Trend...";
+        mode = "history";
+        stopLive();
+        const status = document.getElementById("machineTrendStatus");
+        status.textContent = "در حال خواندن داده از همان موتور Trend...";
         try {
             const start = document.getElementById("machineTrendStart").value.trim();
             const end = document.getElementById("machineTrendEnd").value.trim();
@@ -82,21 +132,31 @@
             const response = await fetch("/flow_trend?_=" + Date.now(), {method:"POST",credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({TrendRequest:trendRequest})});
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || data.error || ("HTTP " + response.status));
-            draw(data);
+            draw(data, "history");
         } catch (err) {
             console.error("MACHINE TREND ERROR:", err); status.textContent = "خطا: " + err.message;
             if (chart) { chart.destroy(); chart = null; }
         }
     }
 
-    function draw(data) {
+    function draw(data, drawMode) {
         const canvas = document.getElementById("machineTrendCanvas"), status = document.getElementById("machineTrendStatus");
         const ds = (data.datasets || []).find(function (item) { const tag = item && item.tag != null ? String(item.tag) : ""; return tag.toLowerCase() === selected.tag.toLowerCase(); }) || (data.datasets || [])[0];
-        if (!ds || !(ds.data || []).length) { status.textContent = "برای این پارامتر در بازه انتخاب‌شده داده‌ای وجود ندارد."; if (chart) { chart.destroy(); chart = null; } return; }
+        if (!ds || !(ds.data || []).length) {
+            status.textContent = drawMode === "live"
+                ? "در حال انتظار برای داده زنده..."
+                : "برای این پارامتر در بازه انتخاب‌شده داده‌ای وجود ندارد.";
+            if (chart) { chart.destroy(); chart = null; }
+            return;
+        }
         const points = ds.data.map(function (p) { return {x:Number(p.x),y:Number(p.y),label:p.label||""}; }).filter(function (p) { return Number.isFinite(p.x)&&Number.isFinite(p.y); });
         if (chart) chart.destroy();
-        chart = new Chart(canvas,{type:"line",data:{datasets:[{label:ds.title||ds.tag||selected.tag,data:points,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:0,stepped:"after",parsing:false,fill:false}]},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:"nearest",intersect:false},scales:{x:{type:"linear",title:{display:true,text:"زمان"},ticks:{maxTicksLimit:12,callback:function(value){const point=points.find(function(p){return p.x===value;});return point?point.label:"";}}},y:{title:{display:true,text:selected.unit||"مقدار"}}},plugins:{legend:{display:true},tooltip:{callbacks:{title:function(items){return items.length&&items[0].raw?items[0].raw.label||"":"";}}}}}});
-        status.textContent = "تعداد نقاط: " + points.length + (data.resolutions&&selected.tag&&data.resolutions[selected.tag]?" | Resolution: "+data.resolutions[selected.tag]:"");
+        chart = new Chart(canvas,{type:"line",data:{datasets:[{label:(ds.title||ds.tag||selected.tag)+(drawMode==="live"?" • LIVE":""),data:points,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:0,stepped:"after",parsing:false,fill:false}]},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:"nearest",intersect:false},scales:{x:{type:"linear",title:{display:true,text:"زمان"},ticks:{maxTicksLimit:12,callback:function(value){const point=points.find(function(p){return p.x===value;});return point?point.label:"";}}},y:{title:{display:true,text:selected.unit||"مقدار"}}},plugins:{legend:{display:true},tooltip:{callbacks:{title:function(items){return items.length&&items[0].raw?items[0].raw.label||"":"";}}}}}});
+        if (drawMode === "live") {
+            status.textContent = "LIVE • " + points.length + " points • آخرین " + LIVE_WINDOW_MINUTES + " دقیقه";
+        } else {
+            status.textContent = "تعداد نقاط: " + points.length + (data.resolutions&&selected.tag&&data.resolutions[selected.tag]?" | Resolution: "+data.resolutions[selected.tag]:"");
+        }
     }
 
     async function boot() {
