@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 
 from database import get_connection, get_company_flow
+from services.flow_calculations import evaluate_calculations
 
 _CONTEXT_CONTRACT_ROLES = {"contract", "contract_code", "contractid", "contract_id"}
 _CONTEXT_PRODUCT_ROLES = {"product", "product_code", "productid", "product_id"}
@@ -302,9 +303,21 @@ def save_report_snapshot(*args, **kwargs):
 
 
 def get_report_data(company_id, start, end, plc_id=None, user_role=None, contract_code=None, product_code=None):
-    products = [item for item in get_report_products(company_id, user_role) if not item.get("context_role")]
+    """Return Flow-defined report columns, evaluating ReportOutput calculations at request time.
+
+    Raw product values are read from ReportValues. Calculation columns are never
+    read from ReportValues; they are evaluated from the raw values for each
+    ReportHistory row using the current Flow configuration.
+    """
+    products = [
+        item for item in get_report_products(company_id, user_role)
+        if not item.get("context_role")
+    ]
     if plc_id is not None:
-        products = [item for item in products if item.get("plc_id") in (None, int(plc_id))]
+        products = [
+            item for item in products
+            if item.get("plc_id") in (None, int(plc_id))
+        ]
 
     result = {
         "columns": products,
@@ -315,20 +328,31 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None, contrac
     if company_id is None or not products or not start or not end:
         return result
 
+    raw_products = [
+        item for item in products
+        if item.get("source") != "report_calculation"
+    ]
+    report_calculations = [
+        item for item in products
+        if item.get("source") == "report_calculation"
+    ]
+
     ensure_report_tables()
-    keys = [
+
+    # Only raw/product columns are fetched from ReportValues. Calculation
+    # columns are deliberately excluded because they are evaluated below.
+    raw_keys = [
         str(
-            item.get("storage_tag")
-            or item.get("tag")
+            item.get("tag")
             or item.get("name", "")
         ).strip().lower()
-        for item in products
+        for item in raw_products
     ]
-    placeholders = ",".join("?" for _ in keys)
+    raw_keys = [key for key in raw_keys if key]
+    placeholders = ",".join("?" for _ in raw_keys)
 
     conn = get_connection()
     try:
-        
         report_where = [
             "h.CompanyID=?",
             "datetime(h.Timestamp)>=datetime(?)",
@@ -340,11 +364,24 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None, contrac
             end.strftime("%Y-%m-%d %H:%M:%S"),
         ]
         if str(contract_code or "").strip():
-            report_where.append("LOWER(TRIM(COALESCE(h.ContractCode,''))) LIKE LOWER(?)")
+            report_where.append(
+                "LOWER(TRIM(COALESCE(h.ContractCode,''))) LIKE LOWER(?)"
+            )
             query_args.append("%" + str(contract_code).strip() + "%")
         if str(product_code or "").strip():
-            report_where.append("LOWER(TRIM(COALESCE(h.ProductCode,''))) LIKE LOWER(?)")
+            report_where.append(
+                "LOWER(TRIM(COALESCE(h.ProductCode,''))) LIKE LOWER(?)"
+            )
             query_args.append("%" + str(product_code).strip() + "%")
+
+        value_condition = "v.TagName IS NULL"
+        if raw_keys:
+            value_condition = (
+                "(v.TagName IS NULL OR LOWER(TRIM(v.TagName)) IN ("
+                + placeholders
+                + "))"
+            )
+            query_args.extend(raw_keys)
 
         rows = conn.execute(
             f"""
@@ -356,15 +393,22 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None, contrac
             FROM ReportHistory h
             LEFT JOIN ReportValues v ON v.ReportID=h.ReportID
             WHERE {" AND ".join(report_where)}
-              AND (v.TagName IS NULL OR LOWER(v.TagName) IN ({placeholders}))
+              AND {value_condition}
             ORDER BY datetime(h.Timestamp), h.ReportID, COALESCE(v.ReportValueID,0)
             """,
-            query_args + keys,
+            query_args,
         ).fetchall()
     finally:
         conn.close()
 
-    index = {key: position for position, key in enumerate(keys)}
+    # Map only raw/product storage names to column positions.
+    raw_index = {
+        str(item.get("tag") or item.get("name", "")).strip().lower(): position
+        for position, item in enumerate(products)
+        if item.get("source") != "report_calculation"
+        and str(item.get("tag") or item.get("name", "")).strip()
+    }
+
     grouped = {}
 
     for row in rows:
@@ -388,23 +432,75 @@ def get_report_data(company_id, start, end, plc_id=None, user_role=None, contrac
             },
         )
         tag = str(row["TagName"] or "").strip().lower()
-        if tag not in index:
+        if tag not in raw_index:
             continue
         try:
-            item["values"][index[tag]] = float(row["Value"])
+            item["values"][raw_index[tag]] = float(row["Value"])
         except (TypeError, ValueError):
             pass
 
+    raw_positions = [
+        position
+        for position, column in enumerate(products)
+        if column.get("source") != "report_calculation"
+    ]
+    calculation_positions = [
+        position
+        for position, column in enumerate(products)
+        if column.get("source") == "report_calculation"
+    ]
+
     totals = [0.0] * len(products)
+
     for item in grouped.values():
+        # Build the calculation input strictly from the raw values belonging
+        # to this report row. Both Tag and display Name are accepted as aliases,
+        # while Flow expressions continue to resolve against their Tag names.
+        tags = {}
+        for position in raw_positions:
+            value = item["values"][position]
+            if value is None:
+                continue
+            column = products[position]
+            tag_name = str(column.get("tag", "")).strip()
+            display_name = str(column.get("name", "")).strip()
+            if tag_name:
+                tags[tag_name] = value
+            if display_name and display_name.lower() != tag_name.lower():
+                tags[display_name] = value
+
+        calculated = evaluate_calculations(
+            report_calculations,
+            tags,
+            company_id=company_id,
+            duration_seconds=float(item.get("duration_seconds") or 0.0),
+        )
+
+        for position in calculation_positions:
+            calculation = products[position]
+            name = str(calculation.get("name", "")).strip()
+            value = calculated.get(name)
+            if value is not None:
+                item["values"][position] = float(value)
+
+        # Keep the existing report semantics: row/column/grand totals represent
+        # the physical product values only, not derived calculation columns.
         row_total = 0.0
-        for position, value in enumerate(item["values"]):
+        for position in raw_positions:
+            value = item["values"][position]
             if value is not None:
                 totals[position] += value
                 row_total += value
+        for position in calculation_positions:
+            value = item["values"][position]
+            if value is not None:
+                totals[position] += value
+
         item["row_total"] = row_total
         result["rows"].append(item)
 
     result["totals"] = [round(value, 3) for value in totals]
-    result["grand_total"] = round(sum(totals), 3)
+    raw_total = sum(totals[position] for position in raw_positions)
+    result["grand_total"] = round(raw_total, 3)
     return result
+
