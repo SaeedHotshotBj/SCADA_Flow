@@ -9,11 +9,8 @@
 
   const state = {
     options: {contract_codes: [], contract_names: [], product_codes: [], product_names: []},
-    calculations: [],
     menus: new WeakMap(),
-    initialized: new WeakSet(),
-    renderWrapped: false,
-    clearWrapped: false
+    initialized: new WeakSet()
   };
 
   const log = (...args) => console.log('[MANAGEMENT FLOW]', ...args);
@@ -26,20 +23,6 @@
       .toLowerCase();
   }
 
-  function numericEqual(a, b) {
-    const x = Number(normalize(a));
-    const y = Number(normalize(b));
-    return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 1e-9;
-  }
-
-  function matches(value, wanted) {
-    const query = normalize(wanted);
-    if (!query) return true;
-    if (value == null) return false;
-    const text = normalize(value);
-    return text === query || text.includes(query) || numericEqual(value, wanted);
-  }
-
   function uniqueSorted(values) {
     const map = new Map();
     (Array.isArray(values) ? values : []).forEach(value => {
@@ -49,10 +32,6 @@
       if (!map.has(key)) map.set(key, text);
     });
     return [...map.values()].sort((a, b) => a.localeCompare(b, 'fa'));
-  }
-
-  function filterId(name) {
-    return 'management_flow_calc_' + String(name ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
   }
 
   async function json(url) {
@@ -72,19 +51,6 @@
     state.options.product_codes = uniqueSorted(data.product_codes);
     state.options.product_names = uniqueSorted(data.product_names);
     log('DB options:', state.options);
-  }
-
-  async function loadFlowConfig() {
-    const data = await json('/management/config?company_id=' + encodeURIComponent(companyId));
-    state.calculations = (Array.isArray(data.calculations) ? data.calculations : [])
-      .filter(item => item && String(item.name || '').trim() && String(item.expression || '').trim())
-      .map(item => ({
-        name: String(item.name).trim(),
-        label: String(item.label || item.name).trim() || String(item.name).trim(),
-        expression: String(item.expression).trim(),
-        unit: String(item.unit || '').trim()
-      }));
-    log('FLOW calculations:', state.calculations);
   }
 
   function optionsFor(input) {
@@ -177,87 +143,6 @@
     ].forEach(selector => root.querySelectorAll(selector).forEach(initDropdown));
   }
 
-  function renderCalculationFilters() {
-    const grid = document.querySelector('.filters .grid');
-    if (!grid) return false;
-
-    grid.querySelectorAll('.management-flow-calculation-filter').forEach(el => el.remove());
-
-    state.calculations.forEach(calc => {
-      const field = document.createElement('div');
-      field.className = 'field management-flow-calculation-filter';
-      field.dataset.calculationName = calc.name;
-
-      const label = document.createElement('label');
-      label.textContent = calc.label + (calc.unit ? ' (' + calc.unit + ')' : '');
-
-      const input = document.createElement('input');
-      input.id = filterId(calc.name);
-      input.type = 'text';
-      input.autocomplete = 'off';
-      input.placeholder = 'فیلتر ' + calc.label;
-      input.dataset.managementCalculationFilter = calc.name;
-
-      field.appendChild(label);
-      field.appendChild(input);
-      grid.appendChild(field);
-    });
-
-    log('Calculation filter controls:', state.calculations.map(x => x.name));
-    return true;
-  }
-
-  function currentCalculationFilters() {
-    const filters = {};
-    state.calculations.forEach(calc => {
-      const input = document.getElementById(filterId(calc.name));
-      if (!input) return;
-      const value = input.value.trim();
-      if (value) filters[calc.name] = value;
-    });
-    return filters;
-  }
-
-  function applyCalculationFilters(data) {
-    const filters = currentCalculationFilters();
-    const names = Object.keys(filters);
-    if (!names.length || !data || !Array.isArray(data.rows)) return data;
-
-    const rows = data.rows.filter(row => names.every(name => matches(row[name], filters[name])));
-    log('Calculated filters applied:', {filters, before: data.rows.length, after: rows.length});
-    return Object.assign({}, data, {rows, count: rows.length});
-  }
-
-  function installRenderWrapper() {
-    if (state.renderWrapped || typeof window.renderTable !== 'function') return;
-    const original = window.renderTable;
-    const wrapped = function (data) {
-      const filtered = applyCalculationFilters(data);
-      window.__SCADA_MANAGEMENT_FLOW_DATA = data;
-      window.__SCADA_MANAGEMENT_FLOW_FILTERED_DATA = filtered;
-      return original.call(this, filtered);
-    };
-    wrapped.__managementFlowCalculationWrapper = true;
-    window.renderTable = wrapped;
-    state.renderWrapped = true;
-    log('renderTable wrapper installed.');
-  }
-
-  function installClearWrapper() {
-    if (state.clearWrapped || typeof window.clearFilters !== 'function') return;
-    const original = window.clearFilters;
-    const wrapped = function () {
-      state.calculations.forEach(calc => {
-        const input = document.getElementById(filterId(calc.name));
-        if (input) input.value = '';
-      });
-      return original.apply(this, arguments);
-    };
-    wrapped.__managementFlowClearWrapper = true;
-    window.clearFilters = wrapped;
-    state.clearWrapped = true;
-  }
-
   function setupOutsideClick() {
     document.addEventListener('click', event => {
       document.querySelectorAll('.db-dropdown-wrapper').forEach(wrapper => {
@@ -275,8 +160,6 @@
         if (node.nodeType === Node.ELEMENT_NODE) scan(node);
       });
     });
-    installRenderWrapper();
-    installClearWrapper();
   });
 
   if (document.body) observer.observe(document.body, {childList: true, subtree: true});
@@ -285,8 +168,6 @@
     try {
       await loadOptions();
       scan(document);
-      installRenderWrapper();
-      installClearWrapper();
     } catch (error) {
       console.error('[MANAGEMENT FLOW] Initialization error:', error);
     }
