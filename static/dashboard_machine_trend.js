@@ -127,9 +127,19 @@
         try {
             const start = document.getElementById("machineTrendStart").value.trim();
             const end = document.getElementById("machineTrendEnd").value.trim();
-            const trendRequest = {Tag:selected.tag,Tags:[selected.tag],Start:start||null,End:end||null,Calendar:"Jalali",DatePicker:"JalaliPicker"};
-            if (selected.plc_id != null) trendRequest.PLC_ID = selected.plc_id;
-            const response = await fetch("/flow_trend?_=" + Date.now(), {method:"POST",credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"application/json"},body:JSON.stringify({TrendRequest:trendRequest})});
+            const response = await fetch("/machine_trend_data?_=" + Date.now(), {
+                method:"POST",
+                credentials:"same-origin",
+                cache:"no-store",
+                headers:{"Content-Type":"application/json"},
+                body:JSON.stringify({
+                    tag:selected.tag,
+                    plc_id:selected.plc_id,
+                    start:start||null,
+                    end:end||null,
+                    calendar:"Jalali"
+                })
+            });
             const data = await response.json();
             if (!response.ok) throw new Error(data.message || data.error || ("HTTP " + response.status));
             draw(data, "history");
